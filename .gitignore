@@ -1,6 +1,12 @@
+# papers etc
+reading/
+
 # Raster files
 *.tif
 *.tiff
+
+# RDS files (likely to be big)
+*.rds
 
 
 # History files

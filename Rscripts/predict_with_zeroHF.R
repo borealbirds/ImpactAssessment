@@ -20,6 +20,7 @@
 print("* Loading packages on master *")
 library(tidyverse)
 library(gbm)
+library(here)
 library(parallel)
 library(Matrix)
 library(terra)
@@ -59,10 +60,10 @@ tmpcl <- clusterEvalQ(cl, library(terra))
 brt_predict <- function(i){
   
   #1. Get model settings---
-  bcr.i <- loop$bcr[i]
-  spp.i <- loop$spp[i]
-  boot.i <- loop$boot[i]
-  year.i <- loop$year[i]
+  bcr.i <- model_index$bcr[i]
+  spp.i <- model_index$spp[i]
+  boot.i <- model_index$boot[i]
+  year.i <- model_index$year[i]
   
   #2. Load model----
   load.i <- try(load(file.path(root, "output", "bootstraps", paste0(spp.i, "_", bcr.i, "_", boot.i, ".R"))))
@@ -91,11 +92,87 @@ brt_predict <- function(i){
   pred.i <- try(terra::predict(model=b.i, object=stack.i, type="response"))
   
   #7. Save----
-  if(!(file.exists(file.path(root, "output", "predictions", spp.i)))){
-    dir.create(file.path(root, "output", "predictions", spp.i))
+  if(!(file.exists(file.path(here(), "data", "derived_data", "predictions", spp.i)))){
+    dir.create(file.path(here(), "data", "derived_data", "predictions", spp.i))
   }
   if(inherits(pred.i, "SpatRaster")){
-    writeRaster(pred.i, file=file.path(root, "output", "predictions", spp.i, paste0(spp.i, "_", bcr.i, "_", boot.i, "_", year.i, ".tiff")), overwrite=TRUE)
+    writeRaster(pred.i, file=file.path(here(), "data", "derived_data", "predictions", spp.i, paste0(spp.i, "_", bcr.i, "_", boot.i, "_", year.i, ".tiff")), overwrite=TRUE)
   }
   
 }
+
+
+
+#8. Export objects to cluster----
+print("* Loading function on workers *")
+
+tmpcl <- clusterExport(cl, c("brt_predict"))
+
+
+
+
+#RUN MODELS#########
+
+#1. Set desired years----
+years <- seq(1985, 2020, 5)
+
+
+
+#2. Create index of bootstrapped models----
+booted <- 
+  data.frame(path = list.files(file.path(root, "output", "bootstraps"), pattern="*.R", full.names=TRUE),
+             file = list.files(file.path(root, "output", "bootstraps"), pattern="*.R")) |> 
+  tidyr::separate(file, into=c("spp", "bcr", "boot"), sep="_", remove=FALSE) |> 
+  dplyr::mutate(boot = as.numeric(str_sub(boot, -100, -3)))
+
+
+#3. Create to do list----
+# expand_grid finds all combinations of factor variables
+# DEFINE BCR AND SPECIES HERE!
+# the following species are in my "priority species list" AND
+# are also in Erin's OSM report: LEYE, RCKI, PAWA, ALFL, WEWP, OSFL, CHSP
+
+focal_spp <- c("LEYE", "RCKI", "PAWA", "ALFL", "WEWP", "OSFL", "CHSP")
+
+model_index <- 
+  booted |> 
+  dplyr::select(bcr, spp, boot) |> 
+  tidyr::expand_grid(year=years) |> 
+  dplyr::arrange(spp, boot, year, bcr) |> 
+  dplyr::filter(bcr="bcr61", spp %in% focal_spp)
+
+
+
+#4. Run prediction function in parallel----
+# output is a list of prediction rasters
+print("* Making predictions *")
+predictions <- parLapply(cl, X=1:nrow(model_index), fun=brt_predict)
+
+
+
+#5. Close clusters----
+print("* Shutting down clusters *")
+stopCluster(cl)
+
+if(cc){ q() }
+
+
+
+#6. Generate population estimations from rasters
+
+# for every element in `predictions` assign to a species/bcr/year identifier, 
+# and take the mean population 
+
+for (p in 1:length(predictions)){
+  
+  
+  
+}
+pop_est_list <- lapply(X=predictions, FUN=terra::app, x=mod, fun="mean", na.rm=TRUE)
+  
+
+
+# reduce list to dataframe, with every row as a spp x bcr x year tuple 
+# and a column for population estimate
+# graph trend and plot trend on map (see Anna's CFS presentation)
+
