@@ -1,6 +1,9 @@
-library(dplyr)
-library(here)
-library(terra)
+# ---
+# title: National Models 5.0 - kriging interpolation for backfilling human footprints
+# author: Mannfred Boehm
+# created: January 15, 2025
+# ---
+
 
 
 root1 <- "G:/Shared drives/BAM_NationalModels5/"
