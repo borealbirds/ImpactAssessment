@@ -18,6 +18,7 @@
 #1. Load packages----
 print("* Loading packages on master *")
 library(brms)
+library(gbm)
 library(gstat)
 library(tidyverse)
 library(terra)
@@ -108,8 +109,14 @@ cov_clean_bcr14 <-
   tidyr::drop_na(lat, lon, CanHF_1km, SCANFIprcD_1km) # remove NAs from variables of interest
   # dplyr::sample_n(1000) # subset for quicker testing 
 
+# define threshold for "low" human footprint
+q10 <- quantile(cov_clean_bcr14$CanHF_1km, probs = 0.10, na.rm = TRUE)
+
 # how does human footprint vary across this BCR?
-hist(cov_clean_bcr14$CanHF_1km)
+hist(cov_clean_bcr14$CanHF_1km, main="CanHF_1km in BCR14")
+abline(v=q10, col="darkred", lwd=3)
+abline(v=mean(na.omit(cov_clean_bcr14$CanHF_1km)), col="skyblue", lwd=3, lty="dashed")
+       
 quantile(na.omit(cov_clean_bcr14$CanHF_1km))
 # 0%       25%       50%       75%      100% 
 # 0.000000  8.432904 11.590043 16.560811 52.190685 
@@ -124,15 +131,13 @@ quantile(na.omit(cov_clean_bcr14$CanHF_5x5))
 #NAD83(NSRS2007)/Conus Albers projection (epsg:5072)
 crs <- "+proj=aea +lat_0=23 +lon_0=-96 +lat_1=29.5 +lat_2=45.5 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs"
 
-# identify pixels with human footprint
-CanHF_1km_present <- dplyr::filter(cov_clean_bcr14, CanHF_1km > 0) 
-plot(terra::vect(CanHF_1km_present, geom = c("lon", "lat"), crs = crs))
 
+# identify pixels with "high" and "low" human footprint
+CanHF_1km_present <- dplyr::filter(cov_clean_bcr14, CanHF_1km > q10) 
+plot(terra::vect(CanHF_1km_present, geom = c("lon", "lat"), crs = crs), cex=0.05)
 
-# identify pixels with low human footprint
-q10 <- quantile(cov_clean_bcr14$CanHF_1km, probs = 0.10, na.rm = TRUE)
 CanHF_1km_absent <- dplyr::filter(cov_clean_bcr14, CanHF_1km <= q10)
-plot(terra::vect(CanHF_1km_absent, geom = c("lon", "lat"), crs = crs))
+plot(terra::vect(CanHF_1km_absent, geom = c("lon", "lat"), crs = crs), cex=0.05)
 
 
 
@@ -164,20 +169,15 @@ abiotic_vars <-
 CanHF_1km_absent_abiotic <-
   CanHF_1km_absent |>
   dplyr::select(any_of(c(abiotic_vars, "lat", "lon"))) |> 
-  dplyr::mutate(SCANFIprcD_1km = CanHF_1km_absent$SCANFIprcD_1km/100) 
+  dplyr::mutate(SCANFIprcD_1km = CanHF_1km_absent$SCANFIprcD_1km) 
 
 # check that response variable is between 0 and 1 (for using beta dist. downstream)
 range(CanHF_1km_absent_abiotic$SCANFIprcD_1km)
 # [1] 0.0002159509 0.9920376587
 
-# scale and center abiotic predictors to make it easier to make an informed prior
-# e.g. for the intercept, we can now guess at the average outcome, rather than the outcome at zero 
-# remember to ensure that your response variable has no exact 0s or 1s, 
-# as the beta distribution is defined on the open interval (0,1)
-CanHF_1km_absent_abiotic[abiotic_vars] <- as_tibble(scale(CanHF_1km_absent_abiotic[abiotic_vars]))
 
 
-# check that covariates in low footprint dataset have
+#11. check that covariates in low footprint dataset have----
 # comparable range to original dataset
 # this is important because we are modelling biotic ~ abiotic
 # assuming that the low-HF dataset is representative of the entire BCR
@@ -207,51 +207,50 @@ for (i in seq_len(ncol(cov_clean_bcr14))){
 
 
 
+#12. model biotic ~ abiotic using boosted regression trees----
+# SCANFIprcD_1km ~ . - lat - lon + s(lat, lon)
 
-# 11. use bayesian spatial regression to model----
-# the relationship between the abiotic landscape and biotic drivers of bird occurrence
+gbm_formula <- 
+  reformulate(termlabels = c(abiotic_vars, "lon", "lat"), response = "SCANFIprcD_1km")
 
-# define model
-prcD_formula <- SCANFIprcD_1km ~ . - lat - lon + s(lat, lon)
-
-# define priors
-priors <- c(
-  prior(normal(0, 1), class = "b"),        # Priors for coefficients on the logit scale for μ
-  prior(normal(0, 1), class = "Intercept"),  # Prior for the intercept on the logit scale
-  prior(exponential(1), class = "phi")       # Prior for the precision parameter
-)
-
-# fit a Bayesian spatial regression model
 prcD_model <- 
-  brms::brm(
-    formula = prcD_formula,
-    prior = NULL,
-    data = CanHF_1km_absent_abiotic,
-    family = brms::Beta(link = "logit"),  # ensures that the model’s predictions for the mean are constrained to (0, 1)
-    cores = 4,            
-    chains = 4,           
-    iter = 1500,         
-    control = list(adapt_delta = 0.80))  # for exploring parameter space. larger # for smaller step sizes.
-
-# posterior predictive check
-brms::pp_check(prcD_model)
-
-# perform 10-fold cross validation
-kfold_result <- brms::kfold(prcD_model, K = 10)
-
-# saveRDS(prcD_model, file="C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/derived_data/rds_files/prcD_model.rds")
-prcD_model<- readRDS(file="C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/derived_data/rds_files/prcD_model.rds")
-
-# use model to predict SCANFIprcD_1km for pixels with human footprint using the model's posterior predictions
-# the resulting matrix has 3000 rows and 48153 columns because for every new data point (each of the 48153 pixels where backfilling occurred), 
-# the model generated 3000 predictive samples (4 chains with 750 post-warmup draws). 
-prcD_predictions <- brms::posterior_predict(object = prcD_model, newdata = CanHF_1km_present, summary = FALSE)
-# saveRDS(prcD_predictions, file="C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/derived_data/rds_files/prcD_predictions.rds") 
+  gbm::gbm(formula = gbm_formula,
+           data = CanHF_1km_absent,
+           distribution="gaussian",
+           n.trees = 2000,
+           interaction.depth = 3,            
+           shrinkage = 0.01,
+           cv.folds = 5,
+           n.minobsinnode = 10)
 
 
 
 
-#12. check for spatial autocorrelation in residuals----
+
+#13. evaluate model performance on new data----
+
+# the bayesian GLM was trained on predictors that were centered and scaled, 
+# so the new data must be treated similarly 
+CanHF_1km_present[ ,abiotic_vars] <- 
+  CanHF_1km_present[ ,abiotic_vars] |> 
+  scale(x=_, center=center_values, scale=scale_values) |> 
+  as_tibble()
+
+
+
+
+
+# some of the new data points have predictor values that fall outside—or near the 
+# edge of—the range seen in the training data.
+
+
+
+
+
+
+
+
+#XYZ. check for spatial autocorrelation in residuals----
 
 # isolate the data rows (complete cases) actually used in model construction
 CanHF_1km_absent_abiotic_mf <- CanHF_1km_absent_abiotic[rownames(model.frame(prcD_model)),]
@@ -284,11 +283,92 @@ hist(moran_values, main = "Histogram of local Moran's I values", xlab = "Local M
 
 
 
+# use bayesian spatial regression to model----
+# the relationship between the abiotic landscape and biotic drivers of bird occurrence
+
+# create dataset with only one biotic variable for prediction
+# using `CanHF_1km_absent` so that model is informed by
+# areas with low human footprint
+# scale prcD so that it can be described by a beta dist.
+CanHF_1km_absent_abiotic <-
+  CanHF_1km_absent |>
+  dplyr::select(any_of(c(abiotic_vars, "lat", "lon"))) |> 
+  dplyr::mutate(SCANFIprcD_1km = CanHF_1km_absent$SCANFIprcD_1km/100) 
+
+# check that response variable is between 0 and 1 (for using beta dist. downstream)
+range(CanHF_1km_absent_abiotic$SCANFIprcD_1km)
+# [1] 0.0002159509 0.9920376587
+
+# scale and center abiotic predictors to make it easier to make an informed prior
+# e.g. for the intercept, we can now guess at the average outcome, rather than the outcome at zero 
+# remember to ensure that the response variable has no exact 0s or 1s, 
+# as the beta distribution is defined on the open interval (0,1)
+scaled_abiotic_vars <- scale(CanHF_1km_absent_abiotic[,abiotic_vars])
+center_values <- attr(scaled_abiotic_vars, "scaled:center")
+scale_values <- attr(scaled_abiotic_vars, "scaled:scale")
+
+CanHF_1km_absent_abiotic[,abiotic_vars] <- as_tibble(scaled_abiotic_vars)
 
 
 
 
-#12. use weighted averages of surrounding pixels (i.e. kriging)---- 
+# define model
+prcD_formula <- SCANFIprcD_1km ~ . - lat - lon + s(lat, lon)
+
+# define priors
+priors <- c(
+  prior(normal(0, 1), class = "b"),        # Priors for coefficients on the logit scale for μ
+  prior(normal(0, 1), class = "Intercept"),  # Prior for the intercept on the logit scale
+  prior(exponential(1), class = "phi")       # Prior for the precision parameter
+)
+
+# fit a Bayesian spatial regression model
+prcD_model <- 
+  brms::brm(
+    formula = prcD_formula,
+    prior = NULL,
+    data = CanHF_1km_absent_abiotic,
+    family = brms::Beta(link = "logit"),  # ensures that the model’s predictions for the mean are constrained to (0, 1)
+    cores = 4,            
+    chains = 4,           
+    iter = 1500,         
+    control = list(adapt_delta = 0.80))  # for exploring parameter space. larger # for smaller step sizes.
+
+# saveRDS(prcD_model, file="C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/derived_data/rds_files/prcD_model.rds")
+prcD_model<- readRDS(file="C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/derived_data/rds_files/prcD_model.rds")
+
+# `posterior_linpred` draws from the posterior distribution of parameter values for a single fitted model
+# each draw contains a set of parameter values: e.g. regression coefficients (one per predictor), the intercept, a precision parameter ϕ in a beta regression, etc.
+# for each draw, the set of parameter values (e.g. regression coefficients) is multiplied  by the corresponding predictor values from the new data.
+# as a result, the average predicted values of prcD range from 0.033 to 0.956
+# however, there are 505 NAs which means something went wrong with the prediction step (likely extrapolation) 
+
+pred_mu <- brms::posterior_linpred(prcD_model, newdata = CanHF_1km_present, transform = TRUE)
+summary(apply(pred_mu, 2, mean)) 
+
+# posterior predictive check
+brms::pp_check(prcD_model)
+
+# k-fold cross validation
+kfold_result <- brms::kfold(prcD_model, K = 10)
+
+
+
+# use model to predict SCANFIprcD_1km for pixels with human footprint >q10
+# using the model's posterior predictions
+# the resulting matrix has 3000 rows and 43974 columns because for every new data point (each of the 48153 pixels where backfilling occurred), 
+# the model generated 3000 predictive samples (4 chains with 750 post-warmup draws). 
+prcD_predictions <- brms::posterior_predict(object = prcD_model, newdata = CanHF_1km_present[ ,c(abiotic_vars, "lon", "lat")], summary = FALSE)
+# saveRDS(prcD_predictions, file="C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/derived_data/rds_files/prcD_predictions.rds") 
+
+
+
+
+
+
+
+
+#XYZ. use weighted averages of surrounding pixels (i.e. kriging)---- 
 # to...
 
 
