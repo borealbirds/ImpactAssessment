@@ -17,7 +17,6 @@
 
 #1. Load packages----
 print("* Loading packages on master *")
-library(brms)
 library(gbm)
 library(gstat)
 library(tidyverse)
@@ -102,15 +101,20 @@ cov_clean <- readRDS(file="C:/Users/mannf/Proton Drive/mannfredboehm/My files/Dr
 
 
 # filter cov_clean to BCR 14 for testing purposes (smallest spatial extent)
+
+  
 cov_clean_bcr14 <-
   cov_clean |> 
   dplyr::filter(if_any(bcr1:bcr5, function(x) x == "can14")) |> 
   dplyr::select(-c(can3:bcr5)) |> # drop bcr columns after bcr of interest is selected
   tidyr::drop_na(lat, lon, CanHF_1km, SCANFIprcD_1km) # remove NAs from variables of interest
-  # dplyr::sample_n(1000) # subset for quicker testing 
+
+#saveRDS(cov_clean_bcr14, file="C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/derived_data/rds_files/cov_clean_bcr14.rds")
+cov_clean_bcr14 <- readRDS(file="C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/derived_data/rds_files/cov_clean_bcr14.rds")
 
 # define threshold for "low" human footprint
 q10 <- quantile(cov_clean_bcr14$CanHF_1km, probs = 0.10, na.rm = TRUE)
+
 
 # how does human footprint vary across this BCR?
 hist(cov_clean_bcr14$CanHF_1km, main="CanHF_1km in BCR14")
@@ -121,13 +125,10 @@ quantile(na.omit(cov_clean_bcr14$CanHF_1km))
 # 0%       25%       50%       75%      100% 
 # 0.000000  8.432904 11.590043 16.560811 52.190685 
 
-hist(cov_clean_bcr14$CanHF_5x5)
-quantile(na.omit(cov_clean_bcr14$CanHF_5x5))
-# 0%       25%       50%       75%      100% 
-# 0.000000  6.151992  9.552637 13.576068 41.631847 
 
 
-#9. Set crs and rasterize HF locations----
+
+#9. Set crs and identify "low" vs "high" HF locations----
 #NAD83(NSRS2007)/Conus Albers projection (epsg:5072)
 crs <- "+proj=aea +lat_0=23 +lon_0=-96 +lat_1=29.5 +lat_2=45.5 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs"
 
@@ -157,27 +158,91 @@ abiotic_vars <-
   dplyr::filter(var_class %in% c("Annual Climate", "Climate Normals", "Topography")) |> 
   dplyr::pull(var) 
 
-#biotic_vars <-
- #nice_var_names |> 
-  #dplyr::filter(var_class %in% c("Wetland", "Landcover", "Greenup", "Biomass")) |> 
-  #dplyr::pull(var) 
+biotic_vars <-
+  nice_var_names |> 
+  dplyr::filter(var_class %in% c("Wetland", "Landcover", "Greenup", "Biomass")) |> 
+  dplyr::pull(var) 
 
-# create dataset with only one biotic variable for prediction
-# using `CanHF_1km_absent` so that model is informed by
-# areas with low human footprint
-# scale prcD so that it can be described by a beta dist.
-CanHF_1km_absent_abiotic <-
-  CanHF_1km_absent |>
-  dplyr::select(any_of(c(abiotic_vars, "lat", "lon"))) |> 
-  dplyr::mutate(SCANFIprcD_1km = CanHF_1km_absent$SCANFIprcD_1km) 
+# define empty raster for placing backfilled features into
+extent <- terra::ext(c(min(cov_clean_bcr14$lon),
+                       max(cov_clean_bcr14$lon),
+                       min(cov_clean_bcr14$lat),
+                       max(cov_clean_bcr14$lat)))
 
-# check that response variable is between 0 and 1 (for using beta dist. downstream)
-range(CanHF_1km_absent_abiotic$SCANFIprcD_1km)
-# [1] 0.0002159509 0.9920376587
+empty_raster <- terra::rast(extent=extent, resolution=1000)
+
+# define a function for predicting "restored" biotic landscape features
+backfill_landscape <- function(i){
+  
+  # model biotic ~ abiotic using boosted regression trees
+  gbm_formula <- reformulate(termlabels = c(abiotic_vars, "lon", "lat"), 
+                             response = biotic_vars[i])
+  
+  # LEFT OFF HERE FEB 8:
+  # NEED TO MOVE cov_clean_bcr14 <- HERE BECAUSE WE NEED TO UNIQUELY `drop_na`
+  # FOR EVERY biotic_vars[i]
+  
+  model_i <- 
+    gbm::gbm(formula = gbm_formula,
+             data = CanHF_1km_absent,
+             distribution="gaussian",
+             n.trees = 2000,
+             interaction.depth = 3,            
+             shrinkage = 0.01)
+  
+  # first, predict biotic features at "high" HF areas (i.e. backfilling).
+  # then, complete in the landscape by adding back the locations with low HF which 
+  # weren't subject to backfilling (via `add_row`)
+  new_landscape <- 
+    gbm::predict.gbm(object=model_i, newdata=CanHF_1km_present, type="response") |> 
+    dplyr::tibble(biotic_vars[i] = _, 
+                  lon = CanHF_1km_present$lon, 
+                  lat = CanHF_1km_present$lat) |> 
+    dplyr::add_row(CanHF_1km_absent[,c(biotic_vars[i], "lon", "lat")]) 
+  
+  
+  # rasterize predictions and stack for `terra::predict()`
+  predictions_raster_i <- 
+    prcD_predictions |> 
+    terra::vect(x=_, geom=c("lon", "lat"), crs=crs) |> 
+    terra::rasterize(x=_, y=empty_raster, field=biotic_vars[i]) 
+  
+  
+  return(predictions_raster_i)
+  
+}
+
+tmpcl <- clusterExport(cl, c("backfill_landscape", "abiotic_vars", "biotic_vars"))
+
+# apply backfilling to all biotic covariates 
+backfilled_rasters <- list()
+backfilled_rasters <- lapply(X=seq_along(biotic_vars), FUN=backfill_landscape, abiotic_vars)
 
 
 
-#11. check that covariates in low footprint dataset have----
+
+# saveRDS(prcD_model, file="C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/derived_data/rds_files/prcD_model.rds")
+prcD_model <- readRDS(file="C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/derived_data/rds_files/prcD_model.rds")
+
+
+
+
+
+# then:
+# 1. repeat predictions for all 18 biotic variables
+# 2. rasterize predictions and stack
+# 3. import bird models for CAWA 1990-2020
+# 4. use terra::predict with new biotic stack, og abiotic stack, and bird models to estimate  new bird densities
+
+
+
+
+
+
+
+
+
+#XYZ. check that covariates in low footprint dataset have----
 # comparable range to original dataset
 # this is important because we are modelling biotic ~ abiotic
 # assuming that the low-HF dataset is representative of the entire BCR
@@ -206,54 +271,8 @@ for (i in seq_len(ncol(cov_clean_bcr14))){
 }
 
 
-
-#12. model biotic ~ abiotic using boosted regression trees----
-# SCANFIprcD_1km ~ . - lat - lon + s(lat, lon)
-
-gbm_formula <- 
-  reformulate(termlabels = c(abiotic_vars, "lon", "lat"), response = "SCANFIprcD_1km")
-
-prcD_model <- 
-  gbm::gbm(formula = gbm_formula,
-           data = CanHF_1km_absent,
-           distribution="gaussian",
-           n.trees = 2000,
-           interaction.depth = 3,            
-           shrinkage = 0.01,
-           cv.folds = 5,
-           n.minobsinnode = 10)
-
-
-
-
-
-#13. evaluate model performance on new data----
-
-# the bayesian GLM was trained on predictors that were centered and scaled, 
-# so the new data must be treated similarly 
-CanHF_1km_present[ ,abiotic_vars] <- 
-  CanHF_1km_present[ ,abiotic_vars] |> 
-  scale(x=_, center=center_values, scale=scale_values) |> 
-  as_tibble()
-
-
-
-
-
-# some of the new data points have predictor values that fall outside—or near the 
-# edge of—the range seen in the training data.
-
-
-
-
-
-
-
-
 #XYZ. check for spatial autocorrelation in residuals----
 
-# isolate the data rows (complete cases) actually used in model construction
-CanHF_1km_absent_abiotic_mf <- CanHF_1km_absent_abiotic[rownames(model.frame(prcD_model)),]
 
 # extract residuals
 CanHF_1km_absent_abiotic_mf$residuals <- stats::residuals(prcD_model)[,"Estimate"]
@@ -276,6 +295,12 @@ autocor_test <- terra::autocor(CanHF_1km_absent_abiotic_rast, global=FALSE, meth
 moran_values <- terra::values(autocor_test)
 summary(moran_values)
 hist(moran_values, main = "Histogram of local Moran's I values", xlab = "Local Moran's I")
+
+
+
+
+
+
 
 
 
