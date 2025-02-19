@@ -4,21 +4,17 @@
 # created: January 15, 2025
 # ---
 
-# A semivariogram quantifies the spatial autocorrelation of a variable by
-# analyzing how its similarity (or dissimilarity) changes with distance.
-# It measures the semi-variance, which is calculated as half the average 
-# squared difference between data points separated by a given distance (h).
 
-# import covariate values as data frame (code copied from "08.CalculateExtrapolation.R" in V5 pipeline)
+
+# import stratified covariate values as data frame (code copied from "08.CalculateExtrapolation.R" in V5 pipeline)
 # subset `id` column to BCR (or some region) of interest (see visit.i$id that loads when `b.i` is loaded)
 # append `id` column with latlong info
-# run gstat::variogram
+
 
 
 #1. Load packages----
 print("* Loading packages on master *")
 library(gbm)
-library(gstat)
 library(tidyverse)
 library(terra)
 library(parallel)
@@ -32,8 +28,8 @@ cc <- FALSE
 
 
 #3. Set nodes for local vs cluster----
-if(cc){ nodes <- 48}
-if(!cc | test){ nodes <- 1}
+if(cc){ nodes <- 18}
+if(!cc | test){ nodes <- 4}
 
 
 
@@ -54,19 +50,34 @@ tmpcl <- clusterExport(cl, c("root"))
 
 #6. Load packages on clusters----
 print("* Loading packages on workers *")
-tmpcl <- clusterEvalQ(cl, library(gstat))
 tmpcl <- clusterEvalQ(cl, library(gbm))
 tmpcl <- clusterEvalQ(cl, library(tidyverse))
 tmpcl <- clusterEvalQ(cl, library(terra))
 
 
+#7. Load covariate stack(s)----
+print("* Loading covariate stack *")
+stack_bcr14_2020 <- terra::rast(file.path(root, "gis", "stacks", "can14_2020.tif"))
+plot(stack_bcr14_2020$CCNL_1km)
 
-#7. Load stratified data (raster data in table form) ----
-print("* Loading data on master *")
 
-load(file.path(root, "data", "04_NM5.0_data_stratify.R"))
-rm(bird, covlist, offsets, gridlist, birdlist)
-gc()
+# import time since disturbance layer (tsd) and crop to BCR14
+# note that Hermosilla et al (2016) is in NAD_1983_Lambert_Conformal_Conic
+full_tsd <- 
+  terra::rast(file.path(root, "gis", "disturbancetime", "CA_Forest_Fire_1985-2020.tif")) |> 
+  terra::project(x=_, y=stack_bcr14_2020) |>  # reproject to match covariate stack
+  terra::crop(x=_, y=stack_bcr14_2020) # crop to BCR14
+
+plot(full_tsd)
+
+# overlay BCR14 boundary to sanity check
+bcr14_boundary <- 
+  terra::vect(file.path(root, "Regions", "BAM_BCR_NationalModel_Unbuffered.shp")) |> 
+  terra::project(x=_, y=full_tsd) |> 
+  terra::crop(x=_, y=full_tsd)
+
+lines(bcr14_boundary, col="black", lwd=1)
+
 
 
 
@@ -74,6 +85,16 @@ gc()
 # partly copied from "08.CalculateExtrapolation.R" in V5 pipeline
 # which had `cov_clean[names(cov_clean)!="hli3cl_1km"]` but 
 # I don't see that `hli3cl_1km` is a variable in `cov`?
+
+# `visit` is loaded with "04_NM5.0_data_stratify.R"
+# filter for year(s) of interest to use as a `year` index for point locations in `cov_clean`
+# saveRDS(visit, file="C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/derived_data/rds_files/visit.rds")
+visit <- readRDS(file="C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/derived_data/rds_files/visit.rds")
+
+visit_clean <-
+  visit |> 
+  dplyr::select(id, year) |> 
+  dplyr::filter(year %in% 2020:2022)
 
 # a single location ID may show up in as many as 5 BCRs
 # this is because each BCR is buffered by 100km, creating BCR overlap
@@ -97,24 +118,22 @@ cov_clean <-
   dplyr::ungroup()
 
 # saveRDS(cov_clean, file="C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/derived_data/rds_files/cov_clean.rds")
-cov_clean <- readRDS(file="C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/derived_data/rds_files/cov_clean.rds")
+cov_clean <- 
+  readRDS(file="C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/derived_data/rds_files/cov_clean.rds") |> 
+  as_tibble()
 
-
-# filter cov_clean to BCR 14 for testing purposes (smallest spatial extent)
-
-  
+# focus dataset on BCR 14 and year >= 2020
 cov_clean_bcr14 <-
   cov_clean |> 
   dplyr::filter(if_any(bcr1:bcr5, function(x) x == "can14")) |> 
   dplyr::select(-c(can3:bcr5)) |> # drop bcr columns after bcr of interest is selected
-  tidyr::drop_na(lat, lon, CanHF_1km, SCANFIprcD_1km) # remove NAs from variables of interest
+  tidyr::drop_na(lat, lon, CanHF_1km) |> 
+  dplyr::filter(id %in% visit_clean$id)
 
-#saveRDS(cov_clean_bcr14, file="C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/derived_data/rds_files/cov_clean_bcr14.rds")
-cov_clean_bcr14 <- readRDS(file="C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/derived_data/rds_files/cov_clean_bcr14.rds")
+
 
 # define threshold for "low" human footprint
 q10 <- quantile(cov_clean_bcr14$CanHF_1km, probs = 0.10, na.rm = TRUE)
-
 
 # how does human footprint vary across this BCR?
 hist(cov_clean_bcr14$CanHF_1km, main="CanHF_1km in BCR14")
@@ -122,36 +141,23 @@ abline(v=q10, col="darkred", lwd=3)
 abline(v=mean(na.omit(cov_clean_bcr14$CanHF_1km)), col="skyblue", lwd=3, lty="dashed")
        
 quantile(na.omit(cov_clean_bcr14$CanHF_1km))
-# 0%       25%       50%       75%      100% 
-# 0.000000  8.432904 11.590043 16.560811 52.190685 
+#0%       25%       50%       75%      100% 
+#0.000000  9.933605 14.907642 23.109177 52.077923 
 
 
 
 
-#9. Set crs and identify "low" vs "high" HF locations----
+#9. stage datasets needed to model biotic landscape features---
+
 #NAD83(NSRS2007)/Conus Albers projection (epsg:5072)
 crs <- "+proj=aea +lat_0=23 +lon_0=-96 +lat_1=29.5 +lat_2=45.5 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs"
 
 
-# identify pixels with "high" and "low" human footprint
-CanHF_1km_present <- dplyr::filter(cov_clean_bcr14, CanHF_1km > q10) 
-plot(terra::vect(CanHF_1km_present, geom = c("lon", "lat"), crs = crs), cex=0.05)
-
-CanHF_1km_absent <- dplyr::filter(cov_clean_bcr14, CanHF_1km <= q10)
-plot(terra::vect(CanHF_1km_absent, geom = c("lon", "lat"), crs = crs), cex=0.05)
-
-
-
-#10. Model relationship between biotic and abiotic covariates----
-# this is part 1 of 2 of regression kriging:
-# regression kriging combines a regression model 
-# (to explain the deterministic variation based on covariates)
-# with kriging (to capture the spatially autocorrelated residuals).
-
 # import variable classes to help separate biotic from abiotic
 nice_var_names <- 
   readr::read_csv("C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/raw_data/nice_var_names_v5.csv") |> 
-  dplyr::filter(var != "hli3cl_1km")
+  dplyr::filter(var %in% colnames(cov_clean_bcr14)) |> # some covariates got filtered out in "04.Stratify.R"
+  unique()
 
 abiotic_vars <-
   nice_var_names |> 
@@ -171,16 +177,21 @@ extent <- terra::ext(c(min(cov_clean_bcr14$lon),
 
 empty_raster <- terra::rast(extent=extent, resolution=1000)
 
-# define a function for predicting "restored" biotic landscape features
+
+
+#10. define a function for predicting "restored" biotic landscape features----
 backfill_landscape <- function(i){
+  
+  # stage a unique occurrence dataset for biotic_vars[i] 
+  cov_clean_bcr14_i <- tidyr::drop_na(cov_clean_bcr14, biotic_vars[i]) 
+    
+  # identify pixels with "high" and "low" human footprint
+  CanHF_1km_present <- dplyr::filter(cov_clean_bcr14_i, CanHF_1km > q10) 
+  CanHF_1km_absent <- dplyr::filter(cov_clean_bcr14_i, CanHF_1km <= q10)
   
   # model biotic ~ abiotic using boosted regression trees
   gbm_formula <- reformulate(termlabels = c(abiotic_vars, "lon", "lat"), 
                              response = biotic_vars[i])
-  
-  # LEFT OFF HERE FEB 8:
-  # NEED TO MOVE cov_clean_bcr14 <- HERE BECAUSE WE NEED TO UNIQUELY `drop_na`
-  # FOR EVERY biotic_vars[i]
   
   model_i <- 
     gbm::gbm(formula = gbm_formula,
@@ -193,50 +204,110 @@ backfill_landscape <- function(i){
   # first, predict biotic features at "high" HF areas (i.e. backfilling).
   # then, complete in the landscape by adding back the locations with low HF which 
   # weren't subject to backfilling (via `add_row`)
+  predictions_i <-  gbm::predict.gbm(object=model_i, newdata=CanHF_1km_present, type="response") 
+  
   new_landscape <- 
-    gbm::predict.gbm(object=model_i, newdata=CanHF_1km_present, type="response") |> 
-    dplyr::tibble(biotic_vars[i] = _, 
-                  lon = CanHF_1km_present$lon, 
-                  lat = CanHF_1km_present$lat) |> 
-    dplyr::add_row(CanHF_1km_absent[,c(biotic_vars[i], "lon", "lat")]) 
+      dplyr::tibble(!!biotic_vars[i] := predictions_i, 
+                    lon = CanHF_1km_present$lon, 
+                    lat = CanHF_1km_present$lat) |> 
+      dplyr::add_row(CanHF_1km_absent[,c(biotic_vars[i], "lon", "lat")]) 
   
   
-  # rasterize predictions and stack for `terra::predict()`
+  # rasterize predictions
+  # eventually we'll stack for `terra::predict()` of bird densities
   predictions_raster_i <- 
-    prcD_predictions |> 
+    new_landscape |> 
     terra::vect(x=_, geom=c("lon", "lat"), crs=crs) |> 
     terra::rasterize(x=_, y=empty_raster, field=biotic_vars[i]) 
   
-  
+  print(paste("* created backfilled raster for: ", biotic_vars[i], " *"))
   return(predictions_raster_i)
   
 }
 
-tmpcl <- clusterExport(cl, c("backfill_landscape", "abiotic_vars", "biotic_vars"))
-
-# apply backfilling to all biotic covariates 
-backfilled_rasters <- list()
-backfilled_rasters <- lapply(X=seq_along(biotic_vars), FUN=backfill_landscape, abiotic_vars)
-
-
-
-
-# saveRDS(prcD_model, file="C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/derived_data/rds_files/prcD_model.rds")
-prcD_model <- readRDS(file="C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/derived_data/rds_files/prcD_model.rds")
+tmpcl <- clusterExport(cl, c("backfill_landscape", "abiotic_vars", "biotic_vars", "crs", "empty_raster"))
 
 
 
 
 
+#11. apply backfilling to all biotic covariates----
+# this runs pretty quick on local for a single BCR x species, so don't need to test on cluster
+backfilled_rasters <- lapply(X=seq_along(biotic_vars), FUN=backfill_landscape)
+
+saveRDS(backfilled_rasters, file="C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/derived_data/rds_files/backfilled_rasters.rds")
+backfilled_rasters <- readRDS(file="C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/derived_data/rds_files/backfilled_rasters.rds")
+
+
+# [1] "* created backfilled raster for:  SCANFIWhiteRedPine_5x5  *"
+# Error in gbm.fit(x = x, y = y, offset = offset, distribution = distribution,  : 
+#                    The data set is too small or the subsampling rate is too large: `nTrain * bag.fraction <= 2 * n.minobsinnode + 1`
+#                  In addition: Warning messages:
+#                    1: In doTryCatch(return(expr), name, parentenv, handler) :
+#                    display list redraw incomplete
+
+# stack rasters
+stack_from_list <- function(raster_list){
+  
+  raster_list[i]
+  
+}
+
+backfilled_stack <- lapply(X=seq_along(backfilled_rasters), FUN=stack_from_list)
 # then:
 # 1. repeat predictions for all 18 biotic variables
 # 2. rasterize predictions and stack
-# 3. import bird models for CAWA 1990-2020
-# 4. use terra::predict with new biotic stack, og abiotic stack, and bird models to estimate  new bird densities
+# 3. import bird models (`b.i`) for CAWA at year 2020
+# 4. use terra::predict with new *biotic* stack, og *abiotic* stack, and bird model (`b.i`) to estimate  new bird densities
 
 
 
 
+#12. import bird models (`b.i`) for CAWA at year 2020----
+
+# access gbm objects and append spp/bcr/boot info
+root <- "G:/Shared drives/BAM_NationalModels5/output/bootstraps"
+gbm_objs <- list.files(file.path(root), pattern = "*\\.R", full.names = TRUE, recursive = TRUE)
+
+
+# !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+# HOW TO FILTER FOR YEAR????
+# extract the species (FLBC), BCR, and bootstrap replicate from `gbm_objs`
+sample_id <- 
+  gbm_objs |> 
+  basename() |> 
+  stringr::str_split_fixed(pattern="_", n=3) |> 
+  gsub("\\.R", "", x = _) |>
+  tibble::as_tibble() |> 
+  magrittr::set_colnames(c("spp", "bcr", "boot")) |> 
+  dplyr::filter(spp == "CAWA")
+
+gbm_data <- tibble(file_path = gbm_objs, spp = sample_id$spp, bcr = sample_id$bcr, boot = sample_id$boot) 
+
+
+
+# write function that `terra::predict`s bird densities using V5 `gbm` models for CAWA 
+repredict_with_backfill <- function(gbm_object, backfilled_stack) {
+
+    
+  # attempt to load the GBM object
+  # "file_path" is a column name in `gbm_data`
+  load(gbm_object[["file_path"]])
+    
+  # validate gbm object
+  if (!exists("b.i") || is.null(b.i$n.trees) || b.i$n.trees <= 0) {
+    warning(paste("Invalid GBM model in file:", gbm_object["file_path"]))
+    return(NULL)
+  } else {
+    message("Successfully loaded: ", gbm_object["file_path"])
+  }
+  
+  # predict density for a given spp x bcr x year
+  s
+  object_i <- backfilled_stack
+  prediction_i <- terra::predict(object=SPATRASTER, model=b.i, )
+  return(prediction_i)
+}
 
 
 
@@ -396,7 +467,10 @@ prcD_predictions <- brms::posterior_predict(object = prcD_model, newdata = CanHF
 #XYZ. use weighted averages of surrounding pixels (i.e. kriging)---- 
 # to...
 
-
+# A semivariogram quantifies the spatial autocorrelation of a variable by
+# analyzing how its similarity (or dissimilarity) changes with distance.
+# It measures the semi-variance, which is calculated as half the average 
+# squared difference between data points separated by a given distance (h).
 
 # generate variogram from pixels on the low-disturbance landscape
 # (i.e. omit high human footprint pixels for creating variogram)
