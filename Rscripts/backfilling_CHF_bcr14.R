@@ -65,129 +65,84 @@ plot(stack_bcr14_2020$CCNL_1km)
 # note that Hermosilla et al (2016) is in NAD_1983_Lambert_Conformal_Conic
 full_tsd <- 
   terra::rast(file.path(root, "gis", "disturbancetime", "CA_Forest_Fire_1985-2020.tif")) |> 
-  terra::project(x=_, y=stack_bcr14_2020) |>  # reproject to match covariate stack
+  terra::project(x=_, y=stack_bcr14_2020, method="near") |>  # reproject to match covariate stack
   terra::crop(x=_, y=stack_bcr14_2020) # crop to BCR14
 
-plot(full_tsd)
+# inspect distribution of disturbance times (after removing cells with "no change" aka "zero")
+hist(values(full_tsd)[which(values(full_tsd) > 0)], main="dist. of disturbances")
+plot(full_tsd, type="interval")
 
 # overlay BCR14 boundary to sanity check
 bcr14_boundary <- 
   terra::vect(file.path(root, "Regions", "BAM_BCR_NationalModel_Unbuffered.shp")) |> 
-  terra::project(x=_, y=full_tsd) |> 
-  terra::crop(x=_, y=full_tsd)
+  terra::project(x=_, y=stack_bcr14_2020) |> 
+  terra::crop(x=_, y=stack_bcr14_2020)
 
 lines(bcr14_boundary, col="black", lwd=1)
 
-
-
-
-#8. create dataframe of continuous covariates with lat-long and BCR info----
-# partly copied from "08.CalculateExtrapolation.R" in V5 pipeline
-# which had `cov_clean[names(cov_clean)!="hli3cl_1km"]` but 
-# I don't see that `hli3cl_1km` is a variable in `cov`?
-
-# `visit` is loaded with "04_NM5.0_data_stratify.R"
-# filter for year(s) of interest to use as a `year` index for point locations in `cov_clean`
-# saveRDS(visit, file="C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/derived_data/rds_files/visit.rds")
-visit <- readRDS(file="C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/derived_data/rds_files/visit.rds")
-
-visit_clean <-
-  visit |> 
-  dplyr::select(id, year) |> 
-  dplyr::filter(year %in% 2020:2022)
-
-# a single location ID may show up in as many as 5 BCRs
-# this is because each BCR is buffered by 100km, creating BCR overlap
-bcrlist |>
-  dplyr::select(-id) |>
-  (\(data) rowSums(data))() |>
-  max()
-
-cov_clean <- 
-  cov |> 
-  dplyr::select(where(is.numeric)) |>
-  dplyr::left_join(dplyr::select(visit, c(lat, lon, id)), by = "id") |> # need lat-long for testing kriging assumptions
-  dplyr::left_join(bcrlist, by = "id") |> # append bcr info
-  dplyr::rowwise() |> # operate the following on each row
-  dplyr::mutate(
-    bcr1 = names(pick(can3:usa41423))[which(c_across(can3:usa41423))[1]], 
-    bcr2 = names(pick(can3:usa41423))[which(c_across(can3:usa41423))[2]],
-    bcr3 = names(pick(can3:usa41423))[which(c_across(can3:usa41423))[3]], 
-    bcr4 = names(pick(can3:usa41423))[which(c_across(can3:usa41423))[4]], 
-    bcr5 = names(pick(can3:usa41423))[which(c_across(can3:usa41423))[5]]) |>
-  dplyr::ungroup()
-
-# saveRDS(cov_clean, file="C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/derived_data/rds_files/cov_clean.rds")
-cov_clean <- 
-  readRDS(file="C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/derived_data/rds_files/cov_clean.rds") |> 
-  as_tibble()
-
-# focus dataset on BCR 14 and year >= 2020
-cov_clean_bcr14 <-
-  cov_clean |> 
-  dplyr::filter(if_any(bcr1:bcr5, function(x) x == "can14")) |> 
-  dplyr::select(-c(can3:bcr5)) |> # drop bcr columns after bcr of interest is selected
-  tidyr::drop_na(lat, lon, CanHF_1km) |> 
-  dplyr::filter(id %in% visit_clean$id)
-
-
-
-# define threshold for "low" human footprint
-q10 <- quantile(cov_clean_bcr14$CanHF_1km, probs = 0.10, na.rm = TRUE)
-
-# how does human footprint vary across this BCR?
-hist(cov_clean_bcr14$CanHF_1km, main="CanHF_1km in BCR14")
-abline(v=q10, col="darkred", lwd=3)
-abline(v=mean(na.omit(cov_clean_bcr14$CanHF_1km)), col="skyblue", lwd=3, lty="dashed")
-       
-quantile(na.omit(cov_clean_bcr14$CanHF_1km))
-#0%       25%       50%       75%      100% 
-#0.000000  9.933605 14.907642 23.109177 52.077923 
+# add time since disturbance layer to covariate stack
+stack_bcr14_2020 <- c(stack_bcr14_2020, full_tsd)
 
 
 
 
-#9. stage datasets needed to model biotic landscape features---
-
-#NAD83(NSRS2007)/Conus Albers projection (epsg:5072)
-crs <- "+proj=aea +lat_0=23 +lon_0=-96 +lat_1=29.5 +lat_2=45.5 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs"
-
+#8. stage datasets needed for modelling biotic landscape----
 
 # import variable classes to help separate biotic from abiotic
 nice_var_names <- 
-  readr::read_csv("C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/raw_data/nice_var_names_v5.csv") |> 
-  dplyr::filter(var %in% colnames(cov_clean_bcr14)) |> # some covariates got filtered out in "04.Stratify.R"
-  unique()
+  readr::read_csv(file.path(root, "covariates_label.csv")) |> 
+  dplyr::select(Label, Category) |> 
+  dplyr::rename(var = Label, var_class = Category) |> 
+  tidyr::drop_na()
 
 abiotic_vars <-
   nice_var_names |> 
   dplyr::filter(var_class %in% c("Annual Climate", "Climate Normals", "Topography")) |> 
   dplyr::pull(var) 
 
+abiotic_vars <- c(abiotic_vars, "CA_Forest_Fire_1985-2020")
+
 biotic_vars <-
   nice_var_names |> 
-  dplyr::filter(var_class %in% c("Wetland", "Landcover", "Greenup", "Biomass")) |> 
+  dplyr::filter(var_class %in% c("Wetland", "Landcover", "Greenup", "Biomass", "LCC_MODIS")) |> 
   dplyr::pull(var) 
 
+
+covs_df <-
+  stack_bcr14_2020 |> 
+  terra::as.data.frame(xy=TRUE) |>
+  tibble::as_tibble() |> 
+  dplyr::rename(lat=x, lon=y)
+  
+
+# define threshold for "low" human footprint
+q15 <- quantile(covs_df$CanHF_1km, probs = 0.15, na.rm = TRUE)
+
+# how does human footprint vary across this BCR?
+hist(covs_df$CanHF_1km, main="CanHF_1km in BCR14")
+abline(v=q15, col="darkred", lwd=2)
+abline(v=mean(na.omit(covs_df$CanHF_1km)), col="skyblue", lwd=2, lty="dashed")
+       
+quantile(na.omit(covs_df$CanHF_1km))
+#0%        25%        50%        75%       100% 
+#0.0000000  0.9322898  5.2230940  9.6365070 54.5055199 
+
+
 # define empty raster for placing backfilled features into
-extent <- terra::ext(c(min(cov_clean_bcr14$lon),
-                       max(cov_clean_bcr14$lon),
-                       min(cov_clean_bcr14$lat),
-                       max(cov_clean_bcr14$lat)))
-
-empty_raster <- terra::rast(extent=extent, resolution=1000)
+empty_raster <- 
+  terra::rast(extent=ext(stack_bcr14_2020), crs=crs(stack_bcr14_2020), resolution=1000)
 
 
 
-#10. define a function for predicting "restored" biotic landscape features----
+#9. define a function for predicting "restored" biotic landscape features----
 backfill_landscape <- function(i){
   
   # stage a unique occurrence dataset for biotic_vars[i] 
-  cov_clean_bcr14_i <- tidyr::drop_na(cov_clean_bcr14, biotic_vars[i]) 
+  covs_df_i <- tidyr::drop_na(covs_df, biotic_vars[i]) 
     
   # identify pixels with "high" and "low" human footprint
-  CanHF_1km_present <- dplyr::filter(cov_clean_bcr14_i, CanHF_1km > q10) 
-  CanHF_1km_absent <- dplyr::filter(cov_clean_bcr14_i, CanHF_1km <= q10)
+  CanHF_1km_present <- dplyr::filter(covs_df_i, CanHF_1km > q15) 
+  CanHF_1km_absent <- dplyr::filter(covs_df_i, CanHF_1km <= q15)
   
   # model biotic ~ abiotic using boosted regression trees
   gbm_formula <- reformulate(termlabels = c(abiotic_vars, "lon", "lat"), 
@@ -204,7 +159,7 @@ backfill_landscape <- function(i){
   # first, predict biotic features at "high" HF areas (i.e. backfilling).
   # then, complete in the landscape by adding back the locations with low HF which 
   # weren't subject to backfilling (via `add_row`)
-  predictions_i <-  gbm::predict.gbm(object=model_i, newdata=CanHF_1km_present, type="response") 
+  predictions_i <- gbm::predict.gbm(object=model_i, newdata=CanHF_1km_present, type="response") 
   
   new_landscape <- 
       dplyr::tibble(!!biotic_vars[i] := predictions_i, 
@@ -377,7 +332,53 @@ hist(moran_values, main = "Histogram of local Moran's I values", xlab = "Local M
 
 
 
+# OLD CODE
 
+
+
+# `visit` is loaded with "04_NM5.0_data_stratify.R"
+# filter for year(s) of interest to use as a `year` index for point locations in `cov_clean`
+# saveRDS(visit, file="C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/derived_data/rds_files/visit.rds")
+visit <- readRDS(file="C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/derived_data/rds_files/visit.rds")
+
+visit_clean <-
+  visit |> 
+  dplyr::select(id, year) |> 
+  dplyr::filter(year %in% 2020:2022)
+
+# a single location ID may show up in as many as 5 BCRs
+# this is because each BCR is buffered by 100km, creating BCR overlap
+bcrlist |>
+  dplyr::select(-id) |>
+  (\(data) rowSums(data))() |>
+  max()
+
+cov_clean <- 
+  cov |> 
+  dplyr::select(where(is.numeric)) |>
+  dplyr::left_join(dplyr::select(visit, c(lat, lon, id)), by = "id") |> # need lat-long for testing kriging assumptions
+  dplyr::left_join(bcrlist, by = "id") |> # append bcr info
+  dplyr::rowwise() |> # operate the following on each row
+  dplyr::mutate(
+    bcr1 = names(pick(can3:usa41423))[which(c_across(can3:usa41423))[1]], 
+    bcr2 = names(pick(can3:usa41423))[which(c_across(can3:usa41423))[2]],
+    bcr3 = names(pick(can3:usa41423))[which(c_across(can3:usa41423))[3]], 
+    bcr4 = names(pick(can3:usa41423))[which(c_across(can3:usa41423))[4]], 
+    bcr5 = names(pick(can3:usa41423))[which(c_across(can3:usa41423))[5]]) |>
+  dplyr::ungroup()
+
+# saveRDS(cov_clean, file="C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/derived_data/rds_files/cov_clean.rds")
+cov_clean <- 
+  readRDS(file="C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/derived_data/rds_files/cov_clean.rds") |> 
+  as_tibble()
+
+# focus dataset on BCR 14 and year >= 2020
+cov_clean_bcr14 <-
+  cov_clean |> 
+  dplyr::filter(if_any(bcr1:bcr5, function(x) x == "can14")) |> 
+  dplyr::select(-c(can3:bcr5)) |> # drop bcr columns after bcr of interest is selected
+  tidyr::drop_na(lat, lon, CanHF_1km) |> 
+  dplyr::filter(id %in% visit_clean$id)
 
 # use bayesian spatial regression to model----
 # the relationship between the abiotic landscape and biotic drivers of bird occurrence
