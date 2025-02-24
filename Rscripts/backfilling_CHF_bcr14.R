@@ -61,16 +61,18 @@ stack_bcr14_2020 <- terra::rast(file.path(root, "gis", "stacks", "can14_2020.tif
 plot(stack_bcr14_2020$CCNL_1km)
 
 
-# import time since disturbance layer (tsd) and crop to BCR14
+# import time since disturbance layer (CAfire) and crop to BCR14
 # note that Hermosilla et al (2016) is in NAD_1983_Lambert_Conformal_Conic
-full_tsd <- 
+CAfire <- 
   terra::rast(file.path(root, "gis", "disturbancetime", "CA_Forest_Fire_1985-2020.tif")) |> 
   terra::project(x=_, y=stack_bcr14_2020, method="near") |>  # reproject to match covariate stack
   terra::crop(x=_, y=stack_bcr14_2020) # crop to BCR14
 
+names(CAfire) <- "CAfire"
+
 # inspect distribution of disturbance times (after removing cells with "no change" aka "zero")
-hist(values(full_tsd)[which(values(full_tsd) > 0)], main="dist. of disturbances")
-plot(full_tsd, type="interval")
+hist(values(CAfire)[which(values(CAfire) > 0)], main="dist. of disturbances")
+plot(CAfire, type="classes")
 
 # overlay BCR14 boundary to sanity check
 bcr14_boundary <- 
@@ -81,7 +83,7 @@ bcr14_boundary <-
 lines(bcr14_boundary, col="black", lwd=1)
 
 # add time since disturbance layer to covariate stack
-stack_bcr14_2020 <- c(stack_bcr14_2020, full_tsd)
+stack_bcr14_2020 <- c(stack_bcr14_2020, CAfire)
 
 
 
@@ -93,21 +95,25 @@ nice_var_names <-
   readr::read_csv(file.path(root, "covariates_label.csv")) |> 
   dplyr::select(Label, Category) |> 
   dplyr::rename(var = Label, var_class = Category) |> 
-  tidyr::drop_na()
+  tidyr::drop_na() |> 
+  unique()
 
 abiotic_vars <-
   nice_var_names |> 
   dplyr::filter(var_class %in% c("Annual Climate", "Climate Normals", "Topography")) |> 
-  dplyr::pull(var) 
+  tibble::add_row(var = "CAfire", var_class ="Time Since Disturbance") |> 
+  dplyr::filter(var != 'hli3cl_1km') |> # see line 67 in "08.CalculateExtrapolation.R"
+  dplyr::pull(var) |> 
+  unique()
 
-abiotic_vars <- c(abiotic_vars, "CA_Forest_Fire_1985-2020")
 
 biotic_vars <-
   nice_var_names |> 
   dplyr::filter(var_class %in% c("Wetland", "Landcover", "Greenup", "Biomass", "LCC_MODIS")) |> 
-  dplyr::pull(var) 
+  dplyr::pull(var) |> 
+  unique()
 
-
+# convert covariate stack to a dataframe (values will be used in regression)
 covs_df <-
   stack_bcr14_2020 |> 
   terra::as.data.frame(xy=TRUE) |>
@@ -137,8 +143,12 @@ empty_raster <-
 #9. define a function for predicting "restored" biotic landscape features----
 backfill_landscape <- function(i){
   
-  # stage a unique occurrence dataset for biotic_vars[i] 
-  covs_df_i <- tidyr::drop_na(covs_df, biotic_vars[i]) 
+  # drop biotic predictors that were thinned by VIF (see line 300 in "04.Stratify.R")
+  biotic_vars_thinned <- biotic_vars[which(biotic_vars %in% colnames(covs_df))]
+  
+  # stage a unique occurrence dataset for biotic feature[i] 
+  # by removing NAs for biotic feature[i] 
+  covs_df_i <- tidyr::drop_na(covs_df, biotic_vars_thinned[i]) 
     
   # identify pixels with "high" and "low" human footprint
   CanHF_1km_present <- dplyr::filter(covs_df_i, CanHF_1km > q15) 
@@ -146,7 +156,7 @@ backfill_landscape <- function(i){
   
   # model biotic ~ abiotic using boosted regression trees
   gbm_formula <- reformulate(termlabels = c(abiotic_vars, "lon", "lat"), 
-                             response = biotic_vars[i])
+                             response = biotic_vars_thinned[i])
   
   model_i <- 
     gbm::gbm(formula = gbm_formula,
@@ -156,24 +166,23 @@ backfill_landscape <- function(i){
              interaction.depth = 3,            
              shrinkage = 0.01)
   
-  # first, predict biotic features at "high" HF areas (i.e. backfilling).
-  # then, complete in the landscape by adding back the locations with low HF which 
-  # weren't subject to backfilling (via `add_row`)
+  # predict biotic feature[i] at "high" HF areas (i.e. backfilling)
   predictions_i <- gbm::predict.gbm(object=model_i, newdata=CanHF_1km_present, type="response") 
   
+  # then, union the landscape by adding back the locations with low HF which 
+  # weren't subject to backfilling (via `add_row`)
   new_landscape <- 
-      dplyr::tibble(!!biotic_vars[i] := predictions_i, 
+      dplyr::tibble(!!biotic_vars_thinned[i] := predictions_i, 
                     lon = CanHF_1km_present$lon, 
                     lat = CanHF_1km_present$lat) |> 
-      dplyr::add_row(CanHF_1km_absent[,c(biotic_vars[i], "lon", "lat")]) 
+      dplyr::add_row(CanHF_1km_absent[,c(biotic_vars_thinned[i], "lon", "lat")]) 
   
   
   # rasterize predictions
   # eventually we'll stack for `terra::predict()` of bird densities
   predictions_raster_i <- 
-    new_landscape |> 
-    terra::vect(x=_, geom=c("lon", "lat"), crs=crs) |> 
-    terra::rasterize(x=_, y=empty_raster, field=biotic_vars[i]) 
+    terra::vect(new_landscape, geom = c("lat", "lon"), crs = crs(empty_raster)) |>
+    terra::rasterize(y = empty_raster, field = biotic_vars_thinned[i])
   
   print(paste("* created backfilled raster for: ", biotic_vars[i], " *"))
   return(predictions_raster_i)
