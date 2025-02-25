@@ -146,11 +146,11 @@ backfill_landscape <- function(i){
   # drop biotic predictors that were thinned by VIF (see line 300 in "04.Stratify.R")
   biotic_vars_thinned <- biotic_vars[which(biotic_vars %in% colnames(covs_df))]
   
-  # stage a unique occurrence dataset for biotic feature[i] 
-  # by removing NAs for biotic feature[i] 
+  # stage a unique spatial subset of the BCR by removing NAs for biotic feature[i]
   covs_df_i <- tidyr::drop_na(covs_df, biotic_vars_thinned[i]) 
     
   # identify pixels with "high" and "low" human footprint
+  # for biotic feature[i]
   CanHF_1km_present <- dplyr::filter(covs_df_i, CanHF_1km > q15) 
   CanHF_1km_absent <- dplyr::filter(covs_df_i, CanHF_1km <= q15)
   
@@ -182,20 +182,48 @@ backfill_landscape <- function(i){
   # eventually we'll stack for `terra::predict()` of bird densities
   predictions_raster_i <- 
     terra::vect(new_landscape, geom = c("lat", "lon"), crs = crs(empty_raster)) |>
-    terra::rasterize(y = empty_raster, field = biotic_vars_thinned[i])
+    terra::rasterize(y = empty_raster, field = biotic_vars_thinned[i], fun=mean)
   
   print(paste("* created backfilled raster for: ", biotic_vars[i], " *"))
   return(predictions_raster_i)
   
 }
 
-tmpcl <- clusterExport(cl, c("backfill_landscape", "abiotic_vars", "biotic_vars", "crs", "empty_raster"))
 
+
+# ------------------------------------------------------------
+# for visualization purposes only: plot pre- and 
+# post-backfilled landscape for "SCANFIBalsamFir_1km"
+predictions_raster_i_smoothed <- terra::focal(predictions_raster_i, w = matrix(1,3,3), fun = mean, na.rm = TRUE) #3x3 matrix filled with 1s (each cell is given equal weight)
+
+terra::plot(predictions_raster_i)
+terra::plot(stack_bcr14_2020$SCANFIBalsamFir_1km)
+
+lines(bcr14_boundary, col="black", lwd=1)
+
+# for visualization purposes only: plot low vs high human footprint areas
+# CanHF_present and CanHF_absent are made inside of the function, 
+# so these maps are for "SCANFIBalsamFir_1km"
+my_colours <- colorRampPalette(c("#0072B2", "#009E73", "#F0E442", "#D55E00"))(100)
+my_breaks <- seq(0, q15, by=max(CanHF_1km_present$CanHF_1km)/4)
+
+terra::vect(CanHF_1km_absent, geom = c("lat", "lon"), crs = crs(empty_raster)) |>
+terra::rasterize(y = empty_raster, field = "CanHF_1km") |> 
+terra::plot(col="#0072B2")
+
+terra::vect(CanHF_1km_present, geom = c("lat", "lon"), crs = crs(empty_raster)) |>
+terra::rasterize(y = empty_raster, field = "CanHF_1km") |> 
+terra::plot(col=my_colours)
+
+lines(bcr14_boundary, col="black", lwd=1)
+# ------------------------------------------------------------
 
 
 
 
 #11. apply backfilling to all biotic covariates----
+tmpcl <- clusterExport(cl, c("backfill_landscape", "abiotic_vars", "biotic_vars", "crs", "empty_raster"))
+
 # this runs pretty quick on local for a single BCR x species, so don't need to test on cluster
 backfilled_rasters <- lapply(X=seq_along(biotic_vars), FUN=backfill_landscape)
 
@@ -227,7 +255,8 @@ backfilled_stack <- lapply(X=seq_along(backfilled_rasters), FUN=stack_from_list)
 
 
 
-#12. import bird models (`b.i`) for CAWA at year 2020----
+
+#13. import bird models (`b.i`) for CAWA at year 2020----
 
 # access gbm objects and append spp/bcr/boot info
 root <- "G:/Shared drives/BAM_NationalModels5/output/bootstraps"
