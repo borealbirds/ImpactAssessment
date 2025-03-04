@@ -14,9 +14,10 @@
 
 #1. Load packages----
 print("* Loading packages on master *")
-library(gbm)
+
 library(tidyverse)
 library(terra)
+library(xgboost)
 library(parallel)
 
 
@@ -61,7 +62,7 @@ stack_bcr14_2020 <- terra::rast(file.path(root, "gis", "stacks", "can14_2020.tif
 plot(stack_bcr14_2020$CCNL_1km)
 
 
-# import time since disturbance layer (CAfire) and crop to BCR14
+# import time of disturbance layer (CAfire) and crop to BCR14
 # note that Hermosilla et al (2016) is in NAD_1983_Lambert_Conformal_Conic
 CAfire <- 
   terra::rast(file.path(root, "gis", "disturbancetime", "CA_Forest_Fire_1985-2020.tif")) |> 
@@ -70,9 +71,19 @@ CAfire <-
 
 names(CAfire) <- "CAfire"
 
+# convert from time *of* disturbance to time *since* disturbance
+# add 1 in denominator to avoid dividing by zero when time of disturbance is 2020
+# output: values closer to 1 are more recently disturbed
+values(CAfire) <- ifelse(test = CAfire[] == 0, yes = 0, no = 1 / ((max(values(CAfire)) - CAfire[]) + 1))
+
+# add time since disturbance layer to covariate stack
+stack_bcr14_2020 <- c(stack_bcr14_2020, CAfire)
+
+
+
 # inspect distribution of disturbance times (after removing cells with "no change" aka "zero")
 hist(values(CAfire)[which(values(CAfire) > 0)], main="dist. of disturbances")
-plot(CAfire, type="classes")
+plot(CAfire)
 
 # overlay BCR14 boundary to sanity check
 bcr14_boundary <- 
@@ -81,9 +92,6 @@ bcr14_boundary <-
   terra::crop(x=_, y=stack_bcr14_2020)
 
 lines(bcr14_boundary, col="black", lwd=1)
-
-# add time since disturbance layer to covariate stack
-stack_bcr14_2020 <- c(stack_bcr14_2020, CAfire)
 
 
 
@@ -98,35 +106,46 @@ nice_var_names <-
   tidyr::drop_na() |> 
   unique()
 
+# remove Peatland as they are considered biotic,
+# remove WetOccur_5x5 since it's redundant with WetOccur_1km
+# for hli3cl see line 67 in "08.CalculateExtrapolation.R"
 abiotic_vars <-
   nice_var_names |> 
-  dplyr::filter(var_class %in% c("Annual Climate", "Climate Normals", "Topography")) |> 
+  dplyr::filter(var_class %in% c("Annual Climate", "Climate Normals", "Topography", "Wetland")) |> 
   tibble::add_row(var = "CAfire", var_class ="Time Since Disturbance") |> 
-  dplyr::filter(var != 'hli3cl_1km') |> # see line 67 in "08.CalculateExtrapolation.R"
+  dplyr::filter(!(var %in% c("hli3cl_1km", "Peatland_1km", "Peatland_5x5", "WetOccur_5x5"))) |> 
   dplyr::pull(var) |> 
   unique()
 
-
+# remove 5x5 since I can re-create these variables by
+# scaling up from 1km after prediciton
 biotic_vars <-
   nice_var_names |> 
-  dplyr::filter(var_class %in% c("Wetland", "Landcover", "Greenup", "Biomass", "LCC_MODIS")) |> 
+  dplyr::filter(var_class %in% c("Landcover", "Greenup", "Biomass", "LCC_MODIS", "Wetland")) |> 
+  dplyr::filter(!(var %in% c("WetOccur_1km", "WetOccur_5x5", "WetRecur_1km", "WetSeason_1km"))) |> # keep peatland but discard other water variables
+  dplyr::filter(!grepl("5x5", var)) |> 
   dplyr::pull(var) |> 
   unique()
 
 # convert covariate stack to a dataframe (values will be used in regression)
+# convert landcover classes from continuous to categorical
 covs_df <-
   stack_bcr14_2020 |> 
   terra::as.data.frame(xy=TRUE) |>
   tibble::as_tibble() |> 
-  dplyr::rename(lat=x, lon=y)
+  dplyr::rename(lon=x, lat=y) |> 
+  dplyr::mutate(SCANFI_1km = as.factor(SCANFI_1km),
+                MODISLCC_1km = as.factor(MODISLCC_1km),
+                MODISLCC_5x5 = as.factor(MODISLCC_5x5),
+                VLCE_1km = as.factor(VLCE_1km))
   
 
 # define threshold for "low" human footprint
-q15 <- quantile(covs_df$CanHF_1km, probs = 0.15, na.rm = TRUE)
+q75 <- quantile(covs_df$CanHF_1km, probs = 0.75, na.rm = TRUE)
 
 # how does human footprint vary across this BCR?
 hist(covs_df$CanHF_1km, main="CanHF_1km in BCR14")
-abline(v=q15, col="darkred", lwd=2)
+abline(v=q75, col="darkred", lwd=2)
 abline(v=mean(na.omit(covs_df$CanHF_1km)), col="skyblue", lwd=2, lty="dashed")
        
 quantile(na.omit(covs_df$CanHF_1km))
@@ -134,10 +153,95 @@ quantile(na.omit(covs_df$CanHF_1km))
 #0.0000000  0.9322898  5.2230940  9.6365070 54.5055199 
 
 
+
+
+
+#9. test whether SCANFI_1km land cover classes are accurately predicted---- 
+# especially since time since disturbance is now an abiotic predictor
+
+# drop biotic predictors that were thinned by VIF (see line 300 in "04.Stratify.R")
+biotic_vars_thinned <- biotic_vars[which(biotic_vars %in% colnames(covs_df))]
+
+# stage a unique spatial subset of the BCR by removing NAs for SCANFI_1km
+i <- 17 #for SCANFI_1km
+covs_df_i <- 
+  tidyr::drop_na(covs_df, biotic_vars_thinned[i]) |>
+  dplyr::mutate(label = as.numeric(SCANFI_1km) - 1)  # xgboost labels start at 0
+
+# identify pixels with "high" and "low" human footprint
+# for SCANFI_1km
+CanHF_1km_present <- dplyr::filter(covs_df_i, CanHF_1km > q75) 
+CanHF_1km_absent <- dplyr::filter(covs_df_i, CanHF_1km <= q75)
+
+# subset low HF dataset to only those with abiotic predictors and the biotic response
+#exclude "SCANFI_1km" since it will obviously correlate with "label"
+CanHF_1km_absent_abiotic <- CanHF_1km_absent[,c(abiotic_vars, "lon", "lat", "label")]
+
+# split data into training and hold-out
+set.seed(123)
+n <- nrow(CanHF_1km_absent_abiotic)
+training_index <- sample(seq_len(n), size = round(0.8 * n))
+predictor_vars <- c(abiotic_vars, "lon", "lat")
+training_data <- CanHF_1km_absent_abiotic[training_index, c(predictor_vars, "label")] 
+holdout_data <- CanHF_1km_absent_abiotic[-training_index, c(predictor_vars, "label")]
+
+# create DMatrix (a data structure for better speed when using xgboost)
+dtrain <- xgboost::xgb.DMatrix(data = as.matrix(training_data[,predictor_vars]), label = training_data$label)
+dholdout <- xgboost::xgb.DMatrix(data = as.matrix(holdout_data[,predictor_vars]), label = holdout_data$label)
+
+# set xgboost parameters
+params <- 
+  list(objective = "multi:softmax",  # direct multiclass prediction
+       eval_metric = "mlogloss",
+       num_class = length(levels(as.factor(training_data$label))),
+       max_depth = 3,  
+       eta = 0.1) # learning rate
+
+
+# run cross-validation to tune the number of rounds
+cv <- 
+  xgboost::xgb.cv(params = params, 
+                  data = dtrain, 
+                  nrounds = 1000, 
+                  nfold = 5, 
+                  early_stopping_rounds = 10, 
+                  verbose = 1)
+
+#cv$early_stop
+#$best_iteration
+#[1] 927
+
+#$best_score
+#test-mlogloss 
+#1.177003 
+
+#$stopped_by_max_rounds
+#[1] TRUE
+
+
+# fit a model
+final_model <- xgb.train(
+  params = params,
+  data = dtrain,
+  nrounds = cv$early_stop$best_iteration,
+  verbose = 1)
+
+pred_holdout <- predict(final_model, dholdout)
+conf_matrix <- table(predicted = pred_holdout, actual = holdout_data$label)
+accuracy <- sum(diag(conf_matrix)) / sum(conf_matrix)
+# [1] 0.5086198
+
+
+
+
+
+
+
+
+
 # define empty raster for placing backfilled features into
 empty_raster <- 
   terra::rast(extent=ext(stack_bcr14_2020), crs=crs(stack_bcr14_2020), resolution=1000)
-
 
 
 #9. define a function for predicting "restored" biotic landscape features----
@@ -151,20 +255,21 @@ backfill_landscape <- function(i){
     
   # identify pixels with "high" and "low" human footprint
   # for biotic feature[i]
-  CanHF_1km_present <- dplyr::filter(covs_df_i, CanHF_1km > q15) 
-  CanHF_1km_absent <- dplyr::filter(covs_df_i, CanHF_1km <= q15)
+  CanHF_1km_present <- dplyr::filter(covs_df_i, CanHF_1km > q75) 
+  CanHF_1km_absent <- dplyr::filter(covs_df_i, CanHF_1km <= q75)
   
   # model biotic ~ abiotic using boosted regression trees
-  gbm_formula <- reformulate(termlabels = c(abiotic_vars, "lon", "lat"), 
+  xgbm_formula <- reformulate(termlabels = c(abiotic_vars, "lon", "lat"), 
                              response = biotic_vars_thinned[i])
   
   model_i <- 
-    gbm::gbm(formula = gbm_formula,
+    gbm::gbm(formula = xgbm_formula,
              data = CanHF_1km_absent,
-             distribution="gaussian",
+             distribution="multinomial",
              n.trees = 2000,
              interaction.depth = 3,            
-             shrinkage = 0.01)
+             shrinkage = 0.01,
+             cv.folds = 5)
   
   # predict biotic feature[i] at "high" HF areas (i.e. backfilling)
   predictions_i <- gbm::predict.gbm(object=model_i, newdata=CanHF_1km_present, type="response") 
@@ -181,7 +286,7 @@ backfill_landscape <- function(i){
   # rasterize predictions
   # eventually we'll stack for `terra::predict()` of bird densities
   predictions_raster_i <- 
-    terra::vect(new_landscape, geom = c("lat", "lon"), crs = crs(empty_raster)) |>
+    terra::vect(new_landscape, geom = c("lon", "lat"), crs = crs(empty_raster)) |>
     terra::rasterize(y = empty_raster, field = biotic_vars_thinned[i], fun=mean)
   
   print(paste("* created backfilled raster for: ", biotic_vars[i], " *"))
@@ -205,18 +310,26 @@ lines(bcr14_boundary, col="black", lwd=1)
 # CanHF_present and CanHF_absent are made inside of the function, 
 # so these maps are for "SCANFIBalsamFir_1km"
 my_colours <- colorRampPalette(c("#0072B2", "#009E73", "#F0E442", "#D55E00"))(100)
-my_breaks <- seq(0, q15, by=max(CanHF_1km_present$CanHF_1km)/4)
 
-terra::vect(CanHF_1km_absent, geom = c("lat", "lon"), crs = crs(empty_raster)) |>
+terra::vect(CanHF_1km_absent, geom = c("lon", "lat"), crs = crs(empty_raster)) |>
 terra::rasterize(y = empty_raster, field = "CanHF_1km") |> 
-terra::plot(col="#0072B2")
+terra::plot(col= colorRampPalette(c("#56B4E9", "#0072B2"))(1000))
 
-terra::vect(CanHF_1km_present, geom = c("lat", "lon"), crs = crs(empty_raster)) |>
+terra::vect(CanHF_1km_present, geom = c("lon", "lat"), crs = crs(empty_raster)) |>
 terra::rasterize(y = empty_raster, field = "CanHF_1km") |> 
 terra::plot(col=my_colours)
 
 lines(bcr14_boundary, col="black", lwd=1)
 # ------------------------------------------------------------
+
+
+
+
+covs_df$SCANFI_1km |> unique()
+
+
+
+
 
 
 
