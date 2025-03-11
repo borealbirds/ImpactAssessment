@@ -1,5 +1,5 @@
 # ---
-# title: National Models 5.0 - testing kriging assumptions for covariate layers
+# title: National Models 5.0 - create models to predict biotic SCANFI classes from abiotic landscape
 # author: Mannfred Boehm
 # created: January 15, 2025
 # ---
@@ -51,7 +51,7 @@ tmpcl <- clusterExport(cl, c("root"))
 
 #6. Load packages on clusters----
 print("* Loading packages on workers *")
-tmpcl <- clusterEvalQ(cl, library(gbm))
+tmpcl <- clusterEvalQ(cl, library(xgboost))
 tmpcl <- clusterEvalQ(cl, library(tidyverse))
 tmpcl <- clusterEvalQ(cl, library(terra))
 
@@ -62,12 +62,12 @@ stack_bcr14_2020 <- terra::rast(file.path(root, "gis", "stacks", "can14_2020.tif
 plot(stack_bcr14_2020$CCNL_1km)
 
 
-# import time of disturbance layer (CAfire) and crop to BCR14
+# import time of disturbance layer (CAfire) and reproject to match covariate stack
 # note that Hermosilla et al (2016) is in NAD_1983_Lambert_Conformal_Conic
+# downloaded from: https://opendata.nfis.org/mapserver/nfis-change_eng.html
 CAfire <- 
-  terra::rast(file.path(root, "gis", "disturbancetime", "CA_Forest_Fire_1985-2020.tif")) |> 
-  terra::project(x=_, y=stack_bcr14_2020, method="near") |>  # reproject to match covariate stack
-  terra::crop(x=_, y=stack_bcr14_2020) # crop to BCR14
+  terra::rast(file.path(root, "gis", "other_landscape_covariates", "CA_Forest_Fire_1985-2020.tif")) |> 
+  terra::project(x=_, y=stack_bcr14_2020, method="near") # use "near" because years are categorical, not continuous
 
 names(CAfire) <- "CAfire"
 
@@ -76,14 +76,30 @@ names(CAfire) <- "CAfire"
 # output: values closer to 1 are more recently disturbed
 values(CAfire) <- ifelse(test = CAfire[] == 0, yes = 0, no = 1 / ((max(values(CAfire)) - CAfire[]) + 1))
 
-# add time since disturbance layer to covariate stack
-stack_bcr14_2020 <- c(stack_bcr14_2020, CAfire)
-
-
-
 # inspect distribution of disturbance times (after removing cells with "no change" aka "zero")
 hist(values(CAfire)[which(values(CAfire) > 0)], main="dist. of disturbances")
 plot(CAfire)
+
+
+# import soil carbon and pH data from ISRIC (International Soil Reference and Information Centre)
+# https://files.isric.org/soilgrids/latest/data_aggregated/
+soil_carbon <- 
+  terra::rast(file.path(root, "gis", "other_landscape_covariates", "soc_0-5cm_mean_1000.tif")) |> 
+  terra::project(x=_, y=stack_bcr14_2020, method="bilinear")
+
+names(soil_carbon) <- "soil_carbon"
+plot(soil_carbon)
+
+soil_ph <-
+  terra::rast(file.path(root, "gis", "other_landscape_covariates", "cec_0-5cm_mean_1000.tif")) |> 
+  terra::project(x=_, y=stack_bcr14_2020, method="bilinear")
+
+names(soil_ph) <- "soil_ph"
+plot(soil_ph)
+
+# add time since disturbance layer and soil layers to covariate stack
+stack_bcr14_2020 <- c(stack_bcr14_2020, CAfire, soil_carbon, soil_ph)
+
 
 # overlay BCR14 boundary to sanity check
 bcr14_boundary <- 
@@ -107,13 +123,16 @@ nice_var_names <-
   unique()
 
 # remove Peatland as they are considered biotic,
-# remove WetOccur_5x5 since it's redundant with WetOccur_1km
+# remove *_5x5s since they're redundant with *_1km
 # for hli3cl see line 67 in "08.CalculateExtrapolation.R"
 abiotic_vars <-
   nice_var_names |> 
   dplyr::filter(var_class %in% c("Annual Climate", "Climate Normals", "Topography", "Wetland")) |> 
   tibble::add_row(var = "CAfire", var_class ="Time Since Disturbance") |> 
-  dplyr::filter(!(var %in% c("hli3cl_1km", "Peatland_1km", "Peatland_5x5", "WetOccur_5x5"))) |> 
+  tibble::add_row(var = "soil_carbon", var_class = "Soils") |> 
+  tibble::add_row(var = "soil_ph", var_class = "Soils") |> 
+  dplyr::filter(!(var %in% c("hli3cl_1km", "Peatland_1km"))) |> 
+  dplyr::filter(!grepl("5x5", var)) |>  
   dplyr::pull(var) |> 
   unique()
 
@@ -127,28 +146,24 @@ biotic_vars <-
   dplyr::pull(var) |> 
   unique()
 
-# convert covariate stack to a dataframe (values will be used in regression)
-# convert landcover classes from continuous to categorical
-covs_df <-
+rm(nice_var_names); gc()
+
+# convert covariate stack to a dataframe 
+df_bcr14_2020 <-
   stack_bcr14_2020 |> 
   terra::as.data.frame(xy=TRUE) |>
   tibble::as_tibble() |> 
-  dplyr::rename(lon=x, lat=y) |> 
-  dplyr::mutate(SCANFI_1km = as.factor(SCANFI_1km),
-                MODISLCC_1km = as.factor(MODISLCC_1km),
-                MODISLCC_5x5 = as.factor(MODISLCC_5x5),
-                VLCE_1km = as.factor(VLCE_1km))
+  dplyr::rename(lon=x, lat=y) 
   
-
 # define threshold for "low" human footprint
-q75 <- quantile(covs_df$CanHF_1km, probs = 0.75, na.rm = TRUE)
+q50 <- quantile(df_bcr14_2020$CanHF_1km, probs = 0.50, na.rm = TRUE)
 
 # how does human footprint vary across this BCR?
-hist(covs_df$CanHF_1km, main="CanHF_1km in BCR14")
-abline(v=q75, col="darkred", lwd=2)
-abline(v=mean(na.omit(covs_df$CanHF_1km)), col="skyblue", lwd=2, lty="dashed")
+hist(df_bcr14_2020$CanHF_1km, main="CanHF_1km in BCR14")
+abline(v=q50, col="darkred", lwd=2)
+abline(v=mean(na.omit(df_bcr14_2020$CanHF_1km)), col="skyblue", lwd=2, lty="dashed")
        
-quantile(na.omit(covs_df$CanHF_1km))
+quantile(na.omit(df_bcr14_2020$CanHF_1km))
 #0%        25%        50%        75%       100% 
 #0.0000000  0.9322898  5.2230940  9.6365070 54.5055199 
 
@@ -157,66 +172,228 @@ quantile(na.omit(covs_df$CanHF_1km))
 
 
 #9. test whether SCANFI_1km land cover classes are accurately predicted---- 
-# especially since time since disturbance is now an abiotic predictor
+# will eventually need to do the same for VLCE_1km, MODISLCC_5x5, MODISLCC_1km
 
 # drop biotic predictors that were thinned by VIF (see line 300 in "04.Stratify.R")
-biotic_vars_thinned <- biotic_vars[which(biotic_vars %in% colnames(covs_df))]
+biotic_vars_thinned <- biotic_vars[which(biotic_vars %in% colnames(df_bcr14_2020))]
 
 # stage a unique spatial subset of the BCR by removing NAs for SCANFI_1km
+# also: treat SCANFI water and SCANFI rock classes as known features of the abiotic landscape
+# i.e. we aren't trying to predict them. They are predictors.
+# note: don't convert SCANFI_1km to a factor because xgb.DMatrix is expecting numerics
 i <- 17 #for SCANFI_1km
-covs_df_i <- 
-  tidyr::drop_na(covs_df, biotic_vars_thinned[i]) |>
-  dplyr::mutate(label = as.numeric(SCANFI_1km) - 1)  # xgboost labels start at 0
+df_bcr14_2020_i <- 
+  df_bcr14_2020 |> 
+  tidyr::drop_na(SCANFI_1km) |> 
+  dplyr::mutate(SCANFI_1km_rock = ifelse(SCANFI_1km == 3, yes=1, no=0)) |> # create new "rock" predictor  (should perfectly predict SCANFI class 3)
+  dplyr::mutate(SCANFI_1km_water = ifelse(SCANFI_1km == 8, yes=1, no=0))  # create new "water" predictor (should perfectly predict SCANFI class 8)
+  
 
-# identify pixels with "high" and "low" human footprint
-# for SCANFI_1km
-CanHF_1km_present <- dplyr::filter(covs_df_i, CanHF_1km > q75) 
-CanHF_1km_absent <- dplyr::filter(covs_df_i, CanHF_1km <= q75)
+# identify pixels with "high" and "low" human footprint 
+# in theory, this removes many locations with "rock" or "herb" SCANFI classes
+# that are auto-correlated with urban areas and agriculture..but need to check.. 
+CanHF_1km_present <- dplyr::filter(df_bcr14_2020_i, CanHF_1km > q50)
+CanHF_1km_absent <- dplyr::filter(df_bcr14_2020_i, CanHF_1km <= q50) 
 
 # subset low HF dataset to only those with abiotic predictors and the biotic response
-#exclude "SCANFI_1km" since it will obviously correlate with "label"
-CanHF_1km_absent_abiotic <- CanHF_1km_absent[,c(abiotic_vars, "lon", "lat", "label")]
+# include the response "SCANFI_1km" so that it can used for labelling 
+predictor_vars <- c(abiotic_vars, "lon", "lat", "SCANFI_1km_rock", "SCANFI_1km_water")
+CanHF_1km_absent_abiotic <- CanHF_1km_absent[,c(predictor_vars, "SCANFI_1km")]
 
-# split data into training and hold-out
+# split data into training (80%) and hold-out (20%)
 set.seed(123)
 n <- nrow(CanHF_1km_absent_abiotic)
-training_index <- sample(seq_len(n), size = round(0.8 * n))
-predictor_vars <- c(abiotic_vars, "lon", "lat")
-training_data <- CanHF_1km_absent_abiotic[training_index, c(predictor_vars, "label")] 
-holdout_data <- CanHF_1km_absent_abiotic[-training_index, c(predictor_vars, "label")]
+training_index <- sample(seq_len(n), size = round(0.80 * n))
+
+training_data <- CanHF_1km_absent_abiotic[training_index, c(predictor_vars, "SCANFI_1km")] 
+holdout_data <- CanHF_1km_absent_abiotic[-training_index, c(predictor_vars, "SCANFI_1km")]
+
+
+
+
+#10. two-stage modelling----
+# first, split SCANFI_1km classes between tree and non-tree vegetation
+# all values for SCANFI_1km_rock and SCANFI_1km_water should be zero (checked by dplyr::count, and they are)
+training_data_stage1 <- 
+  training_data |> 
+  dplyr::mutate(SCANFI_1km_broadclass = case_when(
+    SCANFI_1km %in% c(1, 2, 4) ~ 0,  # bryoid, herbs, shrub (non-trees)
+    SCANFI_1km %in% c(5, 6, 7) ~ 1,  # broadleaf, conifer, mixed (trees)
+    SCANFI_1km %in% c(3, 8) ~ 2)) |>    # rock or water (abiotic)
+  dplyr::mutate(SCANFI_1km_broadclass = factor(SCANFI_1km_broadclass, levels=c(0,1,2)))
 
 # create DMatrix (a data structure for better speed when using xgboost)
-dtrain <- xgboost::xgb.DMatrix(data = as.matrix(training_data[,predictor_vars]), label = training_data$label)
-dholdout <- xgboost::xgb.DMatrix(data = as.matrix(holdout_data[,predictor_vars]), label = holdout_data$label)
+# reminder: `predictor_vars` is `c(abiotic_vars, "lon", "lat", "SCANFI_1km_rock", "SCANFI_1km_water")`
+dtrain_stage1 <- xgboost::xgb.DMatrix(data = as.matrix(training_data_stage1[,predictor_vars]), label = as.numeric(training_data_stage1$SCANFI_1km_broadclass) - 1)
+params_stage1 <- xgboost::xgb.params(objective = "multi:softmax", eval_metric = "mlogloss", max_depth = 3, eta = 0.05, num_class = length(levels(training_data_stage1$SCANFI_1km_broadclass)))
+
+
+# train stage 1 model (SCANFI non-trees vs trees vs abiotic)
+cv_stage1 <-xgboost::xgb.cv(params = params_stage1, data = dtrain_stage1, nrounds=1000, nfold=5, early_stopping_rounds = 20)
+model_stage1 <- xgboost::xgb.train(params = params_stage1, data = dtrain_stage1, nrounds = cv_stage1$early_stop$best_iteration, verbose = 0)
+
+
+
+#11. build two multi-class models to predict (1) non-tree subclasses (bryoid, herb, shrub)
+# and (2) tree subclasses (broadleaf, conifer, mixed)----
+# note: the rock and water entries will be perfectly "predicted" since they are abiotic 
+
+# filter data to non-trees entries
+# SCANFI_1km is now a 3-factor column for non-treed classes (bryoids, herbs, shrubs)
+# again, SCANFI_1km_rock and SCANFI_1km_water should all be zeros (checked by dplyr::count, and they are)
+training_data_stage1_notrees <- 
+  training_data_stage1 |> 
+  dplyr::filter(SCANFI_1km_broadclass == 0) |> 
+  dplyr::mutate(SCANFI_1km = factor(SCANFI_1km, levels = c(1, 2, 4)))
+
+dtrain_non_tree <- xgb.DMatrix(
+  data = as.matrix(training_data_stage1_notrees[, predictor_vars]), # exclude SCANFI_1km and SCANFI_1km_tree
+  label = as.numeric(training_data_stage1_notrees$SCANFI_1km) - 1) # as.numeric() starts the classes at 1 but xgboost labels need to start at 0
+
+params_non_tree <- 
+  xgboost::xgb.params(objective = "multi:softmax", 
+                      num_class = length(levels(training_data_stage1_notrees$SCANFI_1km)),
+                      eval_metric = "mlogloss",
+                      max_depth = 3,
+                      eta = 0.05)
+
+cv_notree <- xgboost::xgb.cv(params = params_non_tree, data = dtrain_non_tree, nrounds=1000, nfold=5, early_stopping_rounds = 20)
+model_non_tree <- xgb.train(params = params_non_tree, data = dtrain_non_tree, nrounds = cv_notree$early_stop$best_iteration, verbose = 0)
+
+# filter data to yes-trees entries
+# SCANFI_1km is now a 3-factor column for yes-treed classes (broadlead, conifer, mixed)
+# again, SCANFI_1km_rock and SCANFI_1km_water should all be zeros (checked by dplyr::count, and they are)
+training_data_stage1_yestrees <- 
+  training_data_stage1 |> 
+  dplyr::filter(SCANFI_1km_broadclass == 1) |> 
+  dplyr::mutate(SCANFI_1km = factor(SCANFI_1km, levels = c(5, 6, 7)))
+
+dtrain_yes_tree <- xgb.DMatrix(
+  data = as.matrix(training_data_stage1_yestrees[, predictor_vars]),
+  label = as.numeric(training_data_stage1_yestrees$SCANFI_1km) - 1)
+
+params_yes_tree <- 
+  xgboost::xgb.params(objective = "multi:softmax",
+                      num_class = length(levels(training_data_stage1_yestrees$SCANFI_1km)),
+                      eval_metric = "mlogloss",
+                      max_depth = 3,
+                      eta = 0.05)
+# $best_iteration 1679
+cv_yestree <- xgboost::xgb.cv(params = params_yes_tree, data = dtrain_yes_tree, nrounds=2000, nfold=5, early_stopping_rounds = 20)
+model_yes_tree <- xgboost::xgb.train(params = params_yes_tree, data = dtrain_yes_tree, nrounds = cv_yestree$early_stop$best_iteration, verbose = 0)
+
+
+#12. now test the hierarchical models on the holdout data
+# use model_stage1 to predict whether a point is treed or non-treed:
+# if the prediction is non-treed, pass the observation to model_non_tree to get the specific class (bryoid, herb, or shrub).
+# if the prediction is treed, use model_yes_tree to determine whether it's broadleaf, conifer, or mixed.
+
+# stage holdout data
+# reminder: `predictor_vars` is `c(abiotic_vars, "lon", "lat", "SCANFI_1km_rock", "SCANFI_1km_water")`
+# by filtering for vegetation, there are no rock or water classes to predict
+holdout_data_stage1 <- 
+  holdout_data |> 
+  dplyr::mutate(SCANFI_1km_broadclass = case_when(
+    SCANFI_1km %in% c(1, 2, 4) ~ 0,  # bryoid, herbs, shrub (non-trees)
+    SCANFI_1km %in% c(5, 6, 7) ~ 1,  # broadleaf, conifer, mixed (trees)
+    SCANFI_1km %in% c(3, 8) ~ 2)) |>    # rock or water (abiotic)
+  dplyr::mutate(SCANFI_1km_broadclass = factor(SCANFI_1km_broadclass, levels=c(0,1,2)))
+
+dholdout <- xgboost::xgb.DMatrix(data = as.matrix(holdout_data_stage1[,predictor_vars]), label=as.numeric(holdout_data_stage1$SCANFI_1km_broadclass) - 1)
+
+# stage 1: estimate probability of being treed in holdout data
+prediction_stage1 <- predict(model_stage1, newdata = dholdout)
+
+holdout_data_stage1$SCANFI_1km_broadclass_predicted <- prediction_stage1
+ 
+
+
+# for non-treed predictions:
+# filter holdout data for further subclass predictions
+holdout_non_tree <- dplyr::filter(holdout_data_stage1, SCANFI_1km_broadclass_predicted == 0)
+dholdout_non_tree <- xgboost::xgb.DMatrix(data = as.matrix(holdout_non_tree[, predictor_vars]))
+pred_non_tree <- predict(model_non_tree, newdata = dholdout_non_tree)
+
+# Convert numeric predictions (0, 1, 2) to original SCANFI classes using the factor mapping from training
+non_tree_labels <- factor(pred_non_tree, levels = c(0,1,2), labels = c("1", "2", "4"))
+holdout_non_tree <- holdout_non_tree %>% 
+  mutate(final_prediction = non_tree_labels)
+
+# for treed predictions:
+# filter holdout data for further subclass predictions
+holdout_yes_tree <- dplyr::filter(holdout_data_stage1, SCANFI_1km_broadclass_predicted == 1)
+dholdout_yes_tree <- xgboost::xgb.DMatrix(data = as.matrix(holdout_yes_tree[, predictor_vars]))
+pred_yes_tree <- predict(model_yes_tree, newdata = dholdout_yes_tree)
+
+# Convert numeric predictions (0, 1, 2) to original SCANFI classes using the factor mapping from training
+tree_labels <- factor(pred_yes_tree, levels = c(0,1,2), labels = c("5", "6", "7"))
+holdout_yes_tree <- holdout_yes_tree %>% 
+  mutate(final_prediction = tree_labels)
+
+
+# stage abiotic SCANFI classes for `bind_rows`
+holdout_abiotic <- holdout_data_stage1 %>% mutate(final_prediction = as.character(SCANFI_1km))
+
+
+# combine predictions into single data frame
+prediction_stage2 <- dplyr::bind_rows(holdout_non_tree, holdout_yes_tree, holdout_abiotic)
+
+confusion_matrix_broadclass <- table(actual = holdout_data_stage1$SCANFI_1km_broadclass, predicted = holdout_data_stage1$SCANFI_1km_broadclass_predicted)
+confusion_matrix_broadclass
+
+confusion_matrix <- table(actual = prediction_stage2$SCANFI_1km, predicted = prediction_stage2$final_prediction)
+confusion_matrix
+
+#       predicted
+#actual 1     2     3     4     5     6     7     8
+# 1    41     0     0     0     1    37     3     0
+# 2     0   202     0     0    56    63    79     0
+# 3     0     0   112     0     0     0     0     0
+# 4     0     0     0   845    78   536   201     0
+# 5     0     3     0     1  7020  1738  1212     0
+# 6     0     0     0     7   709 20795  1735     0
+# 7     0     1     0     3  1033  3947 10040     0
+# 8     0     0     0     0     0     0     0   448
+
+
+
+
+
+
 
 # set xgboost parameters
+# train a model where each leaf of the boosted trees is associated with one of the SCANFI classes.
+# then, compute "softmax" probabilities and return the class with the highest probability as the prediction.
+# "softmax" is a function that generates a probability distribution over all possible classes 
+# (compared to using a logisitic function for binary classification)
 params <- 
-  list(objective = "multi:softmax",  # direct multiclass prediction
+  list(objective = "multi:softmax",  
        eval_metric = "mlogloss",
-       num_class = length(levels(as.factor(training_data$label))),
+       num_class = length(levels(as.factor(training_data$SCANFI_1km))),
        max_depth = 3,  
        eta = 0.1) # learning rate
 
 
 # run cross-validation to tune the number of rounds
+# cv$early_stop$best_score is the best average cross-validated score achieved during the training process 
 cv <- 
   xgboost::xgb.cv(params = params, 
                   data = dtrain, 
-                  nrounds = 1000, 
+                  nrounds = 1000, #number of boosting iterations,where each “round” adds a new tree that attempts to correct the errors of the previously trained ensemble
                   nfold = 5, 
                   early_stopping_rounds = 10, 
                   verbose = 1)
 
-#cv$early_stop
-#$best_iteration
-#[1] 927
+# $best_iteration
+# [1] 632
+# 
+# $best_score
+# test-mlogloss 
+# 0.9951939 
+# 
+# $stopped_by_max_rounds
+# [1] TRUE
 
-#$best_score
-#test-mlogloss 
-#1.177003 
-
-#$stopped_by_max_rounds
-#[1] TRUE
 
 
 # fit a model
@@ -226,10 +403,10 @@ final_model <- xgb.train(
   nrounds = cv$early_stop$best_iteration,
   verbose = 1)
 
-pred_holdout <- predict(final_model, dholdout)
-conf_matrix <- table(predicted = pred_holdout, actual = holdout_data$label)
+holdout_predictions <- predict(final_model, dholdout)
+conf_matrix <- table(predicted = holdout_predictions, actual = holdout_data$SCANFI_1km)
 accuracy <- sum(diag(conf_matrix)) / sum(conf_matrix)
-# [1] 0.5086198
+# [1] 0.5333
 
 
 
@@ -238,25 +415,26 @@ accuracy <- sum(diag(conf_matrix)) / sum(conf_matrix)
 
 
 
+# ------------------------------------------------------------
 
 # define empty raster for placing backfilled features into
 empty_raster <- 
   terra::rast(extent=ext(stack_bcr14_2020), crs=crs(stack_bcr14_2020), resolution=1000)
 
 
-#9. define a function for predicting "restored" biotic landscape features----
+# define a function for predicting "restored" biotic landscape features----
 backfill_landscape <- function(i){
   
   # drop biotic predictors that were thinned by VIF (see line 300 in "04.Stratify.R")
-  biotic_vars_thinned <- biotic_vars[which(biotic_vars %in% colnames(covs_df))]
+  biotic_vars_thinned <- biotic_vars[which(biotic_vars %in% colnames(df_bcr14_2020))]
   
   # stage a unique spatial subset of the BCR by removing NAs for biotic feature[i]
-  covs_df_i <- tidyr::drop_na(covs_df, biotic_vars_thinned[i]) 
+  df_bcr14_2020_i <- tidyr::drop_na(df_bcr14_2020, biotic_vars_thinned[i]) 
     
   # identify pixels with "high" and "low" human footprint
   # for biotic feature[i]
-  CanHF_1km_present <- dplyr::filter(covs_df_i, CanHF_1km > q75) 
-  CanHF_1km_absent <- dplyr::filter(covs_df_i, CanHF_1km <= q75)
+  CanHF_1km_present <- dplyr::filter(df_bcr14_2020_i, CanHF_1km > q50) 
+  CanHF_1km_absent <- dplyr::filter(df_bcr14_2020_i, CanHF_1km <= q50)
   
   # model biotic ~ abiotic using boosted regression trees
   xgbm_formula <- reformulate(termlabels = c(abiotic_vars, "lon", "lat"), 
@@ -325,7 +503,17 @@ lines(bcr14_boundary, col="black", lwd=1)
 
 
 
-covs_df$SCANFI_1km |> unique()
+
+
+
+
+
+
+
+
+
+
+
 
 
 
