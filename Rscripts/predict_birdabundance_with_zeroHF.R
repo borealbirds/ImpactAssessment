@@ -176,3 +176,59 @@ pop_est_list <- lapply(X=predictions, FUN=terra::app, x=mod, fun="mean", na.rm=T
 # and a column for population estimate
 # graph trend and plot trend on map (see Anna's CFS presentation)
 
+
+
+
+
+
+
+
+#13. import bird models (`b.i`) for CAWA at year 2020----
+
+# access gbm objects and append spp/bcr/boot info
+root <- "G:/Shared drives/BAM_NationalModels5/output/bootstraps"
+gbm_objs <- list.files(file.path(root), pattern = "*\\.R", full.names = TRUE, recursive = TRUE)
+
+
+# !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+# HOW TO FILTER FOR YEAR????
+# extract the species (FLBC), BCR, and bootstrap replicate from `gbm_objs`
+sample_id <- 
+  gbm_objs |> 
+  basename() |> 
+  stringr::str_split_fixed(pattern="_", n=3) |> 
+  gsub("\\.R", "", x = _) |>
+  tibble::as_tibble() |> 
+  magrittr::set_colnames(c("spp", "bcr", "boot")) |> 
+  dplyr::filter(spp == "CAWA")
+
+gbm_data <- tibble(file_path = gbm_objs, spp = sample_id$spp, bcr = sample_id$bcr, boot = sample_id$boot) 
+
+
+
+# write function that `terra::predict`s bird densities using V5 `gbm` models for CAWA 
+repredict_with_backfill <- function(gbm_object, backfilled_stack) {
+  
+  
+  # attempt to load the GBM object
+  # "file_path" is a column name in `gbm_data`
+  load(gbm_object[["file_path"]])
+  
+  # validate gbm object
+  if (!exists("b.i") || is.null(b.i$n.trees) || b.i$n.trees <= 0) {
+    warning(paste("Invalid GBM model in file:", gbm_object["file_path"]))
+    return(NULL)
+  } else {
+    message("Successfully loaded: ", gbm_object["file_path"])
+  }
+  
+  # predict density for a given spp x bcr x year
+  s
+  object_i <- backfilled_stack
+  prediction_i <- terra::predict(object=SPATRASTER, model=b.i, )
+  return(prediction_i)
+}
+
+
+
+
