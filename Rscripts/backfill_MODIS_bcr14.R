@@ -1,5 +1,5 @@
 # ---
-# title: National Models 5.0 - create models to predict biotic SCANFI classes from abiotic landscape
+# title: National Models 5.0 - create models to predict biotic MODIS classes from abiotic landscape
 # author: Mannfred Boehm
 # created: March 11, 2025
 # ---
@@ -13,24 +13,15 @@
 
 
 
-#4. test whether MODISLCC_1km land cover classes are accurately predicted---- 
+#4. from "test_backfill_MODIS_bcr14.R" we know that wetlands aren't accurratley predicted---- 
 # will eventually need to do the same for SCANFI_1km, VLCE_1km
 
 # drop biotic predictors that were thinned by VIF (see line 300 in "04.Stratify.R")
 biotic_vars_thinned <- biotic_vars[which(biotic_vars %in% colnames(df_bcr14_2020))]
 
 # stage a unique spatial subset of the BCR by removing NAs for MODISLCC_1km
-# also: treat water, barren, cropland MODIS classes as known features of the abiotic landscape
-# i.e. we aren't trying to predict them. They are predictors.
-# note: don't convert MODISLCC to a factor because xgb.DMatrix is expecting numerics
-# note: urban classes will mostly be filtered out when we create a low CANHF_1km dataset
-df_bcr14_2020_i <- 
-  df_bcr14_2020 |> 
-  tidyr::drop_na(MODISLCC_1km) |> 
-  dplyr::mutate(MODISLCC_1km_crop = ifelse(MODISLCC_1km == 12, yes=1, no=0)) |> # create "cropland" predictor  (should perfectly predict MODIS class 12)
-  dplyr::mutate(MODISLCC_1km_urban = ifelse(MODISLCC_1km == 13, yes=1, no=0)) |>  # create "urban" predictor (should perfectly predict MODIS class 13)
-  dplyr::mutate(MODISLCC_1km_barren = ifelse(MODISLCC_1km == 16, yes=1, no=0)) |>  # create "barren" predictor (should perfectly predict MODIS class 16)
-  dplyr::mutate(MODISLCC_1km_water = ifelse(MODISLCC_1km == 17, yes=1, no=0))  # create "water" predictor (should perfectly predict MODIS class 17)
+# we'll treat water, low HF barren, and low HF cropland MODIS classes as known features of the abiotic landscape
+df_bcr14_2020_i <-  tidyr::drop_na(df_bcr14_2020, MODISLCC_1km)
 
 # does every MODIS class appear in BCR14? 
 dplyr::count(df_bcr14_2020_i, MODISLCC_1km)
@@ -39,10 +30,10 @@ dplyr::count(df_bcr14_2020_i, MODISLCC_1km)
 CanHF_1km_present <- dplyr::filter(df_bcr14_2020_i, CanHF_1km > q50)
 CanHF_1km_absent <- dplyr::filter(df_bcr14_2020_i, CanHF_1km <= q50) 
 
-# subset low HF dataset to only those with abiotic predictors and the biotic response
-# include the response "MODISLCC" so that it can used for labelling 
-# note: # cropland is reduced from 14840 to 212 (98.5%), urban is reduced 99.5%
-predictor_vars <- c(abiotic_vars, "lon", "lat", "MODISLCC_1km_crop", "MODISLCC_1km_urban", "MODISLCC_1km_barren", "MODISLCC_1km_water")
+
+# subset low HF dataset to abiotic predictors and the biotic response
+# include the response "MODISLCC_1km" so that it can used for labelling 
+predictor_vars <- c(abiotic_vars, "lon", "lat")
 CanHF_1km_absent_abiotic <- CanHF_1km_absent[,c(predictor_vars, "MODISLCC_1km")] 
 
 
@@ -50,18 +41,21 @@ CanHF_1km_absent_abiotic <- CanHF_1km_absent[,c(predictor_vars, "MODISLCC_1km")]
 #5. two-stage modelling----
 # stage 1: create broad MODISLCC_1km classes in low HF areas
 
-# classes 15 (snow/ice) and 18 (unclassified) are not in BCR14
+# classes 15 (snow/ice) and 18 (unclassified) are not in low HF dataset
 dplyr::count(CanHF_1km_absent_abiotic, MODISLCC_1km)
 
+# remove human disturbance classes (12, 13, 14, 16) because any remaining human footprints are 
+# very minor (less than the median) and we aren't interested in predicting human disturbances,
+# we just want to train the model to predict natural vegetation
+# we will retain wetlands, even though we don't have high confidence that they can be predicted
 training_data_stage1 <- 
   CanHF_1km_absent_abiotic |> 
-  dplyr::filter(!MODISLCC_1km %in% c(12, 13, 14)) |> # remove human disturbances (classes 12, 13, 14)
+  dplyr::filter(!MODISLCC_1km %in% c(12:14, 16:17)) |> 
   dplyr::mutate(MODISLCC_1km_broadclass = case_when(
     MODISLCC_1km %in% c(1:5) ~ 0,  # trees
     MODISLCC_1km %in% c(6:10) ~ 1,  # non-tree vegetation
-    MODISLCC_1km == 11 ~ 2, # wetland 
-    MODISLCC_1km %in% c(16:17) ~ 3)) |> # barren and water
-  dplyr::mutate(MODISLCC_1km_broadclass = factor(MODISLCC_1km_broadclass, levels=c(0,1,2,3)))
+    MODISLCC_1km == 11 ~ 2)) |>  # wetland 
+  dplyr::mutate(MODISLCC_1km_broadclass = factor(MODISLCC_1km_broadclass, levels=c(0,1,2)))
 
 
 # create DMatrix (a data structure for better speed when using xgboost)
@@ -70,8 +64,8 @@ dtrain_stage1 <- xgboost::xgb.DMatrix(data = as.matrix(training_data_stage1[,pre
 params_stage1 <- xgboost::xgb.params(objective = "multi:softmax", eval_metric = "mlogloss", max_depth = 3, eta = 0.1, num_class = length(levels(training_data_stage1$MODISLCC_1km_broadclass)))
 
 # train stage 1 model to classify broad MODIS classes in low HF areas
-# cv_stage1$early_stop$best_iteration 3139
-cv_stage1 <-xgboost::xgb.cv(params = params_stage1, data = dtrain_stage1, nrounds=5000, nfold=5, early_stopping_rounds = 20)
+# cv_stage1$early_stop$best_iteration 3480
+cv_stage1 <-xgboost::xgb.cv(params = params_stage1, data = dtrain_stage1, nrounds=4000, nfold=5, early_stopping_rounds = 20)
 model_stage1 <- xgboost::xgb.train(params = params_stage1, data = dtrain_stage1, nrounds = cv_stage1$early_stop$best_iteration, verbose = 0)
 
 
@@ -84,7 +78,7 @@ model_stage1 <- xgboost::xgb.train(params = params_stage1, data = dtrain_stage1,
 # we'll instead just port them over directly as "determined"
 
 # train a model to split broad class 0 into 5 MODIS classes (tree types)
-# filter for broadclass==0, then use `unique()` to check what classes actually got modelled before using `factor()`
+# filter for broadclass==0, then use `unique()` to check what MODISLCC_1km classes actually got modelled before using `factor()`
 training_data_stage2_class0 <- 
   training_data_stage1 |> 
   dplyr::filter(MODISLCC_1km_broadclass == 0) |> 
@@ -101,8 +95,8 @@ params_class0 <-
                       max_depth = 3,
                       eta = 0.1)
 
-# cv_class0$early_stop$best_iteration 2291
-cv_class0 <- xgboost::xgb.cv(params = params_class0, data = dtrain_class0, nrounds=3000, nfold=5, early_stopping_rounds = 20)
+# cv_class0$early_stop$best_iteration 2161
+cv_class0 <- xgboost::xgb.cv(params = params_class0, data = dtrain_class0, nrounds=2500, nfold=5, early_stopping_rounds = 20)
 model_class0 <- xgb.train(params = params_class0, data = dtrain_class0, nrounds = cv_class0$early_stop$best_iteration, verbose = 0)
 
 
@@ -133,31 +127,32 @@ model_class1 <- xgb.train(params = params_class1, data = dtrain_class1, nrounds 
 
 # stage datasets for backfilling (areas with high human footprint)
 CanHF_1km_present_abiotic <- CanHF_1km_present[,c(predictor_vars, "MODISLCC_1km")]
+nrow(CanHF_1km_present_abiotic) #128840
 
-# even though we already have MODISLCC classifications, in disturbed areas that original label might not 
-# represent natural vegetation. By recoding, we know which pixels should be backfilled 
-# (for non-water areas) and which should remain unchanged (water).
+# remove water and wetland areas because we don't want to backfill there
 backfill_data_stage1 <- 
   CanHF_1km_present_abiotic |> 
-  dplyr::mutate(MODISLCC_1km_broadclass = case_when(
-    MODISLCC_1km %in% c(1:5) ~ 0,  # trees
-    MODISLCC_1km %in% c(6:10) ~ 1,  # non-tree vegetation
-    MODISLCC_1km == 11 ~ 2, # wetland 
-    MODISLCC_1km %in% c(12:14) ~ 3, # human footprints 
-    MODISLCC_1km %in% c(16:17) ~ 4)) |> # barren and water
-  dplyr::mutate(MODISLCC_1km_broadclass = factor(MODISLCC_1km_broadclass, levels=c(0,1,2,3,4)))
+  dplyr::filter(!(MODISLCC_1km %in% c(11, 17))) # 540+1630
 
-# reminder: predictor_vars <- c(abiotic_vars, "lon", "lat", "MODISLCC_1km_rock", "MODISLCC_1km_water")
-# including the `label` in the DMatrix is practically useless unless we use them for comparitive purposes later on..
-dbackfill <- xgboost::xgb.DMatrix(data = as.matrix(backfill_data_stage1[,predictor_vars]), label=as.numeric(backfill_data_stage1$MODISLCC_1km_broadclass) - 1)
+nrow(backfill_data_stage1) # should be 126670 which is 128840 - (540+1630) 
 
-# stage 1: estimate broad SCANFI classes in high HF areas
+
+# reminder: predictor_vars <- c(abiotic_vars, "lon", "lat")
+# including the `label` in the DMatrix is practically useless unless we use them for comparative purposes later on..
+dbackfill <- xgboost::xgb.DMatrix(data = as.matrix(backfill_data_stage1[,predictor_vars]))
+
+# stage 1: estimate broad MODIS classes in high HF areas
 backfill_data_stage1$MODISLCC_1km_broadclass_predicted  <- predict(model_stage1, newdata = dbackfill)
-
+count(backfill_data_stage1, MODISLCC_1km_broadclass_predicted)
+# MODISLCC_1km_broadclass_predicted     n
+# <dbl>                              <int>
+#                               0  108867 predicted trees
+#                               1   17495 predicted non-tree veg
+#                               2   309   predicted wetland
 
 # stage 2A:
-# for broad class 0 predictions (trees):
-# filter high HF data for finer subclass predictions (tree type)
+# for non-treed predictions:
+# filter high HF data for finer subclass predictions
 backfill_data_stage2A <- dplyr::filter(backfill_data_stage1, MODISLCC_1km_broadclass_predicted == 0)
 dbackfill_stage2A <- xgboost::xgb.DMatrix(data = as.matrix(backfill_data_stage2A[, predictor_vars]))
 pred_stage2A <- predict(model_class0, newdata = dbackfill_stage2A)
@@ -181,20 +176,30 @@ pred_labels_stage2B <- factor(pred_stage2B, levels = c(0,1,2,3,4), labels = c("6
 backfill_data_stage2B <- dplyr::mutate(backfill_data_stage2B, MODIS_backfill = pred_labels_stage2B)
 
 
-# stage 2C and 2D: "predict" (i.e. retain) MODIS classes for water and wetlands, but not crops, urban, or barren
-backfill_water_stage2C <- 
+# stage 2C :
+# # if predicted as broad class wetland, assign as MODIS class "wetland"
+backfill_wetland_stage2C <- 
   backfill_data_stage1 |> 
-  dplyr::filter(MODISLCC_1km == 17) |>   # only keep water pixels
-  dplyr::mutate(MODIS_backfill = "17")
-
-backfill_water_stage2D <- 
-  backfill_data_stage1 |> 
-  dplyr::filter(MODISLCC_1km == 11) |>   # only keep wetland pixels
+  dplyr::filter(MODISLCC_1km_broadclass_predicted  == "2") |>    
   dplyr::mutate(MODIS_backfill = "11")
 
+
+# stage 2D: 
+# retain MODIS classes for water and wetland from areas with high HF
+retain_aqueous_stage2D <- 
+  CanHF_1km_present |> 
+  dplyr::filter(MODISLCC_1km %in% c(11,17)) |>   # only keep water pixels
+  dplyr::mutate(MODIS_backfill = as.character(MODISLCC_1km))
+
+
+
 # combine backfill predictions into single data frame
-prediction_stage2 <- dplyr::bind_rows(backfill_data_stage2A, backfill_data_stage2B, backfill_water_stage2C,backfill_water_stage2D)
+# number of predictions and carry-overs so should be equal to nrow(CanHF_1km_present)
+prediction_stage2 <- dplyr::bind_rows(backfill_data_stage2A, backfill_data_stage2B, backfill_wetland_stage2C, retain_aqueous_stage2D)
 prediction_stage2$MODIS_backfill <- as.numeric(prediction_stage2$MODIS_backfill)
+nrow(CanHF_1km_present_abiotic) #128840
+nrow(prediction_stage2) #128840 
+
 
 
 #5. spatialize backfilled locations (high HF)----
@@ -207,55 +212,31 @@ prediction_stage2_raster <-
   terra::vect(prediction_stage2, geom = c("lon", "lat"), crs = crs(stack_bcr14_2020)) |>
   terra::rasterize(x=_, y = empty_raster, field = "MODIS_backfill")
 
-# fill in low HF areas (NAs in prediction raster because we only backfilled high HF)
-# with low HF vegetation
+length(values(prediction_stage2_raster, na.rm=T)) #128840
+length(values(stack_bcr14_2020$MODISLCC_1km, na.rm=T)) #274264
+
+
 #  `cover()` fills any NA cells in the first raster with values from the second
 prediction_stage2_raster <- terra::cover(prediction_stage2_raster, stack_bcr14_2020$MODISLCC_1km)
+length(values(prediction_stage2_raster, na.rm=T)) #274264
 
 
-# define classes for backfilled layer
-modis_cats_backfill <- data.frame(
-  ID = sort(unique(prediction_stage2$MODIS_backfill)), #  1  4  5  7  8  9 10 11 17 
-  category = c("eg needle", "dec broadleaf", "mixed forest",
-               "open shrub", "woody savanna", "savanna", "grassland", "wetland", "water"))
-
-levels(prediction_stage2_raster) <- modis_cats_backfill
-
-# define classes for original layer
-modis_cats_original <- data.frame(
+# define classes
+modis_cats <- data.frame(
     ID = sort(unique(df_bcr14_2020_i$MODISLCC_1km)), # 1  2  3  4  5  7  8  9 10 11 12 13 14 15 16 17
     category = c("eg needle", "eg broadleaf", "dec needle", "dec broadleaf", "mixed forest",
               "open shrub", "woody savanna", "savanna", "grassland", "wetland",
              "cropland", "urban", "cropland/natural", "snow/ice", "barren", "water"))
 
-levels(stack_bcr14_2020$MODISLCC_1km) <- modis_cats_original
+levels(prediction_stage2_raster) <- modis_cats
+levels(stack_bcr14_2020$MODISLCC_1km) <- modis_cats
 
 
 
 
 #6. visualize backfilling procedure----
 
-sort(unique(prediction_stage2$MODIS_backfill))
-# 1  4  5  7  8  9 10 11 17
-
-my_colours_backfill <- c(
-  "#009E73",  # 1: evergreen needle
-  "#009E73",  # 4: deciduous broadleaf
-  "#009E73",  # 5: mixed forest
-  "#006644",  # 7: open shrubs
-  "#006644",  # 8: woody savanna
-  "#006644",  # 9: savanna
-  "#006644",  #10: grassland
-  "#0072B2",  #11: wetland
-  "#0072B2")   #17: water
-
-
-
-
-sort(unique(df_bcr14_2020_i$MODISLCC_1km))
-# 1  2  3  4  5  7  8  9 10 11 12 13 14 15 16 17
-
-my_colours_original <- c(
+my_colours <- c(
   "#009E73",  # 1: evergreen needle
   "#009E73",  # 2: evergreen broadleaf
   "#009E73",  # 3: deciduous needle
@@ -270,20 +251,18 @@ my_colours_original <- c(
   "#D55E00",  #13: urban
   "#D55E00",  #14: cropland/natural
   "snow",     #15: snow/ice
-  "grey",     #16: barren
+  "gray",     #16: barren
   "#0072B2")   #17: water
 
 
   
-# plot pre-backfilled landscape for "SCANFI_1km"
-terra::plot(stack_bcr14_2020$MODISLCC_1km, col = my_colours_original)
+# plot pre-backfilled landscape for "MODISLCC_1km"
+terra::plot(stack_bcr14_2020$MODISLCC_1km, col = my_colours)
 lines(bcr14_boundary, col="black", lwd=1)
 
-# plot post-backfilled landscape for "SCANFI_1km"
-terra::plot(prediction_stage2_raster, col = my_colours_backfill)
+# plot post-backfilled landscape for "MODISLCC_1km"
+terra::plot(prediction_stage2_raster, col = my_colours)
 lines(bcr14_boundary, col="black", lwd=1)
-
-
 
 
 # save it if it's good

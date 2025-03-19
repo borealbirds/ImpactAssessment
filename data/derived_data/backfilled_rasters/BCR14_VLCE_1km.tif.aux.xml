@@ -2,23 +2,26 @@
   <PAMRasterBand band="1">
     <Description>category</Description>
     <CategoryNames>
+      <Category>no change</Category>
       <Category></Category>
-      <Category>eg needle</Category>
-      <Category>eg broadleaf</Category>
-      <Category>dec needle</Category>
-      <Category>dec broadleaf</Category>
-      <Category>mixed forest</Category>
       <Category></Category>
-      <Category>open shrub</Category>
-      <Category>woody savanna</Category>
-      <Category>savanna</Category>
-      <Category>grassland</Category>
-      <Category>wetland</Category>
-      <Category>cropland</Category>
-      <Category>urban</Category>
-      <Category>cropland/natural</Category>
-      <Category>snow/ice</Category>
-      <Category>barren</Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
       <Category>water</Category>
       <Category></Category>
       <Category></Category>
@@ -31,12 +34,15 @@
       <Category></Category>
       <Category></Category>
       <Category></Category>
+      <Category>rock</Category>
+      <Category>barren</Category>
       <Category></Category>
       <Category></Category>
       <Category></Category>
       <Category></Category>
       <Category></Category>
       <Category></Category>
+      <Category>bryoid</Category>
       <Category></Category>
       <Category></Category>
       <Category></Category>
@@ -46,6 +52,7 @@
       <Category></Category>
       <Category></Category>
       <Category></Category>
+      <Category>shrub</Category>
       <Category></Category>
       <Category></Category>
       <Category></Category>
@@ -75,6 +82,8 @@
       <Category></Category>
       <Category></Category>
       <Category></Category>
+      <Category>wetland</Category>
+      <Category>wetland-tree</Category>
       <Category></Category>
       <Category></Category>
       <Category></Category>
@@ -93,6 +102,7 @@
       <Category></Category>
       <Category></Category>
       <Category></Category>
+      <Category>herb</Category>
       <Category></Category>
       <Category></Category>
       <Category></Category>
@@ -202,6 +212,7 @@
       <Category></Category>
       <Category></Category>
       <Category></Category>
+      <Category>conifer</Category>
       <Category></Category>
       <Category></Category>
       <Category></Category>
@@ -211,6 +222,7 @@
       <Category></Category>
       <Category></Category>
       <Category></Category>
+      <Category>broadleaf</Category>
       <Category></Category>
       <Category></Category>
       <Category></Category>
@@ -220,19 +232,7 @@
       <Category></Category>
       <Category></Category>
       <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
+      <Category>mixed forest</Category>
       <Category></Category>
       <Category></Category>
       <Category></Category>

@@ -65,7 +65,7 @@ names(soil_ph) <- "soil_ph"
 
 # add time since disturbance layer and soil layers to covariate stack
 stack_bcr14_2020 <- c(stack_bcr14_2020, CAfire, soil_carbon, soil_ph)
-
+rm(CAfire, soil_carbon, soil_ph); gc()
 
 # overlay BCR14 boundary to sanity check
 bcr14_boundary <- 
@@ -144,15 +144,9 @@ quantile(na.omit(df_bcr14_2020$CanHF_1km))
 biotic_vars_thinned <- biotic_vars[which(biotic_vars %in% colnames(df_bcr14_2020))]
 
 # stage a unique spatial subset of the BCR by removing NAs for SCANFI_1km
-# also: treat SCANFI water and SCANFI rock classes as known features of the abiotic landscape
-# i.e. we aren't trying to predict them. They are predictors.
 # note: don't convert SCANFI_1km to a factor because xgb.DMatrix is expecting numerics
-df_bcr14_2020_i <- 
-  df_bcr14_2020 |> 
-  tidyr::drop_na(SCANFI_1km) |> 
-  dplyr::mutate(SCANFI_1km_rock = ifelse(SCANFI_1km == 3, yes=1, no=0)) |> # create new "rock" predictor  (should perfectly predict SCANFI class 3)
-  dplyr::mutate(SCANFI_1km_water = ifelse(SCANFI_1km == 8, yes=1, no=0))  # create new "water" predictor (should perfectly predict SCANFI class 8)
-  
+df_bcr14_2020_i <-  tidyr::drop_na(df_bcr14_2020, SCANFI_1km)
+ 
 
 # identify pixels with "high" and "low" human footprint 
 # in theory, this removes many locations with "rock" or "herb" SCANFI classes
@@ -162,7 +156,8 @@ CanHF_1km_absent <- dplyr::filter(df_bcr14_2020_i, CanHF_1km <= q50)
 
 # subset low HF dataset to only those with abiotic predictors and the biotic response
 # include the response "SCANFI_1km" so that it can used for labelling 
-predictor_vars <- c(abiotic_vars, "lon", "lat", "SCANFI_1km_rock", "SCANFI_1km_water")
+# in theory, urban areas have been filtered out so SCANFI "rock" is natural rock
+predictor_vars <- c(abiotic_vars, "lon", "lat") 
 CanHF_1km_absent_abiotic <- CanHF_1km_absent[,c(predictor_vars, "SCANFI_1km")]
 
 # split data into training (80%) and hold-out (20%)
@@ -178,17 +173,24 @@ holdout_data <- CanHF_1km_absent_abiotic[-training_index, c(predictor_vars, "SCA
 
 #5. two-stage modelling----
 # first, split SCANFI_1km classes between tree and non-tree vegetation
-# all values for SCANFI_1km_rock and SCANFI_1km_water should be zero (checked by dplyr::count, and they are)
 training_data_stage1 <- 
-  training_data |> 
+  CanHF_1km_absent_abiotic |> 
+  dplyr::filter(SCANFI_1km != "8") |> # remove water areas (they are static so we will directly copy them over later)
   dplyr::mutate(SCANFI_1km_broadclass = case_when(
-    SCANFI_1km %in% c(1, 2, 4) ~ 0,  # bryoid, herbs, shrub (non-trees)
+    SCANFI_1km %in% c(1, 2, 4) ~ 0,  # bryoid, herbs, shrub (non-trees) 
     SCANFI_1km %in% c(5, 6, 7) ~ 1,  # broadleaf, conifer, mixed (trees)
-    SCANFI_1km %in% c(3, 8) ~ 2)) |>    # rock or water (abiotic)
+    SCANFI_1km == 3 ~ 2)) |> # low HF ("natural") rock areas
   dplyr::mutate(SCANFI_1km_broadclass = factor(SCANFI_1km_broadclass, levels=c(0,1,2)))
 
+count(training_data_stage1, SCANFI_1km_broadclass)
+# SCANFI_1km_broadclass      n
+# <fct>                  <int>
+#  0                       5255
+#  1                     120646
+#  2                        527
+
 # create DMatrix (a data structure for better speed when using xgboost)
-# reminder: `predictor_vars` is `c(abiotic_vars, "lon", "lat", "SCANFI_1km_rock", "SCANFI_1km_water")`
+# reminder: `predictor_vars` is `c(abiotic_vars, "lon", "lat"), i.e. excludes `SCANFI_1km`
 dtrain_stage1 <- xgboost::xgb.DMatrix(data = as.matrix(training_data_stage1[,predictor_vars]), label = as.numeric(training_data_stage1$SCANFI_1km_broadclass) - 1)
 
 # set xgboost parameters
@@ -198,7 +200,6 @@ dtrain_stage1 <- xgboost::xgb.DMatrix(data = as.matrix(training_data_stage1[,pre
 # (compared to using a logisitic function for binary classification)
 params_stage1 <- xgboost::xgb.params(objective = "multi:softmax", eval_metric = "mlogloss", max_depth = 3, eta = 0.05, num_class = length(levels(training_data_stage1$SCANFI_1km_broadclass)))
 
-
 # train stage 1 model (SCANFI non-trees vs trees vs abiotic)
 cv_stage1 <-xgboost::xgb.cv(params = params_stage1, data = dtrain_stage1, nrounds=1000, nfold=5, early_stopping_rounds = 20)
 model_stage1 <- xgboost::xgb.train(params = params_stage1, data = dtrain_stage1, nrounds = cv_stage1$early_stop$best_iteration, verbose = 0)
@@ -206,26 +207,34 @@ model_stage1 <- xgboost::xgb.train(params = params_stage1, data = dtrain_stage1,
 
 
 #6. build two multi-class models to learn to split SCANFI broadclasses----
-# non-tree broad class (0) into bryoid, herb, shrub
-# yes-tree broad class (1) into broadleaf, conifer, mixed
-# note: no model is trained to split broad class 2 (rock and water) as they are determined
+# split broad class 0 into bryoid, herb, shrub
+# split broad class 1 into broadleaf, conifer, mixed
+# note: no model is built for broad class 3 because if model_stage1 predicts rock, 
+# then it's rock (i.e. can't be split further)
 
-# filter data to non-trees entries
+# filter data to broad class 0 (non tree vegetation)
 # SCANFI_1km is now a 3-factor column for non-treed classes (bryoids, herbs, shrubs)
-# count(training_data_stage2_notrees, SCANFI_1km_rock) # check that rock and water are 0
-# #  unique(training_data_stage2_notrees$SCANFI_1km) [1] 4 2 1 # check how to set levels
-training_data_stage2_notrees <- 
-  training_data_stage1 |> 
+# unique(training_data_stage2A$SCANFI_1km) [1] 4 1 2 
+training_data_stage2A <- 
+  training_data_stage1 |> # water areas already removed
   dplyr::filter(SCANFI_1km_broadclass == 0) |> 
-  dplyr::mutate(SCANFI_1km = factor(SCANFI_1km, levels = c(1,2,4))) 
+  dplyr::mutate(SCANFI_1km = factor(SCANFI_1km, levels = c(1, 2, 4)))
+
+count(training_data_stage2A, SCANFI_1km)
+# SCANFI_1km     n
+# <fct>        <int>
+# 1 1            154
+# 2 2           1017
+# 3 4           4084
+
 
 dtrain_non_tree <- xgb.DMatrix(
-  data = as.matrix(training_data_stage2_notrees[, predictor_vars]), # exclude SCANFI_1km and SCANFI_1km_tree
-  label = as.numeric(training_data_stage2_notrees$SCANFI_1km) - 1) # as.numeric() starts the classes at 1 but xgboost labels need to start at 0
+  data = as.matrix(training_data_stage2A[, predictor_vars]), # exclude SCANFI_1km and SCANFI_1km_tree
+  label = as.numeric(training_data_stage2A$SCANFI_1km) - 1) # as.numeric() starts the classes at 1 but xgboost labels need to start at 0
 
 params_non_tree <- 
   xgboost::xgb.params(objective = "multi:softmax", 
-                      num_class = length(levels(training_data_stage2_notrees$SCANFI_1km)),
+                      num_class = length(levels(training_data_stage2A$SCANFI_1km)),
                       eval_metric = "mlogloss",
                       max_depth = 3,
                       eta = 0.05)
@@ -233,26 +242,34 @@ params_non_tree <-
 cv_notree <- xgboost::xgb.cv(params = params_non_tree, data = dtrain_non_tree, nrounds=1000, nfold=5, early_stopping_rounds = 20)
 model_stage2_notree <- xgb.train(params = params_non_tree, data = dtrain_non_tree, nrounds = cv_notree$early_stop$best_iteration, verbose = 0)
 
-# filter data to yes-trees entries
+
+
+# filter data for broad class 1
 # SCANFI_1km is now a 3-factor column for yes-treed classes (broadlead, conifer, mixed)
-# count(training_data_stage2_yestrees, SCANFI_1km_rock) # check that rock and water are 0
-#  unique(training_data_stage2_yestrees$SCANFI_1km) [1] 6 5 7 # check how to set levels
-training_data_stage2_yestrees <- 
+# unique(training_data_stage2B$SCANFI_1km) [1] 6 7 5
+training_data_stage2B <- 
   training_data_stage1 |> 
   dplyr::filter(SCANFI_1km_broadclass == 1) |> 
-  dplyr::mutate(SCANFI_1km = factor(SCANFI_1km, levels = c(5,6,7)))
+  dplyr::mutate(SCANFI_1km = factor(SCANFI_1km, levels = c(5, 6, 7)))
+
+# count(training_data_stage2B, SCANFI_1km)
+# SCANFI_1km     n
+# <fct>       <int>
+# 1 5          24593
+# 2 6          58274
+# 3 7          37779
 
 dtrain_yes_tree <- xgb.DMatrix(
-  data = as.matrix(training_data_stage2_yestrees[, predictor_vars]),
-  label = as.numeric(training_data_stage2_yestrees$SCANFI_1km) - 1)
+  data = as.matrix(training_data_stage2B[, predictor_vars]),
+  label = as.numeric(training_data_stage2B$SCANFI_1km) - 1)
 
 params_yes_tree <- 
   xgboost::xgb.params(objective = "multi:softmax",
-                      num_class = length(levels(training_data_stage2_yestrees$SCANFI_1km)),
+                      num_class = length(levels(training_data_stage2B$SCANFI_1km)),
                       eval_metric = "mlogloss",
                       max_depth = 3,
                       eta = 0.05)
-# $best_iteration 1679
+
 cv_yestree <- xgboost::xgb.cv(params = params_yes_tree, data = dtrain_yes_tree, nrounds=2000, nfold=5, early_stopping_rounds = 20)
 model_stage2_yestree <- xgboost::xgb.train(params = params_yes_tree, data = dtrain_yes_tree, nrounds = cv_yestree$early_stop$best_iteration, verbose = 0)
 
@@ -267,11 +284,19 @@ model_stage2_yestree <- xgboost::xgb.train(params = params_yes_tree, data = dtra
 # reminder: `predictor_vars` is `c(abiotic_vars, "lon", "lat", "SCANFI_1km_rock", "SCANFI_1km_water")`
 holdout_data_stage1 <- 
   holdout_data |> 
+  dplyr::filter(SCANFI_1km != "8") |> # remove 2336 water areas (we can use terra::cover to replace them later)
   dplyr::mutate(SCANFI_1km_broadclass = case_when(
-    SCANFI_1km %in% c(1, 2, 4) ~ 0,  # bryoid, herbs, shrub (non-trees)
+    SCANFI_1km %in% c(1, 2, 4) ~ 0,  # bryoid, herbs, shrub (non-trees) 
     SCANFI_1km %in% c(5, 6, 7) ~ 1,  # broadleaf, conifer, mixed (trees)
-    SCANFI_1km %in% c(3, 8) ~ 2)) |>    # rock or water (abiotic)
+    SCANFI_1km == 3 ~ 2)) |> # low HF ("natural") rock areas
   dplyr::mutate(SCANFI_1km_broadclass = factor(SCANFI_1km_broadclass, levels=c(0,1,2)))
+
+count(holdout_data_stage1, SCANFI_1km_broadclass)
+# SCANFI_1km_broadclass     n
+# <fct>                 <int>
+# 1 0                      1071
+# 2 1                     24122
+# 3 2                       112
 
 dholdout <- xgboost::xgb.DMatrix(data = as.matrix(holdout_data_stage1[,predictor_vars]), label=as.numeric(holdout_data_stage1$SCANFI_1km_broadclass) - 1)
 
@@ -306,15 +331,20 @@ holdout_yes_tree <- dplyr::mutate(holdout_yes_tree, SCANFI_1km_prediction = tree
 # unique(holdout_yes_tree$SCANFI_1km_prediction) # 6 5 7 confirm all tree types predicted
 
 
-# stage 2C:
-# stage abiotic SCANFI classes for `bind_rows`
-holdout_abiotic <- 
+# stage 2C: areas predicted as broad class 2 (equivalent to SCANFI_1km == 3 == "rock")
+holdout_rock <- 
   holdout_data_stage1 |> 
-  dplyr::filter(SCANFI_1km %in% c(3,8)) |> # filter for rock and water
-  dplyr::mutate(SCANFI_1km_prediction = as.character(SCANFI_1km))
+  dplyr::filter(SCANFI_1km_broadclass_predicted == 2) |>  
+  dplyr::mutate(SCANFI_1km_prediction = "3")
+
+# stage 2D: retain water areas and port over into holdout dataset
+holdout_water <-
+  holdout_data |> 
+  dplyr::filter(SCANFI_1km == 8) |> 
+  dplyr::mutate(SCANFI_1km_prediction = "8")
 
 # combine predictions into single data frame
-prediction_stage2 <- dplyr::bind_rows(holdout_non_tree, holdout_yes_tree, holdout_abiotic)
+prediction_stage2 <- dplyr::bind_rows(holdout_non_tree, holdout_yes_tree, holdout_rock, holdout_water)
 
 
 
@@ -323,11 +353,11 @@ prediction_stage2 <- dplyr::bind_rows(holdout_non_tree, holdout_yes_tree, holdou
 confusion_matrix_broadclass <- table(actual = holdout_data_stage1$SCANFI_1km_broadclass, predicted = holdout_data_stage1$SCANFI_1km_broadclass_predicted)
 confusion_matrix_broadclass
 sum(confusion_matrix_broadclass)
-      # predicted
-#actual 0     1     2
-#0      23  1048     0
-#1      24 24098     0
-#2      0     0   560
+#       predicted
+# actual0     1     2
+# 0    28  1043     0
+# 1     9 24112     1
+# 2     1   106     5
 
 confusion_matrix_fineclass <- 
   table(actual = factor(prediction_stage2$SCANFI_1km, levels = 1:8),
@@ -336,15 +366,15 @@ confusion_matrix_fineclass <-
 confusion_matrix_fineclass
 sum(diag(confusion_matrix_fineclass)) / sum(confusion_matrix_fineclass)
 
-          #predicted
-#actual   1    2    3    4    5    6    7    8
-#1        0    0    0    2    1   35    3    0
-#2        0    2    0    0   57   63   78    0
-#3        0    0  112    0    0    0    0    0
-#4        0    1    0   18   75  534  202    0
-#5        0    3    0    1 2034 1747 1202    0
-#6        0    0    0   15  704 9172 1732    0
-#7        0    2    0    3 1035 3954 2518    0
-#8        0    0    0    0    0    0    0  448
+     # predicted
+#actual1    2    3    4    5    6    7    8
+# 1    0    0    0    2    1   35    3    0
+# 2    0    4    0    0   52   68   76    0
+# 3    0    0    5    1   12   80   14    0
+# 4    0    1    0   21   80  530  198    0
+# 5    0    0    0    0 2186 1692 1109    0
+# 6    0    0    0    5  667 9478 1473    0
+# 7    0    1    1    3  927 3766 2814    0
+# 8    0    0    0    0    0    0    0  448
 
 
