@@ -73,7 +73,7 @@ bcr14_boundary <-
   terra::project(x=_, y=stack_bcr14_2020) |> 
   terra::crop(x=_, y=stack_bcr14_2020)
 
-lines(bcr14_boundary, col="black", lwd=1)
+# lines(bcr14_boundary, col="black", lwd=1)
 
 
 
@@ -104,15 +104,15 @@ abiotic_vars <-
 
 # remove 5x5 since I can re-create these variables by
 # scaling up from 1km after prediciton
+# exclude var_class == "Landcover" in `filter()`
 biotic_vars <-
   nice_var_names |> 
-  dplyr::filter(var_class %in% c("Landcover", "Greenup", "Biomass", "LCC_MODIS", "Wetland")) |> 
+  dplyr::filter(var_class %in% c("Greenup", "Biomass", "Wetland", "Landcover")) |> 
   dplyr::filter(!(var %in% c("WetOccur_1km", "WetOccur_5x5", "WetRecur_1km", "WetSeason_1km"))) |> # keep peatland but discard other water variables
   dplyr::filter(!grepl("5x5", var)) |> 
   dplyr::pull(var) |> 
   unique()
 
-rm(nice_var_names); gc()
 
 # convert covariate stack to a dataframe 
 df_bcr14_2020 <-
@@ -153,6 +153,8 @@ df_bcr14_2020_i <-  tidyr::drop_na(df_bcr14_2020, SCANFI_1km)
 # that are auto-correlated with urban areas and agriculture..but need to check.. 
 CanHF_1km_present <- dplyr::filter(df_bcr14_2020_i, CanHF_1km > q50)
 CanHF_1km_absent <- dplyr::filter(df_bcr14_2020_i, CanHF_1km <= q50) 
+
+rm(nice_var_names); gc()
 
 # subset low HF dataset to only those with abiotic predictors and the biotic response
 # include the response "SCANFI_1km" so that it can used for labelling 
