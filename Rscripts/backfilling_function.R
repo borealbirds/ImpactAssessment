@@ -168,8 +168,6 @@ terra::writeRaster(backfilled_raster_stack, file="C:/Users/mannf/Proton Drive/ma
 
 
 # then:
-# 1. repeat predictions for all 18 biotic variables
-# 2. rasterize predictions and stack
-# 3. import bird models (`b.i`) for CAWA at year 2020
-# 4. use terra::predict with new *biotic* stack, og *abiotic* stack, and bird model (`b.i`) to estimate  new bird densities
+# 1. import bird models (`b.i`) for CAWA at year 2020
+# 2. use terra::predict with new *biotic* stack, og *abiotic* stack, and bird model (`b.i`) to estimate  new bird densities
 

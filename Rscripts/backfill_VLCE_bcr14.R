@@ -10,8 +10,6 @@
 # the predictor covariate stack "can14_2020.tif"
 # We also set the threshold for low/high human footprint by defining `q50`
 
-# drop biotic predictors that were thinned by VIF (see line 300 in "04.Stratify.R")
-biotic_vars_thinned <- biotic_vars[which(biotic_vars %in% colnames(df_bcr14_2020))]
 
 # stage a unique spatial subset of the BCR by removing NAs for VLCE_1km
 # we'll treat water (20), low HF barren (33), and low HF rock (32) VLCE classes 
@@ -26,9 +24,16 @@ CanHF_1km_present <- dplyr::filter(df_bcr14_2020_i, CanHF_1km > q50)
 CanHF_1km_absent <- dplyr::filter(df_bcr14_2020_i, CanHF_1km <= q50) 
 
 
+# drop biotic predictors that were thinned by VIF (see line 300 in "04.Stratify.R")
+biotic_vars_thinned <- biotic_vars[which(biotic_vars %in% colnames(df_bcr14_2020))]
+
+# subset low HF dataset to abiotic and biotic predictors (excluding SCANFI and MODIS) 
+biotic_vars_thinned <- biotic_vars_thinned[!biotic_vars_thinned %in% c("SCANFI_1km", "MODISLCC_1km", "VLCE_1km")]
+
+
 # subset low HF dataset to abiotic predictors and the biotic response
 # include the response "VLCE_1km" so that it can used for labelling 
-predictor_vars <- c(abiotic_vars, "lon", "lat")
+predictor_vars <- c(abiotic_vars, "lon", "lat", biotic_vars_thinned)
 CanHF_1km_absent_abiotic <- CanHF_1km_absent[,c(predictor_vars, "VLCE_1km")] 
 
 
@@ -61,14 +66,13 @@ params_stage1 <- xgboost::xgb.params(objective = "multi:softmax", eval_metric = 
 
 # train stage 1 model (VLCE no change vs "natural" rocks vs vegetation)
 # cv_stage1$early_stop$best_iteration 513 
-cv_stage1 <-xgboost::xgb.cv(params = params_stage1, data = dtrain_stage1, nrounds=1000, nfold=5, early_stopping_rounds = 20)
+cv_stage1 <-xgboost::xgb.cv(params = params_stage1, data = dtrain_stage1, nrounds=500, nfold=5, early_stopping_rounds = 20, verbose=FALSE)
 model_stage1 <- xgboost::xgb.train(params = params_stage1, data = dtrain_stage1, nrounds = cv_stage1$early_stop$best_iteration, verbose = 0)
 
 
 
 #3. build three multi-class models to predict real VLCE classes from----
 # broad class 0 (wetland vs wetland-tree), 1 (bryoid vs herb vs shrub) and 2 (tree types). 
-
 
 # train a model to split broad class 0 into 2 classes (wetland vs wetland-tree)
 training_data_stage2_class0 <- 
@@ -87,7 +91,7 @@ params_class0 <-
                       max_depth = 3,
                       eta = 0.05)
 
-cv_class0 <- xgboost::xgb.cv(params = params_class0, data = dtrain_class0, nrounds=1000, nfold=5, early_stopping_rounds = 20)
+cv_class0 <- xgboost::xgb.cv(params = params_class0, data = dtrain_class0, nrounds=500, nfold=5, early_stopping_rounds = 20, verbose=FALSE)
 model_class0 <- xgb.train(params = params_class0, data = dtrain_class0, nrounds = cv_class0$early_stop$best_iteration, verbose = 0)
 
 
@@ -108,7 +112,7 @@ params_class1 <-
                       max_depth = 3,
                       eta = 0.05)
 
-cv_class1 <- xgboost::xgb.cv(params = params_class1, data = dtrain_class1, nrounds=1000, nfold=5, early_stopping_rounds = 20)
+cv_class1 <- xgboost::xgb.cv(params = params_class1, data = dtrain_class1, nrounds=500, nfold=5, early_stopping_rounds = 20, verbose=FALSE)
 model_class1 <- xgb.train(params = params_class1, data = dtrain_class1, nrounds = cv_class1$early_stop$best_iteration, verbose = 0)
 
 
@@ -130,22 +134,31 @@ params_class2 <-
                       eta = 0.05)
 
 # cv_class2$early_stop$best_iteration 226
-cv_class2 <- xgboost::xgb.cv(params = params_class2, data = dtrain_class2, nrounds=3000, nfold=5, early_stopping_rounds = 20)
+cv_class2 <- xgboost::xgb.cv(params = params_class2, data = dtrain_class2, nrounds=2000, nfold=5, early_stopping_rounds = 20, verbose=FALSE)
 model_class2 <- xgb.train(params = params_class2, data = dtrain_class2, nrounds = cv_class2$early_stop$best_iteration, verbose = 0)
 
 
 
 #4. use two-stage models to backfill in high HF areas----
 
-# stage datasets for backfilling (areas with high human footprint)
-CanHF_1km_present_abiotic <- CanHF_1km_present[,c(predictor_vars, "VLCE_1km")]
+# first, incorporate backfilled continuous variables at high HF locations
+# (they will help to improve predictions of VLCE classes)
+df_backfilled <-
+  terra::rast("C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/derived_data/backfilled_rasters/BCR14_backfilled_continuous.tif") |> 
+  terra::as.data.frame(xy=TRUE) |>
+  tibble::as_tibble() |> 
+  dplyr::rename(lon=x, lat=y) 
+
+# isolate high HF locations and their abiotic features 
+CanHF_1km_present_abiotic <- CanHF_1km_present[,c(abiotic_vars, "VLCE_1km", "lon", "lat")]
 nrow(CanHF_1km_present_abiotic) #128840
 
 # remove water, wetland, and wetland-trees because we don't want to backfill there
 # keep "no change" areas (VLCE class 0) because we *do* want to backfill vegetation there
 backfill_data_stage1 <- 
   CanHF_1km_present_abiotic |> 
-  dplyr::filter(!(VLCE_1km %in% c(20,80,81)))
+  dplyr::filter(!(VLCE_1km %in% c(20,80,81))) |> 
+  dplyr::left_join(df_backfilled, by=c("lon", "lat")) # add in (backfilled) biotic features to high HF areas
 
 nrow(backfill_data_stage1) # should be 125041 which is 128840 - (water + wetland + wetland-tree)
 
@@ -158,9 +171,9 @@ backfill_data_stage1$VLCE_1km_broadclass_predicted  <- predict(model_stage1, new
 count(backfill_data_stage1, VLCE_1km_broadclass_predicted)
 # VLCE_1km_broadclass_predicted     n
 # <dbl> <int>
-# 1                                 0 4848 wetlands
-# 2                                 1 2049 bryoid, shrub, herb
-# 3                                 2 118144 trees
+# 1                                 0 1743 wetlands
+# 2                                 1 3697 bryoid, shrub, herb
+# 3                                 2 119601 trees
 
 # stage 2A:
 # predict VLCE class for predicted broad class 0 (wetland and wetland-tree):
@@ -185,7 +198,7 @@ pred_stage2B <- predict(model_class1, newdata = dbackfill_stage2B)
 
 
 # convert numeric predictions (0, 1, 2) to original VLCE classes using the factor mapping from training
-unique(pred_stage2B) # [1] 1 2 0 each class predicted at least once (bryoid, shrub, herb)
+unique(pred_stage2B) # [1] 1 2  no bryoids predicted
 pred_labels_stage2B <- factor(pred_stage2B, levels = c(0,1,2), labels = c("40","50","100"))
 backfill_data_stage2B <- dplyr::mutate(backfill_data_stage2B, VLCE_backfill = pred_labels_stage2B)
 
@@ -259,22 +272,22 @@ levels(stack_bcr14_2020$VLCE_1km) <- vlce_cats
 my_colours <- c(
   "#CC79A7",  # 0: no change
   "#0072B2",  #20: water
-  "#999999",  #32: rock
-  "#999999",  #33: barren
-  "#006644",  #40: bryoid
-  "#006644",  #50: shrub
+  "#D55E00",  #32: rock
+  "#D55E00",  #33: barren
+  "#bae4b3",  #40: bryoid
+  "#bae4b3",  #50: shrub
   "#56B4E9",  #80: wetland
   "#009E73",  #81: wetland-tree
-  "#006644",  #100: herb
-  "#009E73",  # 3: conifer
-  "#009E73",  # 4: broadleaf
-  "#009E73")  # 5: mixed forest
+  "#bae4b3",  #100: herb
+  "#006644",  # 3: conifer
+  "#4DAC26",  # 4: broadleaf
+  "#74c476")  # 5: mixed forest
  
-# plot pre-backfilled landscape for "MODISLCC_1km"
+# plot pre-backfilled landscape for "VLCE_1km"
 terra::plot(stack_bcr14_2020$VLCE_1km, col = my_colours)
 lines(bcr14_boundary, col="black", lwd=1)
 
-# plot post-backfilled landscape for "MODISLCC_1km"
+# plot post-backfilled landscape for "VLCE_1km"
 terra::plot(prediction_stage2_raster, col = my_colours)
 lines(bcr14_boundary, col="black", lwd=1)  
 

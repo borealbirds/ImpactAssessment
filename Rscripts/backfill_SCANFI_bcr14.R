@@ -5,15 +5,15 @@
 # ---
 
 
-#1. run lines 1-161 in "test_backfill_SCANFI_bcr14.R"---- 
+#1. run lines 1-157 in "test_backfill_SCANFI_bcr14.R"---- 
 # this will import covariate rasters, and generate low and high HF dataframes 
 # "CanHF_1km_absent" and "CanHF_1km_present"
 
 
-# subset low HF dataset to only those with abiotic predictors and the biotic response
-# include the response "SCANFI_1km" so that it can used for labelling 
+# subset low HF dataset to abiotic and biotic predictors (exlcuding MODIS and VLCE) 
 # in theory, urban areas have been filtered out so SCANFI "rock" is natural rock
-predictor_vars <- c(abiotic_vars, "lon", "lat") 
+biotic_vars_thinned <- biotic_vars_thinned[!biotic_vars_thinned %in% c("SCANFI_1km", "MODISLCC_1km", "VLCE_1km")]
+predictor_vars <- c(abiotic_vars, "lon", "lat", biotic_vars_thinned) 
 CanHF_1km_absent_abiotic <- CanHF_1km_absent[,c(predictor_vars, "SCANFI_1km")]
 
 
@@ -38,12 +38,12 @@ count(training_data_stage1, SCANFI_1km_broadclass)
 
 
 # create DMatrix (a data structure for better speed when using xgboost)
-# reminder: `predictor_vars` is `c(abiotic_vars, "lon", "lat"), i.e. excludes `SCANFI_1km`
+# reminder: `predictor_vars` is c(abiotic_vars, "lon", "lat", biotic_vars_thinned) 
 dtrain_stage1 <- xgboost::xgb.DMatrix(data = as.matrix(training_data_stage1[,predictor_vars]), label = as.numeric(training_data_stage1$SCANFI_1km_broadclass) - 1)
 params_stage1 <- xgboost::xgb.params(objective = "multi:softmax", eval_metric = "mlogloss", max_depth = 3, eta = 0.05, num_class = length(levels(training_data_stage1$SCANFI_1km_broadclass)))
 
 # train stage 1 model 
-cv_stage1 <-xgboost::xgb.cv(params = params_stage1, data = dtrain_stage1, nrounds=1200, nfold=5, early_stopping_rounds = 20)
+cv_stage1 <-xgboost::xgb.cv(params = params_stage1, data = dtrain_stage1, nrounds=1000, nfold=5, early_stopping_rounds = 20, verbose=FALSE)
 model_stage1 <- xgboost::xgb.train(params = params_stage1, data = dtrain_stage1, nrounds = cv_stage1$early_stop$best_iteration, verbose = 0)
 
 
@@ -81,7 +81,7 @@ params_non_tree <-
                       max_depth = 3,
                       eta = 0.05)
 
-cv_notree <- xgboost::xgb.cv(params = params_non_tree, data = dtrain_non_tree, nrounds=1000, nfold=5, early_stopping_rounds = 20)
+cv_notree <- xgboost::xgb.cv(params = params_non_tree, data = dtrain_non_tree, nrounds=1000, nfold=5, early_stopping_rounds = 20, verbose=FALSE)
 model_stage2_notree <- xgb.train(params = params_non_tree, data = dtrain_non_tree, nrounds = cv_notree$early_stop$best_iteration, verbose = 0)
 
 # filter data for broad class 1
@@ -108,7 +108,7 @@ params_yes_tree <-
                       max_depth = 3,
                       eta = 0.05)
 
-cv_yestree <- xgboost::xgb.cv(params = params_yes_tree, data = dtrain_yes_tree, nrounds=4000, nfold=5, early_stopping_rounds = 20)
+cv_yestree <- xgboost::xgb.cv(params = params_yes_tree, data = dtrain_yes_tree, nrounds=4000, nfold=5, early_stopping_rounds = 20, verbose=FALSE)
 model_stage2_yestree <- xgboost::xgb.train(params = params_yes_tree, data = dtrain_yes_tree, nrounds = cv_yestree$early_stop$best_iteration, verbose = 0)
 
 
@@ -116,11 +116,22 @@ model_stage2_yestree <- xgboost::xgb.train(params = params_yes_tree, data = dtra
 
 #4. use two-stage models to backfill in high HF areas----
 
-# stage datasets for backfilling (areas with high human footprint)
-CanHF_1km_present_abiotic <- CanHF_1km_present[,c(predictor_vars)]
-backfill_data_stage1 <- CanHF_1km_present_abiotic
+# first, incorporate backfilled continuous variables at high HF locations
+# (they will help to improve predictions of SCANFI classes)
+df_backfilled <-
+  terra::rast("C:/Users/mannf/Proton Drive/mannfredboehm/My files/Drive/boreal_avian_modelling_project/ImpactAssessment/data/derived_data/backfilled_rasters/BCR14_backfilled_continuous.tif") |> 
+  terra::as.data.frame(xy=TRUE) |>
+  tibble::as_tibble() |> 
+  dplyr::rename(lon=x, lat=y) 
 
-# reminder: predictor_vars <- c(abiotic_vars, "lon", "lat")
+
+# isolate high HF locations and their abiotic features 
+CanHF_1km_present_abiotic <- CanHF_1km_present[,c(abiotic_vars, "SCANFI_1km", "lon", "lat")]
+
+# add in (backfilled) biotic features to high HF areas
+backfill_data_stage1 <- dplyr::left_join(CanHF_1km_present_abiotic, df_backfilled, by=c("lon", "lat"))
+
+# reminder: predictor_vars <- c(abiotic_vars, "lon", "lat", biotic_vars_thinned) 
 # including the `label` in the DMatrix is practically useless unless we use them for comparative purposes later on..
 dbackfill <- xgboost::xgb.DMatrix(data = as.matrix(backfill_data_stage1[,predictor_vars]))
 
@@ -128,9 +139,9 @@ dbackfill <- xgboost::xgb.DMatrix(data = as.matrix(backfill_data_stage1[,predict
 backfill_data_stage1$SCANFI_1km_broadclass_predicted  <- predict(model_stage1, newdata = dbackfill)
 # count(backfill_data_stage1, SCANFI_1km_broadclass_predicted)
 #  SCANFI_1km_broadclass_predicted      n
-#1                               0   4204
-#2                               1 124542
-#3                               2     36
+#1                               0   8613
+#2                               1 120152
+#3                               2     17
 
 # stage 2A:
 # for non-treed predictions:
@@ -144,9 +155,8 @@ pred_labels_stage2A <- factor(pred_stage2A, levels = c(0,1,2), labels = c("1", "
 backfill_data_stage2A <- dplyr::mutate(backfill_data_stage2A, SCANFI_backfill = pred_labels_stage2A)
 # count(backfill_data_stage2A, SCANFI_backfill)
 # SCANFI_backfill       n
-# 1 1                   1
-# 2 2                3990
-# 3 4                 213
+# 2 2                8360
+# 3 4                 253
 
 # stage 2B:
 # for treed predictions:
@@ -160,9 +170,9 @@ pred_labels_stage2B <- factor(pred_stage2B, levels = c(0,1,2), labels = c("5", "
 backfill_data_stage2B <- dplyr::mutate(backfill_data_stage2B, SCANFI_backfill = pred_labels_stage2B)
 count(backfill_data_stage2B, SCANFI_backfill)
 # SCANFI_backfill     n
-# 1 5               35570
-# 2 6               40359
-# 3 7               48613
+# 1 5               93670
+# 2 6               6661
+# 3 7               19821
 
 # stage 2C: areas predicted as broad class 2 (equivalent to SCANFI_1km == 3 or "rock")
 backfill_rock_stage2C <- 
@@ -178,7 +188,7 @@ retain_water_stage2D <-
 # combine backfill predictions into single data frame
 prediction_stage2 <- dplyr::bind_rows(backfill_data_stage2A, backfill_data_stage2B, backfill_rock_stage2C, retain_water_stage2D)
 prediction_stage2$SCANFI_backfill <- as.numeric(prediction_stage2$SCANFI_backfill)
-sort(unique(prediction_stage2$SCANFI_backfill)) # 1 2 3 4 5 6 7 8
+sort(unique(prediction_stage2$SCANFI_backfill)) #  2 3 4 5 6 7 8
 
 
 
@@ -209,13 +219,13 @@ prediction_stage2_raster <- terra::cover(prediction_stage2_raster, stack_bcr14_2
 #6. visualize backfilling procedure----
 
 my_colours <- c(
-  "#006644",  # ID 1: bryoid
-  "#006644",  # ID 2: herb
-  "#D55E00",  # ID 3: rock
-  "#006644",  # ID 4: shrub
-  "#009E73",  # ID 5: broadleaf (treed, darker shade)
-  "#009E73",  # ID 6: conifer (treed, darker shade)
-  "#009E73",  # ID 7: mixed (treed, darker shade)
+  "#bae4b3",  # ID 1: bryoid
+  "#bae4b3",  # ID 2: herb
+  "#E69F00",  # ID 3: rock
+  "#bae4b3",  # ID 4: shrub
+  "#4DAC26",  # ID 5: broadleaf (treed, darker shade)
+  "#006644",  # ID 6: conifer (treed, darker shade)
+  "#74c476",  # ID 7: mixed (treed, darker shade)
   "#0072B2"   # ID 8: water
 )
 
