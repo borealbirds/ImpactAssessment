@@ -223,9 +223,9 @@ my_colours <- c(
   "#bae4b3",  # ID 2: herb
   "#E69F00",  # ID 3: rock
   "#bae4b3",  # ID 4: shrub
-  "#4DAC26",  # ID 5: broadleaf (treed, darker shade)
+  "#7FFF00",  # ID 5: broadleaf (treed, darker shade)
   "#006644",  # ID 6: conifer (treed, darker shade)
-  "#74c476",  # ID 7: mixed (treed, darker shade)
+  "#9ACD32",  # ID 7: mixed (treed, darker shade)
   "#0072B2"   # ID 8: water
 )
 
