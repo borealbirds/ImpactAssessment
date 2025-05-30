@@ -10,7 +10,7 @@
 # "CanHF_1km_absent" and "CanHF_1km_present"
 
 
-# subset low HF dataset to abiotic and biotic predictors (exlcuding MODIS and VLCE) 
+# subset low HF dataset to abiotic and biotic predictors (excluding MODIS and VLCE) 
 # in theory, urban areas have been filtered out so SCANFI "rock" is natural rock
 biotic_vars_thinned <- biotic_vars_thinned[!biotic_vars_thinned %in% c("SCANFI_1km", "MODISLCC_1km", "VLCE_1km")]
 predictor_vars <- c(abiotic_vars, "lon", "lat", biotic_vars_thinned) 

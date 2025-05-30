@@ -1,14 +1,8 @@
 # ---
-# title: National Models 5.0 - create models to predict biotic SCANFI classes from abiotic landscape
+# title: Impact Assessment: create full covariate stacks for each BCR
 # author: Mannfred Boehm
-# created: January 15, 2025
+# created: May 7, 2025
 # ---
-
-
-
-# import stratified covariate values as data frame (code copied from "08.CalculateExtrapolation.R" in V5 pipeline)
-# subset `id` column to BCR (or some region) of interest (see visit.i$id that loads when `b.i` is loaded)
-# append `id` column with latlong info
 
 
 
@@ -16,7 +10,6 @@
 
 library(tidyverse)
 library(terra)
-library(xgboost)
 
 # set root path
 root <- "G:/Shared drives/BAM_NationalModels5"
@@ -42,13 +35,10 @@ names(CAfire) <- "CAfire"
 # output: values closer to 1 are more recently disturbed
 values(CAfire) <- ifelse(test = CAfire[] == 0, yes = 0, no = 1 / ((max(values(CAfire)) - CAfire[]) + 1))
 
-# inspect distribution of disturbance times (after removing cells with "no change" aka "zero")
-# hist(values(CAfire)[which(values(CAfire) > 0)], main="dist. of disturbances")
-# plot(CAfire)
-
 
 # import soil carbon and pH data from ISRIC (International Soil Reference and Information Centre)
 # https://files.isric.org/soilgrids/latest/data_aggregated/
+#  in "bilinear", values are interpolated from the four nearest raster cells
 soil_carbon <- 
   terra::rast(file.path(root, "gis", "other_landscape_covariates", "soc_0-5cm_mean_1000.tif")) |> 
   terra::project(x=_, y=stack_bcr14_2020, method="bilinear")

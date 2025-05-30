@@ -20,7 +20,7 @@ output_directory <- file.path(
   "impactassessment_sandbox", "inspect_categorical_covariates"
 )
 
-# create a function that processes a single raster stack file.
+# create a function that processes a single raster stack file
 inspect_layers <- function(test_file, boundary, output_dir) {
   
   # read in a BCR's raster stack
@@ -29,7 +29,7 @@ inspect_layers <- function(test_file, boundary, output_dir) {
   # define layers to plot 
   layers_to_plot <- c("MODISLCC_5x5", "MODISLCC_1km", "SCANFI_1km", "VLCE_1km", "NLCD_1km", "ABoVE_1km")
   
-  # extract a base name from the file for naming the PNGs.
+  # extract a base name from the file for naming the PNGs
   base_name <- tools::file_path_sans_ext(basename(test_file))
   
   # loop through each layer and plot if it exists
