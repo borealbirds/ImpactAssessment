@@ -5,73 +5,78 @@
 # ---
 
 
-
-#1. preamble----
-
 library(tidyverse)
 library(terra)
 
 # set root path
 root <- "G:/Shared drives/BAM_NationalModels5"
 
+# import soil covariates
+soil_covariates <- terra::rast(file.path(root, "gis", "other_landscape_covariates", "isric_soil_covariates_masked.tif"))
+
+# import time-since-disturbance
+CAfire <- terra::rast(file.path(root, "gis", "other_landscape_covariates", "CA_Forest_Fire_1985-2020_masked.tif"))
 
 
-#2. load covariate stacks----
-stack_bcr14_2020 <- terra::rast(file.path(root, "gis", "stacks", "can14_2020.tif"))
-# plot(stack_bcr14_2020$CCNL_1km)
+#2. load covariate stack_i and process----
+# by "process" we mean 
+# A) add soil and time-since-disturbance layers
+# B) convert stack_i into dataframe_i
+# C) populate a list where every element is a dataframe_i from stack_i
 
+# NEXT SCRIPT(s)
+# C) create abiotic_vars and biotic_vars indices
+# D) split dataframe_i into low_HF and high_HF
+# E) train model to predict biotic_var_i on low_HF dataset
+# F) identify sector to backfill in high_HF dataset
+# G) backfill sector
 
-# import time of disturbance layer (CAfire) and reproject to match covariate stack
-# note that Hermosilla et al (2016) is in NAD_1983_Lambert_Conformal_Conic
-# downloaded from: https://opendata.nfis.org/mapserver/nfis-change_eng.html
-CAfire <- 
-  terra::rast(file.path(root, "gis", "other_landscape_covariates", "CA_Forest_Fire_1985-2020.tif")) |> 
-  terra::project(x=_, y=stack_bcr14_2020, method="near") # use "near" because years are categorical, not continuous
+# create file index where stacks are located (264 stacks found)
+stack_directories <- list.files(file.path(root, "gis", "stacks"), pattern = "*\\.tif$", full.names = TRUE, recursive = FALSE)
 
-names(CAfire) <- "CAfire"
+# define function for lapply
+stack_and_enframe <- function(stack_i) {
+  
+  # import stack_i from index
+  stack_i <- terra::rast(stack_directories[i])
+  
+  # align extra covariates to stack_i
+  # first crop and mask extra covariates to the current BCR, 
+  # this limits resampling process to a smaller area
+  CAfire_resamp <- terra::resample(CAfire_agg, stack_i, method = "near")
+  CAfire_i <- 
+    terra::crop(x=CAfire, y=stack_i) |> 
+    terra::mask(x=_, y=stack_i) |> 
+    terra::resample(x=_, y=stack_i)
+ 
+  soil_covariates_i <- 
+    terra::crop(x=soil_covariates, y=stack_i) |> 
+    terra::mask(x=_, y=stack_i) |> 
+    terra::resample(x=_, y=stack_i)
 
-# convert from time *of* disturbance to time *since* disturbance
-# add 1 in denominator to avoid dividing by zero when time of disturbance is 2020
-# output: values closer to 1 are more recently disturbed
-values(CAfire) <- ifelse(test = CAfire[] == 0, yes = 0, no = 1 / ((max(values(CAfire)) - CAfire[]) + 1))
+  # add time since disturbance layer and soil layers to covariate stack
+  stack_i_extra <- c(stack_i, CAfire_i, soil_covariates_i)
+  
+  # convert to raster stack to a dataframe
+  stack_i_df <-
+    terra::as.data.frame(x = stack_i_extra, xy = TRUE) |>
+    tibble::as_tibble() |> 
+    dplyr::rename(lon=x, lat=y) 
 
+}
 
-# import soil carbon and pH data from ISRIC (International Soil Reference and Information Centre)
-# https://files.isric.org/soilgrids/latest/data_aggregated/
-#  in "bilinear", values are interpolated from the four nearest raster cells
-soil_carbon <- 
-  terra::rast(file.path(root, "gis", "other_landscape_covariates", "soc_0-5cm_mean_1000.tif")) |> 
-  terra::project(x=_, y=stack_bcr14_2020, method="bilinear")
-
-names(soil_carbon) <- "soil_carbon"
-# plot(soil_carbon)
-
-soil_ph <-
-  terra::rast(file.path(root, "gis", "other_landscape_covariates", "cec_0-5cm_mean_1000.tif")) |> 
-  terra::project(x=_, y=stack_bcr14_2020, method="bilinear")
-
-names(soil_ph) <- "soil_ph"
-# plot(soil_ph)
-
-# add time since disturbance layer and soil layers to covariate stack
-stack_bcr14_2020 <- c(stack_bcr14_2020, CAfire, soil_carbon, soil_ph)
-rm(CAfire, soil_carbon, soil_ph); gc()
-
-# overlay BCR14 boundary to sanity check
-bcr14_boundary <- 
-  terra::vect(file.path(root, "Regions", "BAM_BCR_NationalModel_Unbuffered.shp")) |> 
-  terra::project(x=_, y=stack_bcr14_2020) |> 
-  terra::crop(x=_, y=stack_bcr14_2020)
-
+# NEED NAMES FOR KEEPING TRACK OF BCRS AND YEARS
+# for every BCR x year, stack extra covariates to V5 covariates and turn into a dataframe
+list_of_cov_dfs <- lapply(X = stack_directories, FUN = stack_and_enframe)
 
 
 #3. stage datasets needed for modelling biotic landscape----
 
-# import variable classes to help separate biotic from abiotic
+# import variable classes to 
+# A) index all possible covariates used as predictors and 
+# B) help separate biotic from abiotic covariates
 nice_var_names <- 
-  readr::read_csv(file.path(root, "data", "Extras", "sandbox_data", "impactassessment_sandbox", "covariates_label_insert.csv")) |> 
-  dplyr::select(`Covariate label`, Category) |> 
-  dplyr::rename(var = `Covariate label`, var_class = Category) |> 
+  readr::read_csv(file.path(root, "data", "Extras", "sandbox_data", "impactassessment_sandbox", "nice_var_names_v5.csv")) |> 
   tidyr::drop_na() |> 
   unique()
 
@@ -102,6 +107,7 @@ biotic_vars <-
 
 
 # convert covariate stack to a dataframe 
+# rows are XYZ, columns are XYZ
 df_bcr14_2020 <-
   stack_bcr14_2020 |> 
   terra::as.data.frame(xy=TRUE) |>
