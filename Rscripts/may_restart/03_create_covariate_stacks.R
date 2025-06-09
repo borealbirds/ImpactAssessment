@@ -19,8 +19,8 @@ CAfire <- terra::rast(file.path(root, "gis", "other_landscape_covariates", "CA_F
 
 
 #2. load covariate stack_i and process----
-# by "process" we mean 
-# A) add soil and time-since-disturbance layers
+# A) import V5 stack_i
+# A) add soil and time-since-disturbance layers to stack_i
 # B) convert stack_i into dataframe_i
 # C) populate a list where every element is a dataframe_i from stack_i
 
@@ -40,19 +40,22 @@ stack_and_enframe <- function(stack_i) {
   # import stack_i from index
   stack_i <- terra::rast(stack_directories[i])
   
+  # choose a random layer from stack_i to represent resolution, boundaries, etc.
+  ref_layer <- stack_i$year
+  
   # align extra covariates to stack_i
-  # first crop and mask extra covariates to the current BCR, 
-  # this limits resampling process to a smaller area
-  CAfire_resamp <- terra::resample(CAfire_agg, stack_i, method = "near")
+  # then, crop and mask extra covariates to the current BCR
   CAfire_i <- 
-    terra::crop(x=CAfire, y=stack_i) |> 
-    terra::mask(x=_, y=stack_i) |> 
-    terra::resample(x=_, y=stack_i)
+    terra::resample(x=CAfire, y=ref_layer, method="near") |> 
+    terra::crop(x=_, y=ref_layer) |> 
+    terra::mask(x=_, mask=ref_layer)
+ 
  
   soil_covariates_i <- 
-    terra::crop(x=soil_covariates, y=stack_i) |> 
-    terra::mask(x=_, y=stack_i) |> 
-    terra::resample(x=_, y=stack_i)
+    terra::resample(x=soil_covariates, y=stack_i) |> 
+    terra::crop(x=_, y=stack_i) |> 
+    terra::mask(x=_, mask=stack_i) 
+    
 
   # add time since disturbance layer and soil layers to covariate stack
   stack_i_extra <- c(stack_i, CAfire_i, soil_covariates_i)
