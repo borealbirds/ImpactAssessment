@@ -14,7 +14,7 @@ library(tidyverse)
 
 root <- "G:/Shared drives/BAM_NationalModels5"
 
-# define variables of interest
+# define variables of interest from mining dataset
 mine_vars <- c("namemine", "latitude", "longitude",  
                "open1", "close1", "open2", "close2", "open3", "close3", 
                "commodity1", "commodity2", "commodity3", "commodity4",
@@ -35,45 +35,25 @@ mines_df <-
   dplyr::mutate(close = as.numeric(close)) |> 
   dplyr::select(-c(open1, open2, open3, close1, close2, close3)) # clean up df    
 
-# define a mine impact score function:
-# for a given analysis year (1985, 1990,...,2020) this function 
-# A) assigns an impact score of 0 if the current year is before the mine opened,
-# B) assigns an impact score of 1 if the mine is operational in the current year,
-# C) assigns an impact score between 0 and 1 if the mine closed before the current year.
-# the impact score is a time decay model exp(-k * (year - close))
-# recovery rate is a best case scenario as reported by: https://doi.org/10.3390/su151411287
-# r = 0.01 assumes full recovery at 100 years, which is generous
-compute_impact <- function(open, close, year, r = 0.01) {
-  if (year < open) {
-    return(0)
-  } else if (year <= close) {
-    return(1)
-  } else {
-    recovery <- r * (year - close) # quantify the amount of recovery
-    impact <- pmax(0, 1 - recovery) # estimate remaining impact
-    return(impact)
-  }
-}
-
-
 # define a year-specific impact raster function:
 # for a given analysis year (1985, 1990,...,2020) this function 
-# deploys `compute_impact` on the CanMin dataset to estimate the impact of all CanMin mines at year_i
-# it then removes mines with zero impact (opened after year_i, or fully recovered)
-# and transforms the dataframe to a SpatVect
+# determines if a mine was open on or before the current year
+# it then removes mines that opened after the current year (from the future)
+# and transforms the dataframe to a SpatRaster
 generate_mine_rasters <- function(mines_df, year) {
-  mines_df <- 
-    mines_df |>
-    dplyr::mutate(impact = mapply(compute_impact, year, open, close)) |>
-    dplyr::filter(impact > 0)  
+  
+  # filter for mines opened on or before the current year
+  mine_presence <- 
+    dplyr::filter(mines_df, !is.na(open) & open <= year) |> 
+    dplyr::mutate(presence = 1)
   
   mines_vec <- 
-    terra::vect(mines_df, geom = c("longitude", "latitude"), crs = "epsg:4326") |>
+    terra::vect(mine_presence, geom = c("longitude", "latitude"), crs = "epsg:4326") |>
     terra::project(x=_, y=template_raster) |> 
     terra::buffer(x=_, width = max(res(template_raster)))
   
   mines_rast <-
-    terra::rasterize(mines_vec, template_raster, field = "impact", background = 0, fun = "max") |> 
+    terra::rasterize(mines_vec, template_raster, field = "presence", background = 0, fun = "max") |> 
     terra::crop(x=_, y=bam_boundary) |> 
     terra::mask(x=_, mask=bam_boundary)
     
@@ -83,12 +63,20 @@ generate_mine_rasters <- function(mines_df, year) {
 
 # import necessary reference data
 # set CRS to match BAM data, then crop and mask (some mines are far north of BAM data)
-bam_boundary <- terra::vect(file.path(root, "Regions", "BAM_BCR_NationalModel_Buffered.shp"))
+bam_boundary <- terra::vect(file.path(root, "Regions", "BAM_BCR_NationalModel_UnBuffered.shp"))
 template_raster <- terra::rast(file.path(root, "PredictionRasters", "Biomass", "SCANFI", "1km", "SCANFIBalsamFir_1km_2020.tif"))
 
 # generate mines layers for every analysis year
-test <- lapply()
-  
-  
+years <- seq(1990, 2020, 5)
+mine_rasters <- purrr::map(.x = years, .f = ~generate_mine_rasters(mines_df, .x)) # ~ begins a formula-style anonymous function
+names(mine_rasters) <- paste0("mines_", years)
+mine_rasters <- purrr::map(.x = mine_rasters, .f = function(x){ terra::varnames(x) <- "mine_presence"; x})
 
-terra::writeVector(mines_vector_mask, file.path(root, "gis", "other_landscape_covariates", "mincan_dataset_masked.gpkg"), overwrite=TRUE)
+# save each element as a separate raster
+# iwalk uses the names of the list elements as .y 
+purrr::iwalk(mine_rasters, ~ {
+  terra::writeRaster(.x,
+                     filename = file.path(root, "gis", "other_landscape_covariates", paste0("mincan_", .y, "_masked_.tif")),
+                     overwrite = TRUE)
+})
+
