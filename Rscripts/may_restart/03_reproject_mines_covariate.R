@@ -63,7 +63,7 @@ generate_mine_rasters <- function(mines_df, year) {
 
 # import necessary reference data
 # set CRS to match BAM data, then crop and mask (some mines are far north of BAM data)
-bam_boundary <- terra::vect(file.path(root, "Regions", "BAM_BCR_NationalModel_UnBuffered.shp"))
+bam_boundary <- terra::vect(file.path(root, "Regions", "BAM_BCR_NationalModel_Buffered.shp"))
 template_raster <- terra::rast(file.path(root, "PredictionRasters", "Biomass", "SCANFI", "1km", "SCANFIBalsamFir_1km_2020.tif"))
 
 # generate mines layers for every analysis year
@@ -77,6 +77,5 @@ mine_rasters <- purrr::map(.x = mine_rasters, .f = function(x){ terra::varnames(
 purrr::iwalk(mine_rasters, ~ {
   terra::writeRaster(.x,
                      filename = file.path(root, "gis", "other_landscape_covariates", paste0("mincan_", .y, "_masked_.tif")),
-                     overwrite = TRUE)
-})
+                     overwrite = TRUE)})
 

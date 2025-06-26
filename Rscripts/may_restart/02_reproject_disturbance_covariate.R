@@ -34,17 +34,34 @@ CAfire_mask <-
   terra::crop(x=_, y=bam_boundary) |> 
   terra::mask(x=_, mask=bam_boundary)
 
-
-# convert from time *of* disturbance to time *since* disturbance
-# add 1 in denominator to avoid dividing by zero when time of disturbance is 2020
-# output: values closer to 1 are more recently disturbed
-max_year <- terra::global(CAfire_mask, fun = "max", na.rm = TRUE)[1,1]
+# convert zeros and NaNs to NAs
 vals <- values(CAfire_mask)
-values(CAfire_mask) <- ifelse(vals == 0, yes = 0, no = 1 / ((max_year - vals) + 1))
+vals[vals == 0 | is.nan(vals)] <- NA
+values(CAfire_mask) <- vals
+
+# define a function that estimates "years since fire" from "year of fire" from any given year
+find_year_since_fire <- 
+  function(current_year) {
+    ysf <- current_year - CAfire_mask
+    ysf[ysf < 0] <- NA  # fire hasn't occurred yet
+    
+    # normalize to c(0,1): recent fires=1, older fires=0
+    ysf_norm <- 1 / (ysf + 1)  # +1 avoids division by zero when ysf == 0
+    names(ysf_norm) <- paste0("CAfire_", current_year)
+    return(ysf_norm)
+}
+
+# generate one raster per year with "years since fire"
+years <- seq(1990, 2020, by = 5)
+CAfire_rasters <- purrr::map(.x = years, .f = find_year_since_fire)
+names(CAfire_rasters) <- paste0("CAfire_", years)
 
 
 # save reprojected/cropped/masked time-since-disturbance layer
-names(CAfire_mask) <- "CAfire"
-terra::writeRaster(CAfire_mask, file.path(root, "gis", "other_landscape_covariates", "CA_Forest_Fire_1985-2020_masked.tif"), overwrite=TRUE)
+purrr::iwalk(CAfire_rasters, ~ {
+  terra::writeRaster(.x,
+                     filename = file.path(root, "gis", "other_landscape_covariates", paste0(.y, "_masked.tif")),
+                     overwrite = TRUE)})
+
 
 
