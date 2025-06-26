@@ -76,6 +76,6 @@ mine_rasters <- purrr::map(.x = mine_rasters, .f = function(x){ terra::varnames(
 # iwalk uses the names of the list elements as .y 
 purrr::iwalk(mine_rasters, ~ {
   terra::writeRaster(.x,
-                     filename = file.path(root, "gis", "other_landscape_covariates", paste0("mincan_", .y, "_masked_.tif")),
+                     filename = file.path(root, "gis", "other_landscape_covariates", paste0("mincan_", .y, "_masked.tif")),
                      overwrite = TRUE)})
 
