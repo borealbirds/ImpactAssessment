@@ -50,7 +50,7 @@ generate_mine_rasters <- function(mines_df, year) {
   mines_vec <- 
     terra::vect(mine_presence, geom = c("longitude", "latitude"), crs = "epsg:4326") |>
     terra::project(x=_, y=template_raster) |> 
-    terra::buffer(x=_, width = max(res(template_raster)))
+    terra::buffer(x=_, width = max(res(template_raster))) # add a 1km buffer around the mine
   
   mines_rast <-
     terra::rasterize(mines_vec, template_raster, field = "presence", background = 0, fun = "max") |> 
