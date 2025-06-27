@@ -47,31 +47,54 @@ estimate_mine_impact <- function(covariate_stack_path){
   year <- as.numeric(file_parts[3])
   
   # load covariate stack_i
-  stack_i <- terra::rast(covariate_stack_path)
+  stack_ij <- terra::rast(covariate_stack_path)
   
   # only keep covariate names that are present in the stack
-  valid_vars <- intersect(vars, names(stack_i))
-  stack_i <- stack_i[[valid_vars]]
+  valid_vars <- intersect(vars, names(stack_ij))
+  stack_ij <- stack_ij[[valid_vars]]
 
   # find the matching mining raster by year and load appropriate mine layer
   mine_raster_path <- mine_years[str_detect(mine_years, as.character(year))]
   mine_raster <- 
     terra::rast(mine_raster_path) |> 
-    terra::crop(x=_, y=stack_i$SCANFIprcC_1km) |> # choosing a covariate that is likely in every cov stack
-    terra::mask(x=_, mask=stack_i$SCANFIprcC_1km) 
+    terra::crop(x=_, y=stack_ij$SCANFIprcC_1km) |> # choosing a covariate that is likely in every cov stack
+    terra::mask(x=_, mask=stack_ij$SCANFIprcC_1km) 
   
   
-  # get the row and column index of each cell in the raster with mines
+  # get the row and column index (location) of each cell in the raster with mines
   rc <- terra::rowColFromCell(mine_raster, cell = which(values(mine_raster) == 1))
   
+  # define a function that searches a 5x5 grid of every mine
+  # for the pixel values of every covariate in `var`
+  # this function works on the current loaded mine raster (for a given BCR x year tuple)
+  # it then calls an internal function that loops through all covariates for that mine
+  # the output is a dataframe with columns `year`, `bcr`, `var`, `mine`, `pixel_distance`, `value`
+  bcr_year_df <- purrr::map_dfr(seq_along(mine_cells), function(mine_k) {
+    
+    # index the row and column (location) for the current mine i
+    row <- rc[mine_k, 1]
+    col <- rc[mine_k, 2]
+    
+    # define search window
+    r_range <- (row - 4):(row + 4)
+    c_range <- (col - 4):(col + 4)
+    
+    grid_coords_k <- expand.grid(row = r_range, col = c_range)
+    cells_k <- terra::cellFromRowCol(cov_m, row = grid_coords_k$row, col = grid_coords_k$col)
+  
+    # extract values for covariate m from the 5x5 grid surrounding mine k
+    purrr::map_dfr(vars, function(var_m) {
+      
+      # for testing: var_m <- vars[47]
+      cov_m <- stack_ij[[var_m]]
+      
+      values_m <- terra::extract(x = cov_m, y = cells_k)
+      
+      
+      if (nrow(values_window) == 0) return(NULL)
+  
 }
-stack_bcr10_2020 <- terra::rast(file.path(root, "gis", "stacks", "can10_2020.tif"))
-stack_bcr10_1990 <- terra::rast(file.path(root, "gis", "stacks", "can10_1990.tif"))
 
-# import 1990 mining data
-mines_1990 <- 
-  terra::rast(file.path(root, "gis", "other_landscape_covariates", "mincan_mines_1990_masked.tif")) |> 
-  terra::crop(x=_, y=ext(stack_bcr10_1990)) |> 
-  terra::mask(x=_, mask=stack_bcr10_1990$year)
+
 
 
