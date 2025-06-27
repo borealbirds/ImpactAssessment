@@ -76,8 +76,8 @@ estimate_mine_impact <- function(covariate_stack_path){
     col <- rc[mine_k, 2]
     
     # define search window
-    r_range <- (row - 4):(row + 4)
-    c_range <- (col - 4):(col + 4)
+    r_range <- (row - 10):(row + 10)
+    c_range <- (col - 10):(col + 10)
     
     grid_coords_k <- expand.grid(row = r_range, col = c_range)
     cells_k <- terra::cellFromRowCol(cov_m, row = grid_coords_k$row, col = grid_coords_k$col)
@@ -86,15 +86,43 @@ estimate_mine_impact <- function(covariate_stack_path){
     purrr::map_dfr(vars, function(var_m) {
       
       # for testing: var_m <- vars[47]
+      # isolate one covariate layer (m) from raster stack ij (BCR x year)
       cov_m <- stack_ij[[var_m]]
       
+      # find the pixel values within the 5x5 grid surrounding mine k
       values_m <- terra::extract(x = cov_m, y = cells_k)
+      if (nrow(values_m) == 0) return(NULL)
       
+      # define center pixel and convert to lat-long
+      center_cell <- terra::cellFromRowCol(object = cov_m, row = row, col = col)
+      center_xy <- terra::xyFromCell(cov_m, center_cell)
       
-      if (nrow(values_window) == 0) return(NULL)
-  
-}
+      # calculate distances from center pixel
+      # note: Conus Albers is a projected coordinate system designed
+      # to represent distances over North America on a flat (2D Euclidean) plane so 
+      # we can use the Euclidian distance as the actual distance between pixels in meters
+      dist_vals <- 
+        terra::xyFromCell(object = cov_m, cell = cells_k) |> 
+        dplyr::as_tibble() |> 
+        dplyr::mutate(pixel_distance = sqrt((x - center_xy[1])^2 + (y - center_xy[2])^2))
+      
+      # index distance vs covariate values along with current BCR x year x mine info
+      # Combine with covariate values
+      tibble(
+        year = year,
+        bcr = bcr,
+        var = var_m,
+        mine_id_x = center_xy[1],
+        mine_id_y = center_xy[2],
+        pixel_distance = dist_vals$pixel_distance,
+        value = values_m[[1]])
+    }) # finish iterating over all covariates for the current mine
+        
+  }) # finish iterating over all mines in the current BCR x year
 
+  return(bcr_year_df) # keep all mine data for the current BCR x year
+  
+} # close function
 
 
 
