@@ -50,14 +50,16 @@ values(CAfire) <- ifelse(test = CAfire[] == 0, yes = 0, no = 1 / ((max(values(CA
 # import soil carbon and pH data from ISRIC (International Soil Reference and Information Centre)
 # https://files.isric.org/soilgrids/latest/data_aggregated/
 soil_carbon <- 
-  terra::rast(file.path(root, "gis", "other_landscape_covariates", "soc_0-5cm_mean_1000.tif")) |> 
+  terra::rast(file.path(root, "gis", "other_landscape_covariates", "isric_soil_covariates_masked.tif")) |> 
+  terra::subset(x=_, subset = "soc_0-5cm_mean_1000") |> 
   terra::project(x=_, y=stack_bcr14_2020, method="bilinear")
 
 names(soil_carbon) <- "soil_carbon"
 # plot(soil_carbon)
 
 soil_ph <-
-  terra::rast(file.path(root, "gis", "other_landscape_covariates", "cec_0-5cm_mean_1000.tif")) |> 
+  terra::rast(file.path(root, "gis", "other_landscape_covariates", "isric_soil_covariates_masked.tif")) |> 
+  terra::subset(x=_, subset = "cec_0-5cm_mean_1000") |> 
   terra::project(x=_, y=stack_bcr14_2020, method="bilinear")
 
 names(soil_ph) <- "soil_ph"
@@ -79,9 +81,7 @@ bcr14_boundary <-
 
 # import variable classes to help separate biotic from abiotic
 nice_var_names <- 
-  readr::read_csv(file.path(root, "data", "Extras", "sandbox_data", "impactassessment_sandbox", "covariates_label_insert.csv")) |> 
-  dplyr::select(`Covariate label`, Category) |> 
-  dplyr::rename(var = `Covariate label`, var_class = Category) |> 
+  readr::read_csv(file.path(root, "data", "Extras", "sandbox_data", "impactassessment_sandbox", "nice_var_names_v5.csv")) |> 
   tidyr::drop_na() |> 
   unique()
 

@@ -42,7 +42,7 @@ df_bcr14_2020 <- dplyr::left_join(df_bcr14_2020, df_backfilled_landcover, by=c("
 biotic_vars <-
   nice_var_names |> 
   dplyr::filter(var_class %in% c("Greenup", "Biomass", "Wetland")) |> 
-  dplyr::filter(!(var %in% c("WetOccur_1km", "WetOccur_5x5", "WetRecur_1km", "WetSeason_1km"))) |> # keep peatland but discard other water variables
+  dplyr::filter(!(var %in% c("WetOccur_1km", "WetOccur_5x5", "WetRecur_1km", "WetSeason_1km", "SurfaceWater_1km", "LakeEdge_1km"))) |> # keep peatland but discard other water variables
   dplyr::filter(!grepl("5x5", var)) |> 
   dplyr::pull(var) |> 
   unique()

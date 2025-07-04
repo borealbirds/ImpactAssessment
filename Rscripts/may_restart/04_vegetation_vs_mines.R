@@ -4,6 +4,7 @@
 # created: June 11, 2025
 # ---
 
+library(progress)
 library(terra)
 library(tidyverse)
 
@@ -36,7 +37,7 @@ mine_years <-
 # for every mine x covariate tuple, calculate pixel values in the 9x9 square surrounding the
 # mine center and enter 9 rows into a dataframe with columns:
 # year, bcr, var, mine, pixel_distance,  value 
-# enter the dataframe as an element in a list of 133 (number of canadian stacks excluding 1985)
+# enter the dataframe as an element in a list of 133 (number of Canadian BCR stacks excluding 1985)
 
 # for testing: covariate_stack_path <- stacks$file_name[1]
 estimate_mine_impact <- function(covariate_stack_path){
@@ -51,6 +52,7 @@ estimate_mine_impact <- function(covariate_stack_path){
   
   # only keep covariate names that are present in the stack
   valid_vars <- intersect(vars, names(stack_ij))
+  if (length(valid_vars) == 0) return(NULL)
   stack_ij <- stack_ij[[valid_vars]]
 
   # find the matching mining raster by year and load appropriate mine layer
@@ -62,14 +64,19 @@ estimate_mine_impact <- function(covariate_stack_path){
   
   
   # get the row and column index (location) of each cell in the raster with mines
-  rc <- terra::rowColFromCell(mine_raster, cell = which(values(mine_raster) == 1))
+  mine_cells <- which(values(mine_raster) == 1)
+  rc <- terra::rowColFromCell(mine_raster, cell = mine_cells)
   
-  # define a function that searches a 5x5 grid of every mine
+  # define a function that searches an arbitrary grid around every mine
   # for the pixel values of every covariate in `var`
   # this function works on the current loaded mine raster (for a given BCR x year tuple)
   # it then calls an internal function that loops through all covariates for that mine
   # the output is a dataframe with columns `year`, `bcr`, `var`, `mine`, `pixel_distance`, `value`
+  pb <- progress::progress_bar$new(total = length(mine_cells))
   bcr_year_df <- purrr::map_dfr(seq_along(mine_cells), function(mine_k) {
+    
+    # display progress
+    pb$tick()
     
     # index the row and column (location) for the current mine i
     row <- rc[mine_k, 1]
@@ -80,16 +87,21 @@ estimate_mine_impact <- function(covariate_stack_path){
     c_range <- (col - 10):(col + 10)
     
     grid_coords_k <- expand.grid(row = r_range, col = c_range)
-    cells_k <- terra::cellFromRowCol(cov_m, row = grid_coords_k$row, col = grid_coords_k$col)
   
-    # extract values for covariate m from the 5x5 grid surrounding mine k
+    # extract values for covariate m from the grid surrounding mine k
     purrr::map_dfr(vars, function(var_m) {
+      
+      # check that var_m exists in the current stack
+      if (!(var_m %in% names(stack_ij))) return(NULL)
       
       # for testing: var_m <- vars[47]
       # isolate one covariate layer (m) from raster stack ij (BCR x year)
       cov_m <- stack_ij[[var_m]]
       
-      # find the pixel values within the 5x5 grid surrounding mine k
+      # index the cells from the grid surrounding grid
+      cells_k <- terra::cellFromRowCol(cov_m, row = grid_coords_k$row, col = grid_coords_k$col)
+      
+            # find the pixel values from the grid surrounding mine k
       values_m <- terra::extract(x = cov_m, y = cells_k)
       if (nrow(values_m) == 0) return(NULL)
       
@@ -115,7 +127,7 @@ estimate_mine_impact <- function(covariate_stack_path){
         mine_id_x = center_xy[1],
         mine_id_y = center_xy[2],
         pixel_distance = dist_vals$pixel_distance,
-        value = values_m[[1]])
+        value = values_m[[var_m]])
     }) # finish iterating over all covariates for the current mine
         
   }) # finish iterating over all mines in the current BCR x year
@@ -125,4 +137,5 @@ estimate_mine_impact <- function(covariate_stack_path){
 } # close function
 
 
-
+mine_impacts_list <- purrr::map(.x = stacks$file_name, .f = estimate_mine_impact)
+combined_df <- bind_rows(results_list)
