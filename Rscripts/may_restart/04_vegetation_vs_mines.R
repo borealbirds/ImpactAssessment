@@ -3,7 +3,7 @@
 # author: Mannfred Boehm
 # created: June 11, 2025
 # ---
-
+library(furrr)
 library(progress)
 library(terra)
 library(tidyverse)
@@ -137,5 +137,19 @@ estimate_mine_impact <- function(covariate_stack_path){
 } # close function
 
 
-mine_impacts_list <- purrr::map(.x = stacks$file_name, .f = estimate_mine_impact)
-combined_df <- bind_rows(results_list)
+# set up parallel computing
+future::plan(multisession, workers = parallel::detectCores() - 2)
+options(future.globals.maxSize = 4 * 1024^3)
+
+
+# wrap `estimate_mine_impact` function to return a value instead of an error
+safe_estimate_mine_impact <- purrr::possibly(estimate_mine_impact, otherwise = NULL)
+
+# run mine impact estimation in parallel
+mine_impacts_list <- furrr::future_map(.x = stacks$file_name, .f = safe_estimate_mine_impact, .progress = TRUE)
+saveRDS(mine_impacts_list, file="C:/Users/mannf/Downloads/mine_impacts_list.rds")
+
+mine_impacts_df <- bind_rows(mine_impacts_list)
+
+
+
