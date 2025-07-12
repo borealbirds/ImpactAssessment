@@ -1,5 +1,5 @@
 # ---
-# title: Impact Assessment: test if presence of mines is associated with SCANFI "rock" and/or reduced biomass
+# title: Impact Assessment: quantify changes in covariate values as a function of mine distance
 # author: Mannfred Boehm
 # created: June 11, 2025
 # ---
@@ -72,28 +72,37 @@ estimate_mine_impact <- function(covariate_stack_path){
   mine_raster_path <- mine_years[str_detect(mine_years, as.character(year))]
   mine_raster <- 
     terra::rast(mine_raster_path) |> 
-    terra::crop(x=_, y=stack_ij$SCANFIprcC_1km) |> # choosing a covariate that is likely in every cov stack
-    terra::mask(x=_, mask=stack_ij$SCANFIprcC_1km) 
+    terra::crop(x=_, y=stack_ij[[1]]) |> 
+    terra::mask(x=_, mask=stack_ij[[1]]) 
+  
+  # identify patches (mines > 1 pixel)
+  patches_raster <- terra::patches(mine_raster, directions = 8, zeroAsNA = TRUE)
+  patch_ids <- na.omit(unique(values(patches_raster)))
+  if (length(patch_ids) == 0) return(NULL)
+  pb <- progress::progress_bar$new(total = length(patch_ids))
   
   
-  # get the row and column index (location) of each cell in the raster with mines
-  mine_cells <- which(values(mine_raster) == 1)
-  rc <- terra::rowColFromCell(mine_raster, cell = mine_cells)
-  
-  # define a function that searches an arbitrary grid around every mine
+  # define a function that searches an arbitrary grid around every mine patch
   # for the pixel values of every covariate in `var`
   # this function works on the current loaded mine raster (for a given BCR x year tuple)
   # it then calls an internal function that loops through all covariates for that mine
   # the output is a dataframe with columns `year`, `bcr`, `var`, `mine`, `pixel_distance`, `value`
-  pb <- progress::progress_bar$new(total = length(mine_cells))
-  bcr_year_df <- purrr::map_dfr(seq_along(mine_cells), function(mine_k) {
+  bcr_year_df <- purrr::map_dfr(patch_ids, function(patch_id) {
     
     # display progress
     pb$tick()
     
-    # index the row and column (location) for the current mine i
-    row <- rc[mine_k, 1]
-    col <- rc[mine_k, 2]
+    # identify the pixel(s) corresponding with the current patch
+    patch_cells <- which(values(patches_raster) == patch_id)
+    if (length(patch_cells) == 0) return(NULL)
+    coords <- terra::xyFromCell(patches_raster, patch_cells)
+    center_xy <- colMeans(coords) # patch centroid
+    
+    # get the row/col of centroid for defining search window
+    center_cell <- terra::cellFromXY(patches_raster, matrix(center_xy, ncol = 2))
+    rc <- terra::rowColFromCell(patches_raster, center_cell)
+    row <- rc[1]
+    col <- rc[2]
     
     # define search window
     r_range <- (row - 10):(row + 10)
@@ -101,7 +110,7 @@ estimate_mine_impact <- function(covariate_stack_path){
     
     grid_coords_k <- distinct(expand.grid(row = r_range, col = c_range))
   
-    # extract values for covariate m from the grid surrounding mine k
+    # extract values for covariate m from the grid cells surrounding the current mine patch
     purrr::map_dfr(vars, function(var_m) {
       
       # check that var_m exists in the current stack
@@ -114,17 +123,13 @@ estimate_mine_impact <- function(covariate_stack_path){
       # index the cells from the surrounding grid
       cells_k <- terra::cellFromRowCol(cov_m, row = grid_coords_k$row, col = grid_coords_k$col)
       
-            # find the pixel values from the grid surrounding mine k
+      # find the pixel values from the grid surrounding current mine patch
       values_m <- terra::extract(x = cov_m, y = cells_k)
       if (nrow(values_m) == 0) return(NULL)
       
-      # define center pixel and convert to lat-long
-      center_cell <- terra::cellFromRowCol(object = cov_m, row = row, col = col)
-      center_xy <- terra::xyFromCell(cov_m, center_cell)
-      
       # calculate distances from center pixel
-      # note: Conus Albers is a projected coordinate system designed
-      # to represent distances over North America on a flat (2D Euclidean) plane so 
+      # note: Conus Albers is a projected coordinate system representing
+      # distances over North America on a flat (2D Euclidean) plane so 
       # we can use the Euclidian distance as the actual distance between pixels in meters
       dist_vals <- 
         terra::xyFromCell(object = cov_m, cell = cells_k) |> 
@@ -140,8 +145,7 @@ estimate_mine_impact <- function(covariate_stack_path){
         mine_id_x = center_xy[1],
         mine_id_y = center_xy[2],
         pixel_distance = dist_vals$pixel_distance,
-        value = values_m[[var_m]]) |> 
-      distinct()
+        value = values_m[[var_m]]) 
       
     }) # finish iterating over all covariates for the current mine
         
@@ -247,7 +251,7 @@ write_csv(x = mine_impact_summary, file = file.path(getwd(), "/data/derived_data
 
 
 # inspect mines of interest by converting coordinates to EPSG:4326
-xy_proj <- vect(matrix(c(-2182500,	3997500), ncol = 2), crs = "EPSG:5070")
+xy_proj <- vect(matrix(c(-1505500,	3062500), ncol = 2), crs = "EPSG:5070")
 
 # Reproject to decimal degrees (lat/lon, EPSG:4326)
 xy_lonlat <- project(xy_proj, "EPSG:4326")
@@ -261,10 +265,11 @@ crds(xy_lonlat)
 
 
 # filter for some specific mine x year combination 
+# use near() because of floating point inaccuracies
 plot_data <- dplyr::filter(mine_impacts_df_cont, 
-                           dplyr::near(mine_id_x, -1754500) & 
-                           dplyr::near(mine_id_y, 3151500) & 
-                           var == "SCANFILodgepolePine_1km")
+                           dplyr::near(mine_id_x, -1505500) & 
+                           dplyr::near(mine_id_y, 3062500) & 
+                           var == "SCANFIprcC_1km")
   
   
 # exported at 1000 x 650
