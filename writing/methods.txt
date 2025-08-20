@@ -1,0 +1,24 @@
+Time since disturbance was split into 8 layers, one for each time period from 1985 to 2020. In each layer, the minimum time since disturbance has been reset to zero based on the current year. Thi
+
+SCANFI_1km modelling:
+* it's OK that "rock" doesn't get predicted accurately because "rock" is rare on the landscape and often represents urban areas (if HF is not filtered completely from the training set)
+* water doesn't need 
+* how does the V5 models handle streams/rivers? Are birds predicted there?
+
+
+*Using CanMin we can say how many km^2 of mines increased from 1990 to 2020
+
+
+
+
+
+SCANFI/MODIS Rabbit Hole
+
+save PNGs as 990x586
+
+MODIS:
+>filter out cropland/urban in training data because 99% has already been filtered out and we're not interested in training the model to predict low HFs
+>filter out water from training data because we aren't interested in predicting water
+>predict broad classes: trees, non-tree veg, and wetlands in high HF areas
+>retain water and wetland areas from high HF dataset
+>combine the above two to reconstruct high HF dataset as backfilled dataset + aqueous areas

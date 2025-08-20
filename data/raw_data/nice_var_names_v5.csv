@@ -1,0 +1,111 @@
+var,var_class
+ERAMAP_1km,Annual Climate
+ERAMAT_1km,Annual Climate
+ERAPPTsm_1km,Annual Climate
+ERAPPTsmt_1km,Annual Climate
+ERAPPTwt_1km,Annual Climate
+ERATavesm_1km,Annual Climate
+ERATavesmt_1km,Annual Climate
+ERATavewt_1km,Annual Climate
+LFbiomass_1km,Biomass
+LFbiomass_1km,Biomass
+LFbiomass_5x5,Biomass
+LFbiomass_5x5,Biomass
+LFcrownclosure_1km,Biomass
+LFcrownclosure_1km,Biomass
+LFcrownclosure_5x5,Biomass
+LFcrownclosure_5x5,Biomass
+LFheigth_1km,Biomass
+LFheigth_1km,Biomass
+LFheigth_5x5,Biomass
+LFheigth_5x5,Biomass
+LFheigthcv_1km,Biomass
+LFheigthcv_1km,Biomass
+LFheigthcv_5x5,Biomass
+LFheigthcv_5x5,Biomass
+ETHheight_1km,Biomass
+ETHheight_5x5,Biomass
+ETHheightcv_1km,Biomass
+ETHheightcv_5x5,Biomass
+ONRLbiomass_1km,Biomass
+ONRLbiomass_5x5,Biomass
+SCANFIBalsamFir_1km,Biomass
+SCANFIBalsamFir_5x5,Biomass
+SCANFIbiomass_1km,Biomass
+SCANFIbiomass_5x5,Biomass
+SCANFIBlackSpruce_1km,Biomass
+SCANFIBlackSpruce_5x5,Biomass
+SCANFIclosure_1km,Biomass
+SCANFIclosure_5x5,Biomass
+SCANFIDouglasFir_1km,Biomass
+SCANFIDouglasFir_5x5,Biomass
+SCANFIheight_1km,Biomass
+SCANFIheight_5x5,Biomass
+SCANFIheightcv_1km,Biomass
+SCANFIheightcv_5x5,Biomass
+SCANFIJackPine_1km,Biomass
+SCANFIJackPine_5x5,Biomass
+SCANFILodgepolePine_1km,Biomass
+SCANFILodgepolePine_5x5,Biomass
+SCANFIPonderosaPine_1km,Biomass
+SCANFIPonderosaPine_5x5,Biomass
+SCANFIprcC_1km,Biomass
+SCANFIprcC_5x5,Biomass
+SCANFIprcD_1km,Biomass
+SCANFIprcD_5x5,Biomass
+SCANFITamarack_1km,Biomass
+SCANFITamarack_5x5,Biomass
+SCANFIWhiteRedPine_1km,Biomass
+SCANFIWhiteRedPine_5x5,Biomass
+RAPTCC_1km,Biomass
+RAPTCC_5x5,Biomass
+AHM_1km,Climate Normals
+bFFP_1km,Climate Normals
+CMD_1km,Climate Normals
+DD0_1km,Climate Normals
+DD18_1km,Climate Normals
+DD5_1km,Climate Normals
+eFFP_1km,Climate Normals
+EMT_1km,Climate Normals
+EXT_1km,Climate Normals
+FFP_1km,Climate Normals
+MAP_1km,Climate Normals
+MAT_1km,Climate Normals
+MCMT_1km,Climate Normals
+MSP_1km,Climate Normals
+MWMT_1km,Climate Normals
+NFFD_1km,Climate Normals
+PAS_1km,Climate Normals
+PPTsm_1km,Climate Normals
+PPTwt_1km,Climate Normals
+RH_1km,Climate Normals
+SHM_1km,Climate Normals
+Tavesm_1km,Climate Normals
+Tavewt_1km,Climate Normals
+TD_1km,Climate Normals
+CCNL_1km,Disturbance
+CanHF_1km,Disturbance
+CanHF_5x5,Disturbance
+GlobalHF_1km,Disturbance
+GlobalHF_5x5,Disturbance
+StandardDormancy_1km,Greenup
+StandardGreenup_1km,Greenup
+VLCE_1km,Landcover
+MODISLCC_1km,Landcover
+MODISLCC_5x5,Landcover
+ABoVE_1km,Landcover
+SCANFI_1km,Landcover
+NLCD_1km,Landcover
+canroad_1km,Road
+canroad_5x5,Road
+usroad_1km,Road
+usroad_5x5,Road
+hli3cl_1km,Topography
+mTPI_1km,Topography
+roughness_1km,Topography
+WetOccur_1km,Wetland
+WetOccur_5x5,Wetland
+WetRecur_1km,Wetland
+WetSeason_1km,Wetland
+Peatland_1km,Wetland
+Peatland_5x5,Wetland
