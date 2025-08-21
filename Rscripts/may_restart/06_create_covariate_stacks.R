@@ -1,5 +1,5 @@
 # ---
-# title: Impact Assessment: create full covariate stacks for each BCR (for training)
+# title: Impact Assessment: create full covariate stacks (v5 + soil + disturbance) for each BCR (for training)
 # author: Mannfred Boehm
 # created: May 7, 2025
 # ---
@@ -11,11 +11,25 @@ library(terra)
 # set root path
 root <- "G:/Shared drives/BAM_NationalModels5"
 
+
+# define function for training models on low HF areas surrounding a mine
+
+
+
+# import mines
+
+
 # import soil covariates
 soil_covariates <- terra::rast(file.path(root, "gis", "other_landscape_covariates", "isric_soil_covariates_masked.tif"))
 
-# import time-since-disturbance
-CAfire <- terra::rast(file.path(root, "gis", "other_landscape_covariates", "CA_Forest_Fire_1985-2020_masked.tif"))
+# import year-matched time-since-disturbance layers
+dist_files <- 
+  list.files(
+  path = file.path(root, "gis", "other_landscape_covariates"),
+  pattern = "CAfire.*masked\\.tif$",  
+  full.names = TRUE)
+
+CAfire <- terra::rast(dist_files)
 
 
 #2. load covariate stack_i and process----
@@ -71,6 +85,11 @@ stack_and_enframe <- function(stack_i) {
 # NEED NAMES FOR KEEPING TRACK OF BCRS AND YEARS
 # for every BCR x year, stack extra covariates to V5 covariates and turn into a dataframe
 list_of_cov_dfs <- lapply(X = stack_directories, FUN = stack_and_enframe)
+
+
+years <- seq(1990, 2020, 5)
+mine_rasters <- purrr::map(.x = years, .f = ~backfill_mines(mines_df, .x)) # ~ begins a formula-style anonymous function
+
 
 
 #3. stage datasets needed for modelling biotic landscape----
