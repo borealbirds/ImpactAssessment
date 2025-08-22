@@ -52,6 +52,9 @@ generate_mine_rasters <- function(mines_df, year) {
     terra::project(x=_, y=template_raster) |> 
     terra::buffer(x=_, width = 5*res(template_raster)[1]) # add a 5km buffer around the mine
   
+  # exclude mines outside `bam_boundary`
+  mines_vec <- mines_vec[bam_boundary, ]
+  
   mines_rast <-
     terra::rasterize(mines_vec, template_raster, field = "presence", background = 0, fun = "max") |> 
     terra::crop(x=_, y=bam_boundary) |> 
@@ -63,8 +66,9 @@ generate_mine_rasters <- function(mines_df, year) {
 
 # import necessary reference data
 # set CRS to match BAM data, then crop and mask (some mines are far north of BAM data)
-bam_boundary <- terra::vect(file.path(root, "Regions", "BAM_BCR_NationalModel_Buffered.shp"))
+bam_boundary <- terra::vect(file.path(root, "Regions", "BAM_BCR_NationalModel_UnBuffered.shp"))
 template_raster <- terra::rast(file.path(root, "PredictionRasters", "Biomass", "SCANFI", "1km", "SCANFIBalsamFir_1km_2020.tif"))
+
 
 # generate mines layers for every analysis year
 years <- seq(1990, 2020, 5)
