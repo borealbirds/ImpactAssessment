@@ -172,3 +172,7 @@ build_mosaics_by_year(root,
                       years = years,
                       bcrs_needed = bcrs_needed, 
                       all_subbasins = all_subbasins)
+
+
+
+# ADD CAfire, soils
