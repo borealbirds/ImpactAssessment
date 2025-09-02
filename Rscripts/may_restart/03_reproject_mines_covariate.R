@@ -13,6 +13,8 @@ library(tidyverse)
 
 
 root <- "G:/Shared drives/BAM_NationalModels5"
+ia_dir <- file.path(root, "data", "Extras", "sandbox_data", "impactassessment_sandbox")
+
 
 # define variables of interest from mining dataset
 mine_vars <- c("namemine", "latitude", "longitude",  
@@ -27,7 +29,7 @@ mine_vars <- c("namemine", "latitude", "longitude",
 # (2020), e.g. 2015. In this case, we'd be assigning a close date of 2015 from 1985-2010, when 1980 would have been
 # more accurate for that time period. 
 mines_df <- 
-  readxl::read_excel(file.path(root, "gis", "other_landscape_covariates", "mincan_dataset.xlsx"), sheet="Data") |> 
+  readxl::read_excel(file.path(ia_dir, "mincan_dataset.xlsx"), sheet="Data") |> 
   dplyr::select(all_of(mine_vars)) |> 
   dplyr::mutate(open = open1, 
                 close = coalesce(close3, close2, close1)) |>  # returns the first non-NA value in a sequence of columns
@@ -80,6 +82,6 @@ mine_rasters <- purrr::map(.x = mine_rasters, .f = function(x){ terra::varnames(
 # iwalk uses the names of the list elements as .y 
 purrr::iwalk(mine_rasters, ~ {
   terra::writeRaster(.x,
-                     filename = file.path(root, "gis", "other_landscape_covariates", paste0("mincan_", .y, "_masked.tif")),
+                     filename = file.path(ia_dir, paste0("mincan_", .y, "_masked.tif")),
                      overwrite = TRUE)})
 

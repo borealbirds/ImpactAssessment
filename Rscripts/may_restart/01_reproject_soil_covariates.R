@@ -10,13 +10,14 @@ library(tidyverse)
 
 # set root path
 root <- "G:/Shared drives/BAM_NationalModels5"
+ia_dir <- file.path(root, "data", "Extras", "sandbox_data", "impactassessment_sandbox")
 
 
 
 # import soil carbon and pH data from ISRIC (International Soil Reference and Information Centre)
 # https://files.isric.org/soilgrids/latest/data_aggregated/
 # note: we do not use `aggregate` here as in "CAfire" because the resolution is already close to 1x1km
-soil_path <- file.path(root, "gis", "other_landscape_covariates")
+soil_path <- file.path(ia_dir)
 soil_covariates <- terra::rast(list.files(soil_path, pattern = "*cm_mean_*", full.names=TRUE))
 
 
@@ -40,6 +41,6 @@ soil_covariates_mask <-
 
 
 # save cropped/masked soil carbon and pH data 
-terra::writeRaster(soil_covariates_mask, file.path(root, "gis", "other_landscape_covariates", "isric_soil_covariates_masked.tif"), overwrite=TRUE)
+terra::writeRaster(soil_covariates_mask, file.path(ia_dir, "isric_soil_covariates_masked.tif"), overwrite=TRUE)
 
 

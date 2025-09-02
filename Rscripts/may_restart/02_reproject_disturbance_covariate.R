@@ -11,13 +11,13 @@ library(tidyverse)
 
 # set root path
 root <- "G:/Shared drives/BAM_NationalModels5"
-
+ia_dir <- file.path(root, "data", "Extras", "sandbox_data", "impactassessment_sandbox")
 
 
 # import time of disturbance layer (CAfire) and reproject (takes ~6 hours)
 # note that Hermosilla et al (2016) is in NAD_1983_Lambert_Conformal_Conic
 # downloaded from: https://opendata.nfis.org/mapserver/nfis-change_eng.html
-CAfire <- terra::rast(file.path(root, "gis", "other_landscape_covariates", "CA_Forest_Fire_1985-2020.tif")) 
+CAfire <- terra::rast(file.path(ia_dir, "CA_Forest_Fire_1985-2020.tif")) 
 
 # group every 33 × 33 grid of 30m pixels into one 1000m x 1000m pixel (takes ~5 mins, but saves hours in reprojectiom time)
 # `fact` tells terra how many raster cells to combine together when aggregating
@@ -60,7 +60,7 @@ names(CAfire_rasters) <- paste0("CAfire_", years)
 # save reprojected/cropped/masked time-since-disturbance layer
 purrr::iwalk(CAfire_rasters, ~ {
   terra::writeRaster(.x,
-                     filename = file.path(root, "gis", "other_landscape_covariates", paste0(.y, "_masked.tif")),
+                     filename = file.path(ia_dir, paste0(.y, "_masked.tif")),
                      overwrite = TRUE)})
 
 
