@@ -195,7 +195,7 @@ add_cafire_to_mosaics <- function(ia_dir, years){
     r_out <- c(r_mos, cafire_aligned)
     
     terra::writeRaster(
-      r_out, paste0("covariates_mosaiced_2", y, ".tif"), overwrite = TRUE,
+      r_out, paste0("covariates_mosaiced_", y, ".tif"), overwrite = TRUE,
       wopt = list(gdal = c("COMPRESS=LZW", "ZLEVEL=9")))
     
     message("added CAfire to ", paste0("covariates_mosaiced_", y, ".tif"))
