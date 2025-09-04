@@ -12,16 +12,7 @@ root <- "G:/Shared drives/BAM_NationalModels5"
 ia_dir <- file.path(root, "data", "Extras", "sandbox_data", "impactassessment_sandbox")
 
 
-# directory helper functions
-covariate_stack_path <- function(ia_dir, year) {
-  file.path(ia_dir, sprintf("covariates_mosaiced_%d.tif", year))
-}
-
-mines_raster_path <- function(ia_dir, year) {
-  file.path(ia_dir, sprintf("mincan_mines_%d_masked.tif", year))
-}
-
-# train models per year
+# train models per subbasin per year
 backfill_mines_cont <- function(
     years,
     ia_dir,
@@ -40,11 +31,11 @@ backfill_mines_cont <- function(
     ###
     stack_y <- terra::rast(covariate_stack_path(ia_dir, y))
     
-    # cast categoricals (safe if already factors)
+    # ensure categoricals are factors
     cats_present <- intersect(categorical_predictors, names(stack_y))
     for (nm in cats_present) stack_y[[nm]] <- terra::as.factor(stack_y[[nm]])
     
-    # optional HF layers (for your next step; no filtering yet)
+    # index HF layers
     hf_layers <- intersect(c("CanHF_1km", "CanHF_5x5"), names(stack_y))
     hf_stack <- if (length(hf_layers)) stack_y[[hf_layers]] else NULL
     
@@ -53,30 +44,14 @@ backfill_mines_cont <- function(
     # import mines and build polygons/patches
     ###
     
-    mines_path <- mines_raster_path(ia_dir, y)
-    if (!file.exists(mines_path)) {
-      if (!quiet) message("[", y, "] missing mines: ", mines_path)
-      # still return the covariates so we can proceed if desired
-      out[[i]] <- list(
-        year      = y,
-        stack     = stack_y,
-        hf_layers = hf_stack,
-        mines_rast = NULL,
-        mines_patches = NULL,
-        mines_polygons = NULL,
-        non_mine_mask = terra::rast(stack_y[[1]]) * NA_real_ # no mask available
-      )
-      next
-    }
-    
-    mines_y <- terra::rast(mines_path)
+    mines_y <- terra::rast(file.path(ia_dir, sprintf("mincan_mines_%d_masked.tif", y)))
     
     # ensure mines are in same CRS/grid as covariates (use nearest since it's categorical)
     if (!terra::compareGeom(mines_y, stack_y, stopOnError = FALSE)) {
       mines_y <- terra::project(mines_y, stack_y, method = "near")
     }
     
-    # patches (rook’s case) and polygons
+    # generate mine patches (rook’s case) and convert to polygons
     patches_y <- terra::patches(mines_y, directions = 4, zeroAsNA = TRUE)
     mines_polygons_y <- terra::as.polygons(patches_y, dissolve = TRUE, na.rm = TRUE)
     names(mines_polygons_y) <- "patch_id"

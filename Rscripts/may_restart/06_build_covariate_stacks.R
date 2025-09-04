@@ -19,7 +19,7 @@ all_subbasins <- vect(file.path(ia_dir, "hydrobasins_subset_2020.gpkg"))
 bcrs_needed <- BAMexploreR::bam_get_bcr(version = "v5", ext = all_subbasins)
   
 # define temporal scope
-years <- seq(from = 1995, to = 2005, by = 5)
+years <- seq(from = 1990, to = 2020, by = 5)
 
 # -----------------------------------------------------
 # for every year, import BCR covariate stacks and mosaic
@@ -175,4 +175,36 @@ build_mosaics_by_year(root,
 
 
 
-# ADD CAfire, soils
+
+
+
+# add CAfire to mosaiced stacks
+years <- seq(1990, 2020, by=5)
+
+add_cafire_to_mosaics <- function(ia_dir, years){
+  
+  for (y in years) {
+    
+    r_mos   <- terra::rast(file.path(ia_dir,  paste0("covariates_mosaiced_", y, ".tif")))           # EPSG:5072, cropped/masked already
+    cafire  <- terra::rast(file.path(ia_dir,  paste0("CAfire_", y, "_masked.tif")))
+    
+    # reproject/resample CAfire to match r_mos geometry 
+    cafire_aligned <- terra::project(cafire, r_mos, method = "bilinear")
+    names(cafire_aligned) <- "CAfire"
+    
+    r_out <- c(r_mos, cafire_aligned)
+    
+    terra::writeRaster(
+      r_out, paste0("covariates_mosaiced_2", y, ".tif"), overwrite = TRUE,
+      wopt = list(gdal = c("COMPRESS=LZW", "ZLEVEL=9")))
+    
+    message("added CAfire to ", paste0("covariates_mosaiced_", y, ".tif"))
+  }
+  
+  invisible(TRUE)
+}
+
+add_cafire_to_mosaics(ia_dir, years)
+
+
+
