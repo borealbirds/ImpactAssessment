@@ -5,12 +5,16 @@
 # ---
 
 library(BAMexploreR)
-library(tidyverse)
 library(terra)
+library(tidyterra)
+library(tidyverse)
+
 
 # set root path
 root <- "G:/Shared drives/BAM_NationalModels5"
 ia_dir <- file.path(root, "data", "Extras", "sandbox_data", "impactassessment_sandbox")
+
+bam_boundary <- terra::vect(file.path(root, "Regions", "BAM_BCR_NationalModel_UnBuffered.shp"))
 
 
 
@@ -61,7 +65,7 @@ backfill_mines_cont <- function(
                                "MODISLCC_5x5","SCANFI_1km","VLCE_1km"),
     soil_cache = NULL,   # pass an env() to reuse across years; if NULL a fresh one is used
     quiet = FALSE
-){
+ ){
   
   if (is.null(soil_cache)) soil_cache <- new.env(parent = emptyenv())
 
@@ -76,8 +80,8 @@ backfill_mines_cont <- function(
  for (nm in cats_present) stack_y[[nm]] <- terra::as.factor(stack_y[[nm]])
     
  # identify and store HF layers
- hf_layers <- intersect(c("CanHF_1km", "CanHF_5x5"), names(stack_y))
- hf_stack <- if (length(hf_layers)) stack_y[[hf_layers]] else NULL
+ # hf_layers <- intersect(c("CanHF_1km", "CanHF_5x5"), names(stack_y))
+ # hf_stack <- if (length(hf_layers)) stack_y[[hf_layers]] else NULL
 
  
  
@@ -106,8 +110,6 @@ backfill_mines_cont <- function(
    assign(geom_key, soil_aligned, envir = soil_cache)
  }
 
-                       
- names(soil_aligned) <- paste0("SOIL_", names(soil_aligned))
  stack_y <- c(stack_y, soil_aligned)          
  message("successfully added soil stack to covariate stack for year ", year)                        
                           
@@ -185,36 +187,45 @@ backfill_mines_cont <- function(
  # set low HF to <1 
  # from Hirsh-Pearson: we found that 82% of Canada’s land areas had a 
  # HF < 1 and therefore were considered intact
- lowHF_mask <- 
+ lowhf_mask <- 
    terra::lapp(stack_y[["CanHF_1km"]],
                            \(v) ifelse(!is.finite(v), NA, ifelse(v < 1, 1, NA))) |> 
    as.factor()
-   
+ 
+ #  per-subbasin lowhf counts 
+ # problem: many subbasins don't have any pixels with HF < 1
+ counts_df <- terra::extract(
+   lowhf_mask,
+   all_subbasins,
+   fun   = function(x) sum(!is.na(x)),  # count non-NA cells
+   ID    = TRUE)
+ 
+ # 
+ mean(counts_df$CanHF_1km); range(counts_df$CanHF_1km)
+
+ all_subbasins$sub_count <- counts_df$CanHF_1km[match(seq_len(nrow(all_subbasins)), counts_df$ID)]
+ 
+ # tag each point with its basin
+ ij <- terra::intersect(as.points(lowhf_mask, na.rm = TRUE), all_subbasins)
+ 
+ # paste counts back onto the SpatVector (by HYBAS_ID)
+ ij$sub_count <- all_subbasins$sub_count[ match(ij$HYBAS_ID, all_subbasins$HYBAS_ID) ]
+ 
+ plot_df <- cbind(terra::crds(ij, df = TRUE), sub_count = ij$sub_count)
  
  # plot (exported at 1000 x 751)
- # ggplot() +
- #   geom_spatraster(data=lowHF_mask) +
- #   geom_spatvector(data=all_subbasins, fill=NA) +
- #   scale_fill_manual(
- #     values = c("1" = "#CC79A7"),   # colour for lowHF pixels
- #     na.value = NA,              # transparent for NA
- #     guide = "none"              # remove legend if you don’t need it
- #   ) +
- #   theme_minimal() +
- #   coord_sf(crs = crs(all_subbasins))
+ ggplot() +
    
- # problem: many subbasins don't have any pixels with HF < 1
- # counts_df <- terra::extract(
- #   lowHF_mask,
- #   all_subbasins,
- #   fun   = function(x) sum(!is.na(x)),  # count non-NA cells
- #   ID    = TRUE
- # )
- # 
- # mean(counts_df$CanHF_1km)
- # # 6169.381
- # 
- # hist(counts_df$CanHF_1km, breaks=100)
+   # points colored by subbasin density
+   geom_point(data = slice_sample(plot_df, prop=0.01), aes(x = x, y = y, colour = sub_count), size = 0.05) +
+   scale_color_gradient(low="#56B4E9", high="#CC79A7") +
+   
+   # BCR and basin outlines
+   geom_spatvector(data = bam_boundary, fill = NA, colour = "grey") +
+   geom_spatvector(data = all_subbasins, fill = NA, color = "grey25", linewidth = 0.3) +
+   
+   coord_sf(crs = crs(all_subbasins)) +
+   theme_minimal()
  
  
  
