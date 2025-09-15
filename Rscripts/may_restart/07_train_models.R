@@ -5,6 +5,7 @@
 # ---
 
 library(BAMexploreR)
+library(spBayes)
 library(terra)
 library(tidyterra)
 library(tidyverse)
@@ -199,33 +200,31 @@ backfill_mines_cont <- function(
    all_subbasins,
    fun   = function(x) sum(!is.na(x)),  # count non-NA cells
    ID    = TRUE)
- 
- # 
  mean(counts_df$CanHF_1km); range(counts_df$CanHF_1km)
 
- all_subbasins$sub_count <- counts_df$CanHF_1km[match(seq_len(nrow(all_subbasins)), counts_df$ID)]
+ # all_subbasins$sub_count <- counts_df$CanHF_1km[match(seq_len(nrow(all_subbasins)), counts_df$ID)]
  
  # tag each point with its basin
- ij <- terra::intersect(as.points(lowhf_mask, na.rm = TRUE), all_subbasins)
+ # ij <- terra::intersect(as.points(lowhf_mask, na.rm = TRUE), all_subbasins)
  
  # paste counts back onto the SpatVector (by HYBAS_ID)
- ij$sub_count <- all_subbasins$sub_count[ match(ij$HYBAS_ID, all_subbasins$HYBAS_ID) ]
+ # ij$sub_count <- all_subbasins$sub_count[ match(ij$HYBAS_ID, all_subbasins$HYBAS_ID) ]
  
- plot_df <- cbind(terra::crds(ij, df = TRUE), sub_count = ij$sub_count)
+ # plot_df <- cbind(terra::crds(ij, df = TRUE), sub_count = ij$sub_count)
  
  # plot (exported at 1000 x 751)
- ggplot() +
+ # ggplot() +
    
    # points colored by subbasin density
-   geom_point(data = slice_sample(plot_df, prop=0.01), aes(x = x, y = y, colour = sub_count), size = 0.05) +
-   scale_color_gradient(low="#56B4E9", high="#CC79A7") +
+   #geom_point(data = slice_sample(plot_df, prop=0.01), aes(x = x, y = y, colour = sub_count), size = 0.05) +
+   #scale_color_gradient(low="#56B4E9", high="#CC79A7") +
    
    # BCR and basin outlines
-   geom_spatvector(data = bam_boundary, fill = NA, colour = "grey") +
-   geom_spatvector(data = all_subbasins, fill = NA, color = "grey25", linewidth = 0.3) +
+   #geom_spatvector(data = bam_boundary, fill = NA, colour = "grey") +
+   #geom_spatvector(data = all_subbasins, fill = NA, color = "grey25", linewidth = 0.3) +
    
-   coord_sf(crs = crs(all_subbasins)) +
-   theme_minimal()
+   #coord_sf(crs = crs(all_subbasins)) +
+   #theme_minimal()
  
  
  
