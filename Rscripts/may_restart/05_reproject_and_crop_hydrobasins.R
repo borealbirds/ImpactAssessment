@@ -71,6 +71,11 @@ urban_polygons <-
   terra::crop(x = urban, y = patches_y) |> 
   terra::as.polygons(x = _, na.rm = TRUE, dissolve = TRUE)
 
+
+
+
+
+
 # convert mine patches to a multi-polygon (one polygon per patch)
 mines_polygons_y <- terra::as.polygons(patches_y, dissolve = TRUE, na.rm = TRUE)
 names(mines_polygons_y) <- "patch_id"

@@ -61,8 +61,13 @@ generate_mine_rasters <- function(mines_df, year) {
     terra::rasterize(mines_vec, template_raster, field = "presence", background = 0, fun = "max") |> 
     terra::crop(x=_, y=bam_boundary) |> 
     terra::mask(x=_, mask=bam_boundary)
+  
+  # remove buffers that overlap with urbanized areas
+  # remove oil and gas buffer pixels that overlap with urban
+  # set oil&gas = 0 wherever urban == 1 (handles NA in urban by leaving oil/gas as-is)
+  mines_no_urban <- mines_rast * ((urban_reproj != 1) | is.na(urban_reproj))
     
-  return(mines_rast)
+  return(mines_no_urban)
 }
 
 
@@ -70,6 +75,29 @@ generate_mine_rasters <- function(mines_df, year) {
 # set CRS to match BAM data, then crop and mask (some mines are far north of BAM data)
 bam_boundary <- terra::vect(file.path(root, "Regions", "BAM_BCR_NationalModel_UnBuffered.shp"))
 template_raster <- terra::rast(file.path(root, "PredictionRasters", "Biomass", "SCANFI", "1km", "SCANFIBalsamFir_1km_2020.tif"))
+
+
+# import Hirsh-Pearson population density layer
+# Creston: 664, Saulte Ste. Marie: 324; Fort Mac 1304
+popden <- terra::rast(file.path(ia_dir, "hirshpearson_population_density.tif"))
+
+# define urban mask (TRUE for >=400 persons/km^2)
+# Stats Can threshold for urbanized is 400: https://www150.statcan.gc.ca/n1/en/catalogue/92-164-X
+# Hirsh-Pearson transformed pop density by: threshold == 3.333 * log10(popden + 1) 
+density_threshold <- 3.333 * log10(400 + 1) 
+urban <- popden >= density_threshold
+urban[urban == 0] <- NA  # keep only TRUE as 1, rest NA
+
+# now that the popden raster is simplified, project
+urban_reproj <- 
+  terra::project(x = urban, y = template_raster, method = "near") |> 
+  terra::crop(x = _, y = bam_boundary) |> 
+  terra::mask(x = _, mask = bam_boundary)
+
+urban_reproj<- terra::ifel(urban_reproj, 1, 0)
+
+
+
 
 
 # generate mines layers for every analysis year
