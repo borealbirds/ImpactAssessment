@@ -64,7 +64,7 @@ generate_mine_rasters <- function(mines_df, year) {
   
   # remove buffers that overlap with urbanized areas
   # remove oil and gas buffer pixels that overlap with urban
-  # set oil&gas = 0 wherever urban == 1 (handles NA in urban by leaving oil/gas as-is)
+  # set oil&gas = 0 wherever urban == 1 (handles NA in urban by leaving mines as-is)
   mines_no_urban <- mines_rast * ((urban_reproj != 1) | is.na(urban_reproj))
     
   return(mines_no_urban)
@@ -95,8 +95,6 @@ urban_reproj <-
   terra::mask(x = _, mask = bam_boundary)
 
 urban_reproj<- terra::ifel(urban_reproj, 1, 0)
-
-
 
 
 

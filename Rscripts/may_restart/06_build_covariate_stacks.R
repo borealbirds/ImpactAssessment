@@ -151,6 +151,31 @@ build_mosaics_by_year <- function(
     }
     r_mos <- if (length(mos_layers) == 1L) mos_layers[[1]] else terra::rast(mos_layers)
     
+    
+    # CAfire: add time-since-disturbance layer for this year ---
+    caf_path <- file.path(ia_dir, paste0("CAfire_", y, "_masked.tif"))
+   
+     if (file.exists(caf_path)) {
+       
+      caf <- terra::rast(caf_path)
+      
+      if (is.na(terra::crs(caf)) || terra::crs(caf) == "") terra::crs(caf) <- target_crs
+      
+      caf_aligned <- terra::project(
+        caf, r_mos, method = "bilinear",
+        filename = tempfile(fileext = ".tif"), overwrite = TRUE
+      )
+      names(caf_aligned) <- "CAfire"
+      
+      if ("CAfire" %in% names(r_mos)) r_mos <- r_mos[[setdiff(names(r_mos), "CAfire")]]
+      r_mos <- c(r_mos, caf_aligned)
+      
+    } else {
+      
+      message("Year ", y, ": CAfire not found at ", caf_path, " (skipping)")
+      
+    }
+    
     # crop and mask to subbasin extent
     r_out <- 
       terra::crop(x = r_mos, y = all_subbasins) |> 
