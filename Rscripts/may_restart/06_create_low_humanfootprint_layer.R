@@ -24,8 +24,10 @@ bam_template <- terra::rast(file.path(root, "PredictionRasters", "Biomass", "SCA
 # import Hirsh-Pearson HF layer
 CanHF_1km <- 
   terra::rast(file.path(root, "CovariateRasters", "Disturbance", "cum_threat2020.02.18.tif")) |> 
-  terra::project(x = _, y = bam_template) |> 
-  terra::resample(x = _, y = bam_template) 
+  terra::project(x = _, y = bam_template) |>
+  terra::resample(x = _, y = bam_template) |> 
+  terra::crop(x = _, y = bam_template) |> 
+  terra::mask(x = _, mask = bam_template)
   
 names(CanHF_1km) <- "CanHF_1km"
 
@@ -35,9 +37,7 @@ names(CanHF_1km) <- "CanHF_1km"
 
 
 # import subbasins multi-polygon
-subbasins <- 
-  terra::vect(file.path(ia_dir, "hydrobasins_masked.gpkg")) |> 
-  crop(x = _, y = bam_boundary, mask = TRUE) 
+all_subbasins <- terra::vect(file.path(ia_dir, "hydrobasins_masked.gpkg"))
 
 
 # set low HF to <1 
@@ -51,17 +51,17 @@ lowhf_mask <-
 # note: many subbasins don't have any pixels with HF < 1
 counts_df <- terra::extract(
   lowhf_mask,
-  subbasins,
+  all_subbasins,
   fun   = function(x) sum(!is.na(x)),  # count non-NA cells
   ID    = TRUE)
 
-sum(counts_df$CanHF_1km) #7,419,966 low HF pixels
-quantile(counts_df$CanHF_1km)
+sum(counts_df$CanHF_1km) #5,552,391 low HF pixels
+quantile(counts_df$CanHF_1km) 
 
 
 
 # ---------------------------------------------------------------
-# OBJECTIVE 3: visualize low HF pixel density per subbasins
+# OBJECTIVE 3: visualize low HF pixel density per subbasin
 
 # assigns a low HF pixel count to each subbasin
 all_subbasins$sub_count <- counts_df$CanHF_1km[match(seq_len(nrow(all_subbasins)), counts_df$ID)]
@@ -76,10 +76,6 @@ ij$sub_count <- all_subbasins$sub_count[ match(ij$HYBAS_ID, all_subbasins$HYBAS_
 # generate dataframe: columns are lat, long (for each point) 
 # and subbasin pixel density for that point
 plot_df <- cbind(terra::crds(ij, df = TRUE), sub_count = ij$sub_count)
-
-# import BCR boundaries for plotting
-bam_boundary <- terra::vect(file.path(root, "Regions", "BAM_BCR_NationalModel_UnBuffered.shp"))
-
 
 # plot (exported at 1000 x 751)
 ggplot() +
@@ -108,11 +104,9 @@ hits <- terra::nearest(centroids(all_subbasins), bam_boundary)
 # assign BCR (always returns one)
 all_subbasins$BCR <- bam_boundary$subUnit[hits$to_id]
 
-# sample size threshold is 25 percentile
+# sample size threshold is 25 percentile (1085 pixels)
 threshold <- quantile(counts_df$CanHF_1km)[2]
 
-thr <- 870L
-n   <- nrow(all_subbasins)
 
 # 1) neighbor matrix (touching polygons)
 nb_mat <- terra::relate(all_subbasins, all_subbasins, relation = "touches")
@@ -120,12 +114,12 @@ nb_mat <- terra::relate(all_subbasins, all_subbasins, relation = "touches")
 # row-wise: indices of touching neighbors
 nb <- apply(nb_mat, 1, function(r) which(r))
 
-merge_id <- seq_len(n)
-taken    <- rep(FALSE, n)
+merge_id <- seq_len(nrow(all_subbasins))
+taken    <- rep(FALSE, nrow(all_subbasins))
 ord      <- order(all_subbasins$sub_count)
 
 for (i in ord) {
-  if (taken[i] || all_subbasins$sub_count[i] >= thr) next
+  if (taken[i] || all_subbasins$sub_count[i] >= threshold) next
   
   b   <- all_subbasins$BCR[i]
   grp <- i
@@ -134,7 +128,7 @@ for (i in ord) {
   fr <- nb[[i]]
   fr <- fr[ all_subbasins$BCR[fr] == b & !taken[fr] & !(fr %in% grp) ]
   
-  while (tot < thr && length(fr) > 0) {
+  while (tot < threshold && length(fr) > 0) {
     j <- fr[ which.min(all_subbasins$sub_count[fr]) ]
     grp <- c(grp, j)
     tot <- tot + all_subbasins$sub_count[j]
@@ -157,10 +151,11 @@ merged_subs <- aggregate(tmp, by = "merge_id", fun = sum)
 
 # 3) reattach BCR from seed members (all members share a BCR)
 bcr_map <- unique(data.frame(merge_id = merge_id, BCR = all_subbasins$BCR))
-merged_subs <- leftJoin(merged_subs, bcr_map, by = "merge_id")
+merged_subs <- left_join(merged_subs, bcr_map, by = "merge_id")
 
 # quick check
-table(merged_subs$sub_count >= thr)
+table(merged_subs$sub_count >= threshold)
+
 # 4) per-subbasin lowhf counts 
 # note: many subbasins don't have any pixels with HF < 1
 counts_df2 <- terra::extract(
@@ -188,9 +183,29 @@ ggplot() +
   coord_sf(crs = crs(merged_subs)) +
   theme_minimal()
 
+# SHOULD BE DONE BY THIS POINT
 
 
 
+
+
+
+# attach counts and flag under-threshold
+merged_subs$lowhf_n   <- counts_df2$CanHF_1km[match(seq_len(nrow(merged_subs)), counts_df2$ID)]
+merged_subs$under_thr <- merged_subs$lowhf_n < threshold
+
+# quick count
+table(merged_subs$under_thr)
+
+# map
+ggplot() +
+  geom_spatvector(data = merged_subs, aes(fill = under_thr), color = "grey30", linewidth = 0.2) +
+  geom_spatvector(data = bam_boundary, fill = NA, color = "black", linewidth = 0.6) +
+  
+  scale_fill_manual(values = c(`TRUE` = "#F8766D", `FALSE` = "white"),
+                    name = paste0("< ", threshold, " low-HF px")) +
+  coord_sf(crs = crs(merged_subs)) +
+  theme_minimal()
 
 
 

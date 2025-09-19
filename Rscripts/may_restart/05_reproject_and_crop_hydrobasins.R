@@ -10,6 +10,8 @@ library(tidyverse)
 root <- "G:/Shared drives/BAM_NationalModels5"
 ia_dir <- file.path(root, "data", "Extras", "sandbox_data", "impactassessment_sandbox")
 
+# import an arbitrary bam template for re-projecting HF layer
+bam_template <- terra::rast(file.path(root, "PredictionRasters", "Biomass", "SCANFI", "1km", "SCANFIBalsamFir_1km_2020.tif"))
 
 bam_boundary <- 
   terra::vect(file.path(root, "Regions", "BAM_BCR_NationalModel_UnBuffered.shp")) |> 
@@ -21,9 +23,16 @@ basins_ar <- terra::vect("data/raw_data/hydrobasins/hybas_ar_lev06_v1c.shp")
 basins <- 
   rbind(basins_na, basins_ar) |>
   terra::project(x = _, y = bam_boundary) |>
-  terra::crop(x = _, y = bam_boundary) |>
-  terra::intersect(x= _, y = bam_boundary)
+  terra::crop(x = _, y = bam_boundary) 
+
+# identify subbasins within bam_template
+# second column is the summary value
+keep <- terra::extract(bam_template, basins,
+                       fun     = function(x) all(!is.na(x)),
+                       touches = TRUE)[ ,2]   # count any intersecting cell
+                       
+basins_subset <- basins[which(keep)]
 
 # save cropped/masked soil carbon and pH data 
-terra::writeVector(basins, file.path(ia_dir, "hydrobasins_masked.gpkg"), overwrite=TRUE)
+terra::writeVector(basins_subset, file.path(ia_dir, "hydrobasins_masked.gpkg"), overwrite=TRUE)
 
