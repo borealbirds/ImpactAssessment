@@ -55,7 +55,7 @@ counts_df <- terra::extract(
   fun   = function(x) sum(!is.na(x)),  # count non-NA cells
   ID    = TRUE)
 
-sum(counts_df$CanHF_1km) #5,552,391 low HF pixels
+sum(counts_df$CanHF_1km) #5,5755,891 low HF pixels
 quantile(counts_df$CanHF_1km) 
 
 
@@ -99,62 +99,18 @@ theme_minimal()
 
 
 # find which BCR(s) a subbasin centroid is nearest to (including inside of)
-hits <- terra::nearest(centroids(all_subbasins), bam_boundary)
+hits <- terra::nearest(centroids(all_subbasins), bam_boundary, centroids = FALSE)
 
 # assign BCR (always returns one)
 all_subbasins$BCR <- bam_boundary$subUnit[hits$to_id]
 
 # sample size threshold is 25 percentile (1085 pixels)
-threshold <- quantile(counts_df$CanHF_1km)[2]
+threshold <- quantile(counts_df$CanHF_1km, probs = 0.25, na.rm = TRUE)
 
 
-# 1) neighbor matrix (touching polygons)
-nb_mat <- terra::relate(all_subbasins, all_subbasins, relation = "touches")
 
-# row-wise: indices of touching neighbors
-nb <- apply(nb_mat, 1, function(r) which(r))
 
-merge_id <- seq_len(nrow(all_subbasins))
-taken    <- rep(FALSE, nrow(all_subbasins))
-ord      <- order(all_subbasins$sub_count)
 
-for (i in ord) {
-  if (taken[i] || all_subbasins$sub_count[i] >= threshold) next
-  
-  b   <- all_subbasins$BCR[i]
-  grp <- i
-  tot <- all_subbasins$sub_count[i]
-  
-  fr <- nb[[i]]
-  fr <- fr[ all_subbasins$BCR[fr] == b & !taken[fr] & !(fr %in% grp) ]
-  
-  while (tot < threshold && length(fr) > 0) {
-    j <- fr[ which.min(all_subbasins$sub_count[fr]) ]
-    grp <- c(grp, j)
-    tot <- tot + all_subbasins$sub_count[j]
-    taken[j] <- TRUE
-    
-    nbj <- nb[[j]]
-    nbj <- nbj[ all_subbasins$BCR[nbj] == b & !taken[nbj] & !(nbj %in% grp) ]
-    fr  <- unique(c(setdiff(fr, j), nbj))
-  }
-  
-  merge_id[grp] <- i
-  taken[grp]    <- TRUE
-}
-
-all_subbasins$merge_id <- merge_id
-
-# 2) dissolve by merge_id; sum numeric fields (drop BCR before summing)
-tmp <- all_subbasins; tmp$BCR <- NULL
-merged_subs <- aggregate(tmp, by = "merge_id", fun = sum)
-
-# 3) reattach BCR from seed members (all members share a BCR)
-bcr_map <- unique(data.frame(merge_id = merge_id, BCR = all_subbasins$BCR))
-merged_subs <- left_join(merged_subs, bcr_map, by = "merge_id")
-
-# quick check
-table(merged_subs$sub_count >= threshold)
 
 # 4) per-subbasin lowhf counts 
 # note: many subbasins don't have any pixels with HF < 1
@@ -164,7 +120,7 @@ counts_df2 <- terra::extract(
   fun   = function(x) sum(!is.na(x)),  # count non-NA cells
   ID    = TRUE)
 
-sum(counts_df2$CanHF_1km) #1,917,452 (same as counts_df)
+sum(counts_df2$CanHF_1km) #5520009 (same as counts_df)
 quantile(counts_df2$CanHF_1km) # range remains 0-29466, but 25 percentile is now 2404
 min(counts_df2$CanHF_1km)
 
@@ -184,29 +140,6 @@ ggplot() +
   theme_minimal()
 
 # SHOULD BE DONE BY THIS POINT
-
-
-
-
-
-
-# attach counts and flag under-threshold
-merged_subs$lowhf_n   <- counts_df2$CanHF_1km[match(seq_len(nrow(merged_subs)), counts_df2$ID)]
-merged_subs$under_thr <- merged_subs$lowhf_n < threshold
-
-# quick count
-table(merged_subs$under_thr)
-
-# map
-ggplot() +
-  geom_spatvector(data = merged_subs, aes(fill = under_thr), color = "grey30", linewidth = 0.2) +
-  geom_spatvector(data = bam_boundary, fill = NA, color = "black", linewidth = 0.6) +
-  
-  scale_fill_manual(values = c(`TRUE` = "#F8766D", `FALSE` = "white"),
-                    name = paste0("< ", threshold, " low-HF px")) +
-  coord_sf(crs = crs(merged_subs)) +
-  theme_minimal()
-
 
 
 
