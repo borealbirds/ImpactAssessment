@@ -37,6 +37,6 @@ keep <- terra::extract(
 basins_subset <- basins[which(keep)]
 plot(basins_subset)
 
-# save cropped/masked soil carbon and pH data 
+# save 
 terra::writeVector(basins_subset, file.path(ia_dir, "hydrobasins_masked.gpkg"), overwrite=TRUE)
 
