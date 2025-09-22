@@ -70,22 +70,10 @@ bam_template <- terra::rast(file.path(root, "PredictionRasters", "Biomass", "SCA
 bam_boundary <- terra::vect(file.path(root, "Regions", "BAM_BCR_NationalModel_UnBuffered.shp"))
 bam_boundary <- bam_boundary[bam_boundary$subUnit != 23, ]
 
-# import Hirsh-Pearson HF layer
-CanHF_1km <- 
-  terra::rast(file.path(root, "CovariateRasters", "Disturbance", "cum_threat2020.02.18.tif")) |> 
-  terra::project(x = _, y = bam_template) |>
-  terra::resample(x = _, y = bam_template) |> 
-  terra::crop(x = _, y = bam_template) |> 
-  terra::mask(x = _, mask = bam_template)
-
-names(CanHF_1km) <- "CanHF_1km"
-
-# set low HF to <1 
+# import low HF raster
 # from Hirsh-Pearson: "we found that 82% of Canada’s land areas had a 
 # HF < 1 and therefore were considered intact"
-lowhf_mask <- 
-  terra::lapp(CanHF_1km, \(x) ifelse(!is.finite(x), NA, ifelse(x < 1, 1, NA))) |> 
-  as.factor()
+lowhf_mask <- terra::rast(file.path(ia_dir, "CanHF_1km_lessthan1.tif"))
 
 counts_df <- 
   terra::extract(lowhf_mask, all_subbasins_subset, fun=function(x) sum(!is.na(x)), ID=TRUE) |> 
@@ -93,8 +81,8 @@ counts_df <-
   dplyr::arrange(CanHF_1km)
 
 quantile(counts_df$CanHF_1km) 
-# 0%     25%     50%     75%    100% 
-# 905.0  2518.5  4318.0  8654.0 26261.0 
+# 0%      25%      50%      75%     100% 
+# 916.00  2507.25  4254.00  8737.00 25882.00 
 
 # assign a low HF pixel count to each subbasin
 all_subbasins_subset$sub_count <- counts_df$CanHF_1km[match(seq_len(nrow(all_subbasins_subset)), counts_df$ID)]

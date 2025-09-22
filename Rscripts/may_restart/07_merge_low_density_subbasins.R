@@ -24,7 +24,7 @@ bam_boundary <- bam_boundary[bam_boundary$subUnit != 23, ]
 # ---------------------------------------------------------------
 # OBJECTIVE 1: identify subbasins with zero or few low HF pixels,
 
-# import low HF rater
+# import low HF raster
 lowhf_mask <- terra::rast(file.path(ia_dir, "CanHF_1km_lessthan1.tif"))
 
 # import subbasins multi-polygon
@@ -40,11 +40,10 @@ counts_df <-
   dplyr::arrange(CanHF_1km)
   
 
-sum(counts_df$CanHF_1km) #5,755,891 low HF pixels
+sum(counts_df$CanHF_1km) #5,719,097 low HF pixels
 quantile(counts_df$CanHF_1km) 
-# quantile(counts_df$CanHF_1km) 
-# 0%   25%   50%   75%  100% 
-# 0   899  2964  6740 29787 
+# 0%     25%     50%     75%    100% 
+# 0.0   879.5  2917.0  6695.0 29787.0 
 
 
 
@@ -195,11 +194,12 @@ counts_df2 <-
   dplyr::arrange(CanHF_1km)
 
 # per-subbasin lowhf counts 
-sum(counts_df2$CanHF_1km) #5755891 (same as counts_df)
+sum(counts_df2$CanHF_1km) #5,719,097 (same as counts_df)
 
-# range now 30102 (from 902-30102), but 25 percentile is now 2468 (from 899)
+
 quantile(counts_df2$CanHF_1km) 
-
+# 0%      25%      50%      75%     100% 
+# 882.00  2465.25  4347.00  8413.75 30102.00 
 
 # ---------------------------------------------------------------
 # OBJECTIVE 4: visualize merged subbasins

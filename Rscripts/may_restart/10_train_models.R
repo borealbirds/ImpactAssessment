@@ -1,5 +1,5 @@
 # ---
-# title: Impact Assessment: train models on watersheds surrounding mines
+# title: Impact Assessment: train models per subbasin
 # author: Mannfred Boehm
 # created: May 7, 2025
 # ---
@@ -20,7 +20,8 @@ bam_boundary <- terra::vect(file.path(root, "Regions", "BAM_BCR_NationalModel_Un
 
 
 
-# ----------------------------------------
+# PART I: import data ----------------------------------------
+
 # define predictor and response variables
 # store predictor metadata as a reference
 predictor_metadata <-
@@ -56,19 +57,28 @@ biotic_vars <-
   dplyr::bind_rows(actually_biotic_df)
   
 
+# import industry-subbasin multi-polygon
+all_subbasins_subset <- vect(file.path(ia_dir, "hydrobasins_masked_merged_subset.gpkg"))
+
+# import low HF raster
+lowhf_mask <- terra::rast(file.path(ia_dir, "CanHF_1km_lessthan1.tif"))
 
 
-# -------------------------------------
+
+# PART II: build training function ----------------------------------------
 # train models per subbasin per year
+
+# soil_cache: pass an env() to reuse across years; if NULL a fresh one is used
 backfill_mines_cont <- function(
     year,
+    all_subbasins_subset = all_subbasins_subset,
+    lowhf_mask = lowhf_mask,
     categorical_predictors = c("ABoVE_1km", "NLCD_1km","MODISLCC_1km",
                                "MODISLCC_5x5","SCANFI_1km","VLCE_1km"),
-    soil_cache = NULL,   # pass an env() to reuse across years; if NULL a fresh one is used
-    quiet = FALSE
- ){
+    soil_cache = NULL,   
+    quiet = FALSE){
   
-  if (is.null(soil_cache)) soil_cache <- new.env(parent = emptyenv())
+ if (is.null(soil_cache)) soil_cache <- new.env(parent = emptyenv())
 
   
  ###
@@ -111,78 +121,89 @@ backfill_mines_cont <- function(
                           
                           
  ###
- # import industry footprints and build polygons/patches
+ # train models per subbasin
  ###
-    
- mines_y <- terra::rast(file.path(ia_dir, sprintf("mincan_mines_%d_masked.tif", year)))
- message("successfully imported mines for year ", year)
-    
- # ensure mines are in same CRS/grid as covariates (use nearest since it's categorical)
- if (!terra::compareGeom(mines_y, stack_y, stopOnError = FALSE)) {
-      mines_y <- terra::project(mines_y, stack_y, method = "near")
-    }
-    
- # generate mine patches (rook’s case) and convert to polygons
- patches_y <- terra::patches(mines_y, directions = 4, zeroAsNA = TRUE)
- mines_polygons_y <- terra::as.polygons(patches_y, dissolve = TRUE, na.rm = TRUE)
- names(mines_polygons_y) <- "patch_id"
-    
-    
- ###
- # rasterize polygon footprint onto the covariate grid to build a reusable mask
- ###
-    
- # mine_mask: 1 where mine exists, NA elsewhere (aligns to stack_y grid)
- mine_mask <- terra::rasterize(mines_polygons_y, stack_y[[1]], field = 1, background = NA_real_)
- message("successfully generated mine_mask for year ", year)
+ 
+ # for each subbasin s:
+ # 1.crop/mask the covariate stack to subbasin s
+ # 2. apply the low HF mask
+ # 3.extract training data as a data.frame (covariates as predictors, biotic layer as response)
+ # 4.train a model
+ 
+ train_subbasin_s <- function(subbasin_index, year, stack_y, lowhf_mask, abiotic_vars, biotic_vars) {
+   
+   # store subbasin s
+   subbasin_s <- all_subbasins_subset[subbasin_index]
+   
+   # crop/mask to subbasin, then apply low-HF mask (keep cells == 1)
+   cov_s <- 
+     stack_y |>
+     terra::crop(x = _, y = subbasin_s) |> 
+     terra::mask(x = _, mask = subbasin_s) |>
+     terra::mask(x = _, mask = lowhf_mask)
+   
+   # generate df once; pick predictors/response inside the loop
+   df <- 
+     terra::as.data.frame(cov_s, na.rm = TRUE, xy=TRUE) |> 
+     dplyr::as_tibble() |> 
+     dplyr::rename(easting=x, northing=y) |> 
+     dplyr::mutate(
+       easting  = as.numeric(scale(easting)),
+       northing = as.numeric(scale(northing))
+     )
+   
+   # define predictors and responses
+   abiotic_cols <- intersect(names(df), abiotic_vars$predictor)
+   biotic_cols <- intersect(names(df), biotic_vars$predictor)
+ 
+   # set out directory for current year
+   out_dir <- file.path(ia_dir, "models",
+                        sprintf("year=%d", year),
+                        sprintf("subbasin=%s", subbasin_index))
+   
+   dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+   
+   # fit a model for every biotic feature
+   for (b in biotic_cols) {
+     
+     # response
+     y <- as.numeric(df[[b]])
+     
+     # predictors (abiotic + coords, already scaled in df)
+     X <- dplyr::select(df, dplyr::all_of(abiotic_cols), easting, northing)
+     
+     # drop rows with any missing values
+     dat <- 
+       dplyr::as_tibble(cbind(y = y, X)) |>
+       dplyr::filter(stats::complete.cases(.))
+     
+     # build design matrix (one-hot encode factors, drop intercept)
+     Xmm <- stats::model.matrix(~ ., data = dplyr::select(dat, -y))[, -1, drop = FALSE]
+     
+     # fit BART
+     fit <- dbarts::bart(
+       x.train   = Xmm,
+       y.train   = dat$y,
+       keeptrees = TRUE,
+       verbose   = FALSE
+     )
+     
+     saveRDS(fit, file.path(out_dir, sprintf("model_%s.rds", b)))
+   } # close for loop
   
- # non_mine_mask: 1 for valid training cells (non-mine), NA for mine cells
- non_mine_mask <- terra::ifel(is.na(mine_mask), 1, NA) * (!is.na(stack_y[[1]]))
- message("successfully generated non_mine_mask for year ", year)
-    
- 
- 
- ###
- # train models per mining patch
- ###
- 
- # for each patch:
- # 1.identify the subbasin polygon the patch falls into (using hydrobasins_subset_2020.gpkg)
- # 2.crop/mask the covariate stack to that subbasin.
- # 3.apply both: non_mine_mask (exclude mine footprint) and # 
- #            "low HF mask"(i.e. keep pixels where CanHF_1km <= threshold). # 
- # 4.extract training data as a data.frame (covariates as predictors, biotic layer as response).
- #  # 5.train a model
- 
-
-
- 
- # map each mine patch to a subbasin ID
- all_subbasins <- terra::vect(file.path(ia_dir, "hydrobasins_subset_2020.gpkg"))
- 
- # centroids preserve row order, so they align with mines_polygons_y
- mine_cent <- terra::centroids(mines_polygons_y)
- if (!terra::same.crs(mine_cent, all_subbasins)) {
-   mine_cent <- terra::project(mine_cent, all_subbasins)
- }
- 
- # 2) logical matrix: rows = patches, cols = subbasins
- hits <- terra::relate(mine_cent, all_subbasins, relation = "within")
- 
- # 3) map each patch to ONE subbasin (first TRUE per row), NA if none
- has_hit <- rowSums(hits) > 0
- sb_id <- rep(NA_integer_, nrow(hits))
- sb_id[has_hit] <- max.col(hits[has_hit, , drop = FALSE], ties.method = "first")
- 
- # 4) tidy map (lengths match by construction)
- map_df <- data.frame(patch_id = mines_polygons_y$patch_id, sb_id = sb_id)
- 
- #unique subbasins to train
- sb_ids <- sort(unique(map_df$sb_id))
- 
- 
- 
-}
+ } # close train_subbasin_s()
+   
+# run over all subbasins
+invisible(lapply(
+     X = seq_len(nrow(all_subbasins_subset)),
+     FUN = train_subbasin_s,
+     year        = year,
+     stack_y     = stack_y,
+     lowhf_mask  = lowhf_mask,
+     abiotic_vars= abiotic_vars,
+     biotic_vars = biotic_vars))
+   
+} # close function
 
 
 
