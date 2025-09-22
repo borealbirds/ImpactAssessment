@@ -22,33 +22,10 @@ bam_boundary <- bam_boundary[bam_boundary$subUnit != 23, ]
 
 
 # ---------------------------------------------------------------
-# OBJECTIVE 1: create low HF raster to count low HF pixels per subbasin
+# OBJECTIVE 1: identify subbasins with zero or few low HF pixels,
 
-
-
-# import Hirsh-Pearson HF layer
-CanHF_1km <- 
-  terra::rast(file.path(root, "CovariateRasters", "Disturbance", "cum_threat2020.02.18.tif")) |> 
-  terra::project(x = _, y = bam_template) |>
-  terra::resample(x = _, y = bam_template) |> 
-  terra::crop(x = _, y = bam_template) |> 
-  terra::mask(x = _, mask = bam_template)
-  
-names(CanHF_1km) <- "CanHF_1km"
-
-
-# set low HF to <1 
-# from Hirsh-Pearson: "we found that 82% of Canada’s land areas had a 
-# HF < 1 and therefore were considered intact"
-lowhf_mask <- 
-  terra::lapp(CanHF_1km, \(x) ifelse(!is.finite(x), NA, ifelse(x < 1, 1, NA))) |> 
-  as.factor()
-
-
-
-# ---------------------------------------------------------------
-# OBJECTIVE 2: identify subbasins with zero or few low HF pixels,
-
+# import low HF rater
+lowhf_mask <- terra::rast(file.path(ia_dir, "CanHF_1km_lessthan1.tif"))
 
 # import subbasins multi-polygon
 all_subbasins <- terra::vect(file.path(ia_dir, "hydrobasins_masked.gpkg"))
@@ -72,7 +49,7 @@ quantile(counts_df$CanHF_1km)
 
 
 # ---------------------------------------------------------------
-# OBJECTIVE 3: visualize low HF pixel density per subbasin
+# OBJECTIVE 2: visualize low HF pixel density per subbasin
 
 # assign a low HF pixel count to each subbasin
 all_subbasins$sub_count <- counts_df$CanHF_1km[match(seq_len(nrow(all_subbasins)), counts_df$ID)]
@@ -105,7 +82,7 @@ theme_minimal()
 
 
 # ---------------------------------------------------------------
-# OBJECTIVE 4: merge low pixel density subbasins with 
+# OBJECTIVE 3: merge low pixel density subbasins with 
 # nearest subbasins, but only if they're in the same BCR
 
 threshold <- quantile(counts_df$CanHF_1km, probs = 0.25, na.rm = TRUE)
@@ -225,7 +202,7 @@ quantile(counts_df2$CanHF_1km)
 
 
 # ---------------------------------------------------------------
-# OBJECTIVE 5: visualize merged subbasins
+# OBJECTIVE 4: visualize merged subbasins
 
 # dissolve to merged units
 all_subbasins_merged <- terra::aggregate(

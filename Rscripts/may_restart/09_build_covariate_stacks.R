@@ -12,11 +12,11 @@ library(terra)
 root <- "G:/Shared drives/BAM_NationalModels5"
 ia_dir <- file.path(root, "data", "Extras", "sandbox_data", "impactassessment_sandbox")
 
-# import 2020 subbasin multi-polygon (all other years are a subset of this area)
-all_subbasins <- vect(file.path(ia_dir, "hydrobasins_subset_2020.gpkg"))
+# import industry-subbasin multi-polygon
+all_subbasins_subset <- vect(file.path(ia_dir, "hydrobasins_masked_merged_subset.gpkg"))
 
 # identify BCRs needed for mosaicing (19 BCRs)
-bcrs_needed <- BAMexploreR::bam_get_bcr(version = "v5", ext = all_subbasins)
+bcrs_needed <- BAMexploreR::bam_get_bcr(version = "v5", ext = all_subbasins_subset)
   
 # define temporal scope
 years <- seq(from = 1990, to = 2020, by = 5)
@@ -28,7 +28,7 @@ years <- seq(from = 1990, to = 2020, by = 5)
 build_mosaics_by_year <- function(
     root,
     years,
-    all_subbasins,
+    all_subbasins_subset,
     bcrs_needed = bcrs_needed,
     categorical_predictors = c("ABoVE_1km","method","NLCD_1km","MODISLCC_1km",
                                "MODISLCC_5x5","SCANFI_1km","VLCE_1km"),
@@ -39,7 +39,7 @@ build_mosaics_by_year <- function(
   # define output directory and file names
   dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
   out_files <- setNames(vector("list", length(years)), as.character(years))
-  target_crs <- terra::crs(all_subbasins)
+  target_crs <- terra::crs(all_subbasins_subset)
   
   # for every year, find all BCR stacks
   for (y in years) {
@@ -56,10 +56,10 @@ build_mosaics_by_year <- function(
       # guard tiles with missing crs
       if (is.na(terra::crs(r)) || terra::crs(r) == "") terra::crs(r) <- target_crs
       
-      # project the bounding box of the all_subbasins (fast)
+      # project the bounding box of the all_subbasins_subset (fast)
       # then crop the current stack (less memory downstream)
       subb_local_ext <- terra::project(
-        terra::ext(all_subbasins),
+        terra::ext(all_subbasins_subset),
         from = target_crs,
         to   = terra::crs(r)
       )
@@ -178,8 +178,8 @@ build_mosaics_by_year <- function(
     
     # crop and mask to subbasin extent
     r_out <- 
-      terra::crop(x = r_mos, y = all_subbasins) |> 
-      terra::mask(x = _, mask = all_subbasins)
+      terra::crop(x = r_mos, y = all_subbasins_subset) |> 
+      terra::mask(x = _, mask = all_subbasins_subset)
     
     # write out
     out_path <- file.path(outdir, paste0("covariates_mosaiced_", y, ".tif"))
@@ -196,40 +196,5 @@ build_mosaics_by_year <- function(
 build_mosaics_by_year(root, 
                       years = years,
                       bcrs_needed = bcrs_needed, 
-                      all_subbasins = all_subbasins)
-
-
-
-
-
-
-# add CAfire to mosaiced stacks
-years <- seq(1990, 2020, by=5)
-
-add_cafire_to_mosaics <- function(ia_dir, years){
-  
-  for (y in years) {
-    
-    r_mos   <- terra::rast(file.path(ia_dir,  paste0("covariates_mosaiced_", y, ".tif")))           # EPSG:5072, cropped/masked already
-    cafire  <- terra::rast(file.path(ia_dir,  paste0("CAfire_", y, "_masked.tif")))
-    
-    # reproject/resample CAfire to match r_mos geometry 
-    cafire_aligned <- terra::project(cafire, r_mos, method = "bilinear")
-    names(cafire_aligned) <- "CAfire"
-    
-    r_out <- c(r_mos, cafire_aligned)
-    
-    terra::writeRaster(
-      r_out, paste0("covariates_mosaiced_", y, ".tif"), overwrite = TRUE,
-      wopt = list(gdal = c("COMPRESS=LZW", "ZLEVEL=9")))
-    
-    message("added CAfire to ", paste0("covariates_mosaiced_", y, ".tif"))
-  }
-  
-  invisible(TRUE)
-}
-
-add_cafire_to_mosaics(ia_dir, years)
-
-
+                      all_subbasins_subset = all_subbasins_subset)
 
