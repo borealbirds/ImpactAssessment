@@ -69,6 +69,7 @@ lowhf_mask <- terra::rast(file.path(ia_dir, "CanHF_1km_lessthan1.tif"))
 # train models per subbasin per year
 
 # soil_cache: pass an env() to reuse across years; if NULL a fresh one is used
+mirai::daemons(3)
 backfill_mines_cont <- function(
     year,
     all_subbasins_subset = all_subbasins_subset,
@@ -130,6 +131,7 @@ backfill_mines_cont <- function(
  # 3.extract training data as a data.frame (covariates as predictors, biotic layer as response)
  # 4.train a model
  
+ 
  train_subbasin_s <- function(subbasin_index, year, stack_y, lowhf_mask, abiotic_vars, biotic_vars) {
    
    # store subbasin s
@@ -163,9 +165,10 @@ backfill_mines_cont <- function(
    
    dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
    
-   # fit a model for every biotic feature
-   for (b in biotic_cols) {
-     
+   
+   # parallelize model fitting within subbasin_s
+   purrr::map(.x = biotic_cols, .f = purrr::in_parallel(\(b, df, abiotic_cols, out_dir) {
+   
      # response
      y <- as.numeric(df[[b]])
      
@@ -181,30 +184,31 @@ backfill_mines_cont <- function(
      Xmm <- stats::model.matrix(~ ., data = dplyr::select(dat, -y))[, -1, drop = FALSE]
      
      # fit BART
-     fit <- dbarts::bart(
-       x.train   = Xmm,
-       y.train   = dat$y,
-       keeptrees = TRUE,
-       verbose   = FALSE
-     )
+     fit <- dbarts::bart(x.train = Xmm, y.train = dat$y, keeptrees = TRUE, verbose = TRUE)
      
      saveRDS(fit, file.path(out_dir, sprintf("model_%s.rds", b)))
-   } # close for loop
+     invisible(TRUE)
   
- } # close train_subbasin_s()
+     }, # close purrr::map anonymous function
+     df = df, abiotic_cols = abiotic_cols, out_dir = out_dir)
+    
+  ) # close purrr::map
    
-# run over all subbasins
-invisible(lapply(
-     X = seq_len(nrow(all_subbasins_subset)),
-     FUN = train_subbasin_s,
-     year        = year,
-     stack_y     = stack_y,
-     lowhf_mask  = lowhf_mask,
-     abiotic_vars= abiotic_vars,
-     biotic_vars = biotic_vars))
-   
-} # close function
+   invisible(TRUE)
+  } # close train_subbasins_s() function
+ 
+ # apply model fitting over all subbasins
+ invisible(lapply(
+   X = seq_len(nrow(all_subbasins_subset)),
+   FUN = train_subbasin_s,
+   year = year, stack_y = stack_y, lowhf_mask = lowhf_mask,
+   abiotic_vars = abiotic_vars, biotic_vars = biotic_vars
+ ))
+ 
+} # close backfill_mines_cont() function
 
 
 
+# after all training is done:
+mirai::daemons(0)
 
