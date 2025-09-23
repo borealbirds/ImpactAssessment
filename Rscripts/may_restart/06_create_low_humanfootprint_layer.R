@@ -43,7 +43,11 @@ combined_rast <-
 test <- terra::intersect(combined_rast, lowhf_mask)
 
 # remove overlapping pixels
-lowhf_mask <- terra::mask(lowhf_mask, combined_rast, maskvalues = 1, updatevalue = NA)
+lowhf_mask <- 
+  terra::mask(lowhf_mask, combined_rast, maskvalues = 1, updatevalue = NA) |> 
+  terra::project(x = _, y = bam_template, method = "near") 
+
+names(lowhf_mask) <- "CanHF_1km"
 
 terra::writeRaster(lowhf_mask, file.path(ia_dir, "CanHF_1km_lessthan1.tif"), overwrite = TRUE)
 

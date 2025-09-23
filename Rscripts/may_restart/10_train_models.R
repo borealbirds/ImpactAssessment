@@ -5,10 +5,10 @@
 # ---
 
 library(BAMexploreR)
-library(spBayes)
 library(terra)
 library(tidyterra)
 library(tidyverse)
+library(xgboost)
 
 
 # set root path
@@ -55,13 +55,16 @@ biotic_vars <-
   predictor_metadata |> 
   dplyr::filter(!(predictor_class %in% c(abiotic_vars$predictor_class, "Time", "Method"))) |> 
   dplyr::bind_rows(actually_biotic_df)
-  
+
+# re-order biotic predictors 
+neworder <- readRDS(file = file.path(ia_dir, "biotic_variable_hierarchy.rds"))
+biotic_vars <- biotic_vars[match(neworder, biotic_vars$predictor), ]
 
 # import industry-subbasin multi-polygon
 all_subbasins_subset <- vect(file.path(ia_dir, "hydrobasins_masked_merged_subset.gpkg"))
 
 # import low HF raster
-lowhf_mask <- terra::rast(file.path(ia_dir, "CanHF_1km_lessthan1.tif"))
+lowhf_mask <- terra::rast(file.path(ia_dir, "CanHF_1km_lessthan1.tif")) 
 
 
 
@@ -73,8 +76,7 @@ mirai::daemons(3)
 backfill_mines_cont <- function(
     year,
     all_subbasins_subset = all_subbasins_subset,
-    lowhf_mask = lowhf_mask,
-    categorical_predictors = c("ABoVE_1km", "NLCD_1km","MODISLCC_1km",
+    categorical_responses = c("ABoVE_1km", "NLCD_1km","MODISLCC_1km",
                                "MODISLCC_5x5","SCANFI_1km","VLCE_1km"),
     soil_cache = NULL,   
     quiet = FALSE){
@@ -82,20 +84,20 @@ backfill_mines_cont <- function(
  if (is.null(soil_cache)) soil_cache <- new.env(parent = emptyenv())
 
   
- ###
  # load pre-mosaiced covariate stack for year_y
- ###
  stack_y <- terra::rast(file.path(ia_dir, sprintf("covariates_mosaiced_%d.tif", year)))
-    
+ 
+ # load low hf raster
+ lowhf_mask <- 
+   terra::rast(file.path(ia_dir, "CanHF_1km_lessthan1.tif")) |> 
+   terra::project(x=_,  y=stack_y, method = "near")
+ 
  # ensure categoricals are factors
- cats_present <- intersect(categorical_predictors, names(stack_y))
+ cats_present <- intersect(categorical_responses, names(stack_y))
  for (nm in cats_present) stack_y[[nm]] <- terra::as.factor(stack_y[[nm]])
-    
+ message("cateogrical variables converted to factors")
  
- ###
  # import soils stack and add to covariate stack
- ###
- 
  soil_src  <- terra::rast(file.path(ia_dir, "isric_soil_covariates_masked.tif"))
  
  # identifies the geometry of the current year’s covariate stack
@@ -132,21 +134,31 @@ backfill_mines_cont <- function(
  # 4.train a model
  
  
- train_subbasin_s <- function(subbasin_index, year, stack_y, lowhf_mask, abiotic_vars, biotic_vars) {
+ train_subbasin_s <- function(
+    subbasin_index, 
+    year, stack_y, 
+    lowhf_mask, 
+    abiotic_vars = abiotic_vars, 
+    biotic_vars  = biotic_vars) {
    
-   # store subbasin s
+   # isolate subbasin s
    subbasin_s <- all_subbasins_subset[subbasin_index]
    
-   # crop/mask to subbasin, then apply low-HF mask (keep cells == 1)
+   # crop covariate stack to subbasin
    cov_s <- 
      stack_y |>
-     terra::crop(x = _, y = subbasin_s) |> 
-     terra::mask(x = _, mask = subbasin_s) |>
-     terra::mask(x = _, mask = lowhf_mask)
+     terra::crop(x = _, y = subbasin_s) |>
+     terra::mask(x = _, mask = subbasin_s)
    
-   # generate df once; pick predictors/response inside the loop
+   # make low-HF match cov_s extent 
+   lowhf_mask_s <- terra::crop(lowhf_mask, cov_s, snap = "near")
+   
+   # select pixels in covariate stack with low hf
+   cov_s <- terra::mask(x = cov_s, mask = lowhf_mask_s)
+   
+   # generate df from covariate stack
    df <- 
-     terra::as.data.frame(cov_s, na.rm = TRUE, xy=TRUE) |> 
+     terra::as.data.frame(cov_s, xy=TRUE) |> 
      dplyr::as_tibble() |> 
      dplyr::rename(easting=x, northing=y) |> 
      dplyr::mutate(
@@ -157,9 +169,10 @@ backfill_mines_cont <- function(
    # define predictors and responses
    abiotic_cols <- intersect(names(df), abiotic_vars$predictor)
    biotic_cols <- intersect(names(df), biotic_vars$predictor)
- 
+   biotic_cols <- na.omit(biotic_cols[match(neworder, biotic_cols)])
+   
    # set out directory for current year
-   out_dir <- file.path(ia_dir, "models",
+   out_dir <- file.path(ia_dir, "xgboost_models",
                         sprintf("year=%d", year),
                         sprintf("subbasin=%s", subbasin_index))
    
@@ -169,34 +182,34 @@ backfill_mines_cont <- function(
    # parallelize model fitting within subbasin_s
    purrr::map(.x = biotic_cols, .f = purrr::in_parallel(\(b, df, abiotic_cols, out_dir) {
    
-     # response
-     y <- as.numeric(df[[b]])
+     # 1) keep only rows where the RESPONSE is observed
+     idx <- which(!is.na(df[[b]]))
+     
+     # log transform the response to prevent negative values in predictions
+     y <- log(as.numeric(df[[b]][idx]) + 1)
      
      # predictors (abiotic + coords, already scaled in df)
-     X <- dplyr::select(df, dplyr::all_of(abiotic_cols), easting, northing)
+     X <- dplyr::select(df[idx,], dplyr::all_of(abiotic_cols), easting, northing)
+     X <- X[, colSums(!is.na(X)) > 0, drop = FALSE] # drop columns with all NAs
      
-     # drop rows with any missing values
-     dat <- 
-       dplyr::as_tibble(cbind(y = y, X)) |>
-       dplyr::filter(stats::complete.cases(.))
+     # create DMatrix from low HF landscape
+     dtrain_b <- xgboost::xgb.DMatrix(data = as.matrix(X), label = y, missing = NA)
+     params_b <- xgboost::xgb.params(objective = "reg:squarederror", eval_metric = "rmse", max_depth = 3, eta = 0.2)
      
-     # build design matrix (one-hot encode factors, drop intercept)
-     Xmm <- stats::model.matrix(~ ., data = dplyr::select(dat, -y))[, -1, drop = FALSE]
+     # the `test_rmse_mean` metrics in $evaluation_log represent the average performance 
+     # on the 20% holdout in each of the 5 folds
+     cv_b <-xgboost::xgb.cv(params = params_b, data = dtrain_b, nrounds=5000, nfold=5, early_stopping_rounds = 50, verbose=FALSE)
      
-     # fit BART
-     fit <- dbarts::bart(x.train = Xmm, y.train = dat$y, keeptrees = TRUE, verbose = TRUE)
+     #save model info
+     backfill_datalog[[b]] <- cv_b
      
-     saveRDS(fit, file.path(out_dir, sprintf("model_%s.rds", b)))
-     invisible(TRUE)
-  
-     }, # close purrr::map anonymous function
-     df = df, abiotic_cols = abiotic_cols, out_dir = out_dir)
-    
-  ) # close purrr::map
-   
-   invisible(TRUE)
-  } # close train_subbasins_s() function
- 
+     # fit model
+     model_b <- xgboost::xgb.train(params = params_b, data = dtrain_b, nrounds = cv_b$early_stop$best_iteration, verbose = 0)
+     
+     # use model to predict biotic feature[i] at "high" HF areas (i.e. backfilling)
+     # also, inverse log the predictions to convert back to original scale
+     predictions_i <- exp(predict(model_i, newdata = CanHF_1km_present[,predictor_vars])) - 1 
+     
  # apply model fitting over all subbasins
  invisible(lapply(
    X = seq_len(nrow(all_subbasins_subset)),
