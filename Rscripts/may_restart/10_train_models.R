@@ -89,7 +89,7 @@ b<-biotic_cols[1]
 # train models per subbasin per year
 # soil_cache: pass an env() to reuse across years; if NULL a fresh one is used
 mirai::daemons(3)
-backfill_mines_cont <- function(
+train_and_backfill_per_year <- function(
     year,
     all_subbasins_subset = all_subbasins_subset,
     categorical_responses = c("ABoVE_1km", "NLCD_1km","MODISLCC_1km",
@@ -138,6 +138,7 @@ backfill_mines_cont <- function(
  # project low hf layer
  lowhf_mask <- terra::project(x=lowhf_mask, y=stack_y, method = "near")
  
+ 
  ###
  # train models per subbasin
  ###
@@ -146,7 +147,7 @@ backfill_mines_cont <- function(
  # 3. extract training data as a data.frame (covariates as predictors, biotic layer as response)
  # 4.train a model
  
- train_subbasin_s <- function(
+ train_and_backfill_subbasin_s <- function(
     subbasin_index, 
     year, stack_y, 
     lowhf_mask, 
@@ -182,6 +183,23 @@ backfill_mines_cont <- function(
    biotic_cols <- intersect(names(df_train), biotic_vars$predictor)
    biotic_cols <- na.omit(biotic_cols[match(neworder, biotic_cols)])
    
+   # for backfilling: find industry pixels in subbasin_s and rasterize onto cov_s grid
+   industry_s <- terra::crop(combined_poly, subbasin_s)
+   industry_mask_s <- terra::rasterize(industry_s, cov_s[[1]], field = 1, background = NA, touches = TRUE)     
+   
+   # pixel indices to backfill
+   backfill_idx <- which(!is.na(terra::values(industry_mask_s)))
+   
+   # update this dataframe following the order of `neworder`
+   df_backfill <- 
+     terra::as.data.frame(cov_s, xy = TRUE, na.rm = FALSE) |>
+     dplyr::as_tibble() |>
+     dplyr::rename(easting = x, northing = y) |>
+     dplyr::mutate(
+       easting  = as.numeric(scale(easting)),
+       northing = as.numeric(scale(northing))) |> 
+     dplyr::slice(backfill_idx)
+   
    # set output directory for current year
    out_dir <- file.path(ia_dir, "xgboost_models",
                         sprintf("year=%d", year),
@@ -190,9 +208,10 @@ backfill_mines_cont <- function(
    dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
    
    # parallelize model fitting per biotic feature within subbasin_s
+   # this function also backfills 
    purrr::map(.x = biotic_cols, .f = purrr::in_parallel(\(b, df_train, abiotic_cols, out_dir, categorical_responses){
    
-     # check if continuous or categorical
+     # train: check if continuous or categorical
      if (!(b %in% categorical_responses)){
          
        # keep only the rows where the response is observed
@@ -216,8 +235,6 @@ backfill_mines_cont <- function(
        # fit model
        model_b <- xgboost::xgb.train(params = params_b, data = dtrain_b, nrounds = cv_b$early_stop$best_iteration, verbose = 0)
        
-       # save model
-       saveRDS(list(model = model_b, cv_log = cv_b$evaluation_log), file.path(out_dir, sprintf("model_%s_xgb.rds", b)))
        
      } else { # if b is categorical, use the following protocol
        
@@ -235,51 +252,43 @@ backfill_mines_cont <- function(
        X <- X[, colSums(!is.na(X)) > 0, drop = FALSE]
       
        dtrain_b <- xgboost::xgb.DMatrix(data = X, label = y, missing = NA)
-       params_b <- xgboost::xgb.params(objective = "multi:softprob", eval_metric = "mlogloss", max_depth = 3, eta = 0.2, num_class = K)
+       params_b <- xgboost::xgb.params(objective = "multi:softmax", eval_metric = "mlogloss", max_depth = 3, eta = 0.2, num_class = K)
        cv_b <-xgboost::xgb.cv(params = params_b, data = dtrain_b, nrounds=5000, nfold=5, early_stopping_rounds = 50, verbose=FALSE)
        model_b <- xgboost::xgb.train(params = params_b, data = dtrain_b, nrounds = cv_b$early_stop$best_iteration, verbose = 0)
        
-       saveRDS(list(model = model_b, cv_log = cv_b$evaluation_log), file.path(out_dir, sprintf("model_%s_xgb.rds", b)))
-       
       } # close if/else (continuous vs categorical training)
-    } # close training function inside of in_parallel
+     
+     # backfill biotic feature b in subbasin_s:
+     
+     # use model_b to predict biotic feature[b] in industry pixels
+     # also, inverse log the predictions to convert back to original scale
+     
+     # predictors for backfilling (abiotic + coords, optionally + already backfilled biotic predictors)
+     X_backfill <- dplyr::select(df_backfill, dplyr::all_of(abiotic_cols), easting, northing)
+     X_backfill <- X_backfill[, colSums(!is.na(X_backfill)) > 0, drop = FALSE]
+     
+     predictions_b <- predict(model_b, newdata = as.matrix(X_backfill))
+     
+     # process predictions based on continuous or categorical
+     if (!(b %in% categorical_responses)){
+       vals <- exp(pred) - 1
+     } else {
+       class_idx <- as.integer(pred) + 1;  vals <- levels(y_fac)[class_idx]}
+     } # close if/else
+     
+   } # close anonymous training/backfilling function inside of in_parallel
     
     # give arguments to purrr::map
-    ),  df_train = df_train, abiotic_cols = abiotic_cols, out_dir = out_dir, categorical_responses = categorical_responses) # close purrr::map for training over all biotic features
+    ),  df_train = df_train, df_backfill = df_backfill, abiotic_cols = abiotic_cols, 
+        out_dir = out_dir, categorical_responses = categorical_responses) # close purrr::map for training over all biotic features
   
-  } # close train_subbasin_s()
+  } # close train_and_backfill_subbasin_s()
      
- # apply model fitting over all subbasins
+ # apply model fitting and backfilling over all subbasins
  lapply(X = seq_len(nrow(all_subbasins_subset)), FUN = train_subbasin_s,
         year = year, stack_y = stack_y, lowhf_mask = lowhf_mask,
         abiotic_vars = abiotic_vars, biotic_vars = biotic_vars)
  
- 
- 
- ###
- # backfill the industry footprints in subbasin_s
- ###
- 
- # for backfilling: find industry pixels in subbasin_s rasterize onto cov_s grid
- industry_s <- terra::crop(combined_poly, subbasin_s)
- industry_mask_s <- terra::rasterize(industry_s, cov_s[[1]], field = 1, background = NA, touches = TRUE)     
- 
- # indices to backfill = cells covered by footprint polygons
- backfill_idx <- which(!is.na(terra::values(industry_mask_s)))
- 
- df_backfill <- 
-   terra::as.data.frame(cov_s, xy = TRUE, na.rm = FALSE) |>
-   dplyr::as_tibble() |>
-   dplyr::rename(easting = x, northing = y) |>
-   dplyr::mutate(
-     easting  = as.numeric(scale(easting)),
-     northing = as.numeric(scale(northing))) |> 
-   dplyr::slice(backfill_idx)
-} # close backfill_mines_cont() function
-
-# use model to predict biotic feature b in industry footprint pixels (i.e. backfilling)
-# also, inverse log the predictions to convert back to original scale
-predictions_b <- exp(predict(model_b, newdata = )) - 1 
 
 # after all training is done:
 mirai::daemons(0)
