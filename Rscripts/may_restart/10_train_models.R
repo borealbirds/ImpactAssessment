@@ -66,6 +66,9 @@ all_subbasins_subset <- vect(file.path(ia_dir, "hydrobasins_masked_merged_subset
 # import low HF raster
 lowhf_mask <- terra::rast(file.path(ia_dir, "CanHF_1km_lessthan1.tif")) 
 
+# import industry footprint raster
+combined_poly <- terra::vect(file.path(ia_dir, "combined_industry_footprint.gpkg")) 
+  
 
 
 # PART II: build training function ----------------------------------------
@@ -150,21 +153,37 @@ backfill_mines_cont <- function(
      terra::crop(x = _, y = subbasin_s) |>
      terra::mask(x = _, mask = subbasin_s)
    
-   # make low-HF match cov_s extent 
-   lowhf_mask_s <- terra::crop(lowhf_mask, cov_s, snap = "near")
+   # align low-HF to cov_s
+   lowhf_mask_s <- terra::crop(lowhf_mask, cov_predict_s, snap = "near")
    
-   # select pixels in covariate stack with low hf
-   cov_s <- terra::mask(x = cov_s, mask = lowhf_mask_s)
+   # for training: select pixels in covariate stack with low hf
+   cov_train_s <- terra::mask(x = cov_s, mask = lowhf_mask_s)
    
-   # generate df from covariate stack
-   df <- 
-     terra::as.data.frame(cov_s, xy=TRUE) |> 
+   # convert covariate stack to a dataframe for modelling
+   df_train <- 
+     terra::as.data.frame(cov_train_s, xy=TRUE) |> 
      dplyr::as_tibble() |> 
      dplyr::rename(easting=x, northing=y) |> 
      dplyr::mutate(
        easting  = as.numeric(scale(easting)),
        northing = as.numeric(scale(northing))
      )
+   
+   # for backfilling: find industry pixels in subbasin_s rasterize onto cov_s grid
+   industry_s <- terra::crop(combined_poly, subbasin_s)
+   industry_mask_s <- terra::rasterize(industry_s, cov_s[[1]], field = 1, background = NA, touches = TRUE)     
+  
+   # indices to backfill = cells covered by footprint polygons
+   backfill_idx <- which(!is.na(terra::values(industry_mask_s)))
+   
+   df_backfill <- 
+     terra::as.data.frame(cov_s, xy = TRUE, na.rm = FALSE) |>
+     dplyr::as_tibble() |>
+     dplyr::rename(easting = x, northing = y) |>
+     dplyr::mutate(
+       easting  = as.numeric(scale(easting)),
+       northing = as.numeric(scale(northing))) |> 
+     dplyr::slice(backfill_idx)
    
    # define predictors and responses
    abiotic_cols <- intersect(names(df), abiotic_vars$predictor)
@@ -182,14 +201,17 @@ backfill_mines_cont <- function(
    # parallelize model fitting within subbasin_s
    purrr::map(.x = biotic_cols, .f = purrr::in_parallel(\(b, df, abiotic_cols, out_dir) {
    
-     # 1) keep only rows where the RESPONSE is observed
+     # check if continuous or categorical
+     if (!(b %in% categorical_responses)){
+       
+     # keep only the rows where the response is observed
      idx <- which(!is.na(df[[b]]))
      
      # log transform the response to prevent negative values in predictions
      y <- log(as.numeric(df[[b]][idx]) + 1)
      
      # predictors (abiotic + coords, already scaled in df)
-     X <- dplyr::select(df[idx,], dplyr::all_of(abiotic_cols), easting, northing)
+     X <- dplyr::select(df[!backfill_idx,], dplyr::all_of(abiotic_cols), easting, northing)
      X <- X[, colSums(!is.na(X)) > 0, drop = FALSE] # drop columns with all NAs
      
      # create DMatrix from low HF landscape
@@ -200,15 +222,24 @@ backfill_mines_cont <- function(
      # on the 20% holdout in each of the 5 folds
      cv_b <-xgboost::xgb.cv(params = params_b, data = dtrain_b, nrounds=5000, nfold=5, early_stopping_rounds = 50, verbose=FALSE)
      
-     #save model info
-     backfill_datalog[[b]] <- cv_b
-     
      # fit model
      model_b <- xgboost::xgb.train(params = params_b, data = dtrain_b, nrounds = cv_b$early_stop$best_iteration, verbose = 0)
      
-     # use model to predict biotic feature[i] at "high" HF areas (i.e. backfilling)
+     # use model to predict biotic feature b in industry footprint pixels (i.e. backfilling)
      # also, inverse log the predictions to convert back to original scale
-     predictions_i <- exp(predict(model_i, newdata = CanHF_1km_present[,predictor_vars])) - 1 
+     predictions_b <- exp(predict(model_b, newdata = )) - 1 
+     
+     
+     
+     
+     } else { # if b is categorical, use the following protocol
+       
+     # keep only the rows where the response is observed
+     idx <- which(!is.na(df[[b]]))
+     
+     y <- df[[b]][idx]
+     
+     }
      
  # apply model fitting over all subbasins
  invisible(lapply(
