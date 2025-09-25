@@ -136,7 +136,7 @@ train_and_backfill_per_year <- function(
                           
  
  # project low hf layer to current stack
- lowhf_mask <- terra::project(x=lowhf_mask, y=stack_y, method = "near")
+ lowhf_mask_y <- terra::project(x=lowhf_mask, y=stack_y, method = "near")
  
  
  ###
@@ -150,7 +150,7 @@ train_and_backfill_per_year <- function(
  train_and_backfill_subbasin_s <- function(
     subbasin_index, 
     year, stack_y, 
-    lowhf_mask, 
+    lowhf_mask_y, 
     abiotic_vars = abiotic_vars, 
     biotic_vars  = biotic_vars) {
    
@@ -163,8 +163,8 @@ train_and_backfill_per_year <- function(
      terra::crop(x = _, y = subbasin_s) |>
      terra::mask(x = _, mask = subbasin_s)
    
-   # align low-HF to cov_s
-   lowhf_mask_s <- terra::crop(lowhf_mask, cov_s, snap = "near")
+   # align low-HF to covariate stack s
+   lowhf_mask_s <- terra::crop(lowhf_mask_y, cov_s, snap = "near")
    
    # for training: select pixels in covariate stack with low hf
    cov_train_s <- terra::mask(x = cov_s, mask = lowhf_mask_s)
@@ -175,13 +175,14 @@ train_and_backfill_per_year <- function(
      dplyr::as_tibble() |> 
      dplyr::rename(easting=x, northing=y) |> 
      dplyr::mutate(
-       easting  = as.numeric(scale(easting)),
-       northing = as.numeric(scale(northing)))
+       easting  = easting/1000,
+       northing = northing/1000)
    
    # define predictors and responses
    abiotic_cols <- intersect(names(df_train), abiotic_vars$predictor)
    biotic_cols <- intersect(names(df_train), biotic_vars$predictor)
    biotic_cols <- na.omit(biotic_cols[match(neworder, biotic_cols)])
+   biotic_cols_cont <- setdiff(biotic_cols, categorical_responses)
    
    # for backfilling: find industry pixels in subbasin_s and rasterize onto cov_s grid
    industry_s <- terra::crop(combined_poly, subbasin_s)
@@ -189,6 +190,10 @@ train_and_backfill_per_year <- function(
    
    # pixel indices to backfill
    backfill_idx <- which(!is.na(terra::values(industry_mask_s)))
+   if (!length(backfill_idx)) {
+     if (!quiet) message("No industry pixels in subbasin ", subbasin_index, " for year ", year, "; skipping.")
+     return(invisible(NULL))  # or return an empty stack if you prefer
+   }
    
    # later we'll update this dataframe with backfilled features 
    # following the order of `neworder`
@@ -197,8 +202,8 @@ train_and_backfill_per_year <- function(
      dplyr::as_tibble() |>
      dplyr::rename(easting = x, northing = y) |>
      dplyr::mutate(
-       easting  = as.numeric(scale(easting)),
-       northing = as.numeric(scale(northing))) |> 
+       easting  = easting/1000,
+       northing = northing/1000) |> 
      dplyr::slice(backfill_idx)
    
    # set output directory for current year
@@ -212,90 +217,96 @@ train_and_backfill_per_year <- function(
    out_layers <- vector("list", length(biotic_cols))  
    names(out_layers) <- biotic_cols
    
-   # parallelize training and backfilling per biotic feature within subbasin_s
-   purrr::map(.x = biotic_cols, .f = purrr::in_parallel(\(b, df_train, abiotic_cols, out_dir, categorical_responses){
-   
+   # train a model for each vegetation feature, and backfill
+   for (j in seq_along(biotic_cols)) {
+     
+     b <- biotic_cols[j]
+     
      # training data:
      # keep only the rows where the response is observed
      idx <- which(!is.na(df_train[[b]]))
+     if (!length(idx)) next  # skip this covariate
      
-     # predictors (abiotic + coords, already scaled in df_train)
-     X <- dplyr::select(df_train[idx, , drop = FALSE], all_of(abiotic_cols), easting, northing)
+     # predictors for biotic_cols[b]
+     predictors_train <- c(abiotic_cols, intersect(setdiff(biotic_cols_cont, b), names(df_train)), "easting","northing")
+     X <- dplyr::select(df_train[idx, , drop = FALSE], all_of(predictors_train))
      X <- X[, colSums(!is.na(X)) > 0, drop = FALSE] # drop columns with all NAs
      
      # for testing: b<-biotic_cols[1]
      # train: check if continuous or categorical
-       if (!(b %in% categorical_responses)){
+     if (!(b %in% categorical_responses)){
        
        # log transform the response to prevent negative values in predictions
        y <- log(as.numeric(df_train[[b]][idx]) + 1)
        
        # train
        dtrain_b <- xgboost::xgb.DMatrix(data = as.matrix(X), label = y, missing = NA)
-       params_b <- xgboost::xgb.params(objective = "reg:squarederror", eval_metric = "rmse", max_depth = 3, eta = 0.2)
+       params_b <- xgboost::xgb.params(objective = "reg:squarederror", eval_metric = "rmse", max_depth = 3, eta = 0.2, nthread = 1)
        cv_b <-xgboost::xgb.cv(params = params_b, data = dtrain_b, nrounds=5000, nfold=5, early_stopping_rounds = 50, verbose=FALSE)
        model_b <- xgboost::xgb.train(params = params_b, data = dtrain_b, nrounds = cv_b$early_stop$best_iteration, verbose = 0)
        
        # backfill
-       X_backfill <- dplyr::select(df_backfill, dplyr::all_of(abiotic_cols), easting, northing)
+       predictors_backfill <- c(abiotic_cols, intersect(setdiff(biotic_cols_cont, b), names(df_backfill)), "easting","northing")
+                            
+       X_backfill <- dplyr::select(df_backfill, all_of(predictors_backfill))
        X_backfill <- X_backfill[, colSums(!is.na(X_backfill)) > 0, drop = FALSE]
        pred <- predict(model_b, newdata = as.matrix(X_backfill))
-       vals <- exp(pred) - 1
-       
-       # write new predictions into raster cells of cov_s
-       # then add to df_backfill for prediction the next feature in `neworder`
-       out_r <- cov_s[[1]] * NA
-       out_r[backfill_idx] <- vals
-       
-       df_backfill[[b]] <<- vals
-       
+       vals <- pmax(exp(pred) - 1, 0)
+       df_backfill[[b]] <- vals  # make backfilled feature available for subsequent`predict()`
        
      } else { # if b is categorical, use the following protocol
        
        # multiclass xgboost labels need to start at 0
        # response as factor with compact levels, then 0..K-1 labels
        y_fac <- droplevels(df_train[[b]][idx])
-       K     <- nlevels(y_fac)
+       K <- nlevels(y_fac)
        y <- as.integer(y_fac) - 1
        
        # train (don't use as.matrix on X as we did with continuous features)
-       dtrain_b <- xgboost::xgb.DMatrix(data = X, label = y, missing = NA)
-       params_b <- xgboost::xgb.params(objective = "multi:softmax", eval_metric = "mlogloss", max_depth = 3, eta = 0.2, num_class = K)
+       dtrain_b <- xgboost::xgb.DMatrix(data = as.matrix(X), label = y, missing = NA)
+       params_b <- xgboost::xgb.params(objective = "multi:softmax", eval_metric = "mlogloss", max_depth = 3, eta = 0.2, num_class = K, nthread = 1)
        cv_b <-xgboost::xgb.cv(params = params_b, data = dtrain_b, nrounds=5000, nfold=5, early_stopping_rounds = 50, verbose=FALSE)
        model_b <- xgboost::xgb.train(params = params_b, data = dtrain_b, nrounds = cv_b$early_stop$best_iteration, verbose = 0)
        
-       # backfill (I;m OK with categoricals NOT acting as predictors in the next iteration..too complicated)
-       X_backfill <- dplyr::select(df_backfill, dplyr::all_of(abiotic_cols), easting, northing)
+       # backfill (categoricals do not serve as predictors in the next iteration..too complicated)
+       predictors_backfill <- c(abiotic_cols, "easting","northing")
+       X_backfill <- dplyr::select(df_backfill, all_of(predictors_backfill))
        X_backfill <- X_backfill[, colSums(!is.na(X_backfill)) > 0, drop = FALSE]
-       pred_class_0k <- predict(model_b, newdata = as.matrix(X_backfill))  # 0..K-1
-       class_idx_1k  <- as.integer(pred_class_0k) + 1 
+       pred_idx_1k <- as.integer(predict(model_b, newdata = as.matrix(X_backfill))) + 1  # 1..K
+       
+       # map predicted indexes to the true class codes (using training factor levels)
+       vals <- as.numeric(levels(y_fac))[pred_idx_1k]  
        
       } # close if/else (continuous vs categorical training and backfilling)
      
      # make a layer for biotic_cols[b] for industry footprint pixels
      r <- cov_s[[1]] * NA_real_
      r[backfill_idx] <- vals
-     out_layers[[b]] <<- r
+     out_layers[[b]] <- r
      
-     } # close anonymous training/backfilling function inside of in_parallel
-    
-    # close purrr::map and finish giving arguments 
-    ),  df_train = df_train, df_backfill = df_backfill, abiotic_cols = abiotic_cols, 
-        out_dir = out_dir, categorical_responses = categorical_responses) # close purrr::map for training over all biotic features
-  
-   # after backfilling: build and save new stack for subbasin_s
+     if (!quiet) {message("subbasin ", subbasin_index, " year ", year, " — finished ", j, " of ", length(biotic_cols)," (", b, ")")}
+     
+   } # close for loop
+   
+   # after backfilling all covariates, build and save new stack for subbasin_s
    out_stack <- terra::rast(out_layers) 
    names(out_stack) <- names(out_layers)
    
-   terra::writeRaster(out_stack, file.path(out_dir, sprintf("backfilled_stack_subbasin-%03d.tif", subbasin_index), overwrite = TRUE)
+   terra::writeRaster(out_stack, file.path(out_dir, sprintf("backfilled_stack_subbasin-%03d.tif", subbasin_index)), overwrite = TRUE)
   
   } # close train_and_backfill_subbasin_s()
      
  # apply model fitting and backfilling over all subbasins
- lapply(X = seq_len(nrow(all_subbasins_subset)), FUN = train_subbasin_s,
-        year = year, stack_y = stack_y, lowhf_mask = lowhf_mask,
-        abiotic_vars = abiotic_vars, biotic_vars = biotic_vars)
  
+ res <- purrr::map(
+   .x = seq_len(nrow(all_subbasins_subset)),
+   .f = purrr::in_parallel(\(i) {
+     train_and_backfill_subbasin_s(i, year = year, stack_y = stack_y, lowhf_mask_y = lowhf_mask_y)
+   }))
+ 
+ invisible(res)
+ 
+} # close train_and_backfill_per_year()
 
 # after all training is done:
 mirai::daemons(0)
