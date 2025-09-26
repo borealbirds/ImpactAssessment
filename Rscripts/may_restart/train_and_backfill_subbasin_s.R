@@ -1,12 +1,14 @@
 train_and_backfill_subbasin_s <- function(
     subbasin_index, year, stack_y_path, lowhf_mask_y_path, abiotic_vars, biotic_vars,
-    categorical_responses, combined_poly, all_subbasins_subset, ia_dir,
+    categorical_responses, combined_poly_path, subbasins_path, ia_dir,
     neworder, quiet = FALSE
 ) {
   
-  # read in data from paths for furrr
+  # read in data from paths for furrr worker
   stack_y      <- terra::rast(stack_y_path)
   lowhf_mask_y <- terra::rast(lowhf_mask_y_path)
+  all_subbasins_subset <- terra::vect(subbasins_path)
+  combined_poly        <- terra::vect(combined_poly_path)
   
   # isolate subbasin s
   subbasin_s <- all_subbasins_subset[subbasin_index]

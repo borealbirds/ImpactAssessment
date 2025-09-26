@@ -137,11 +137,19 @@ train_and_backfill_per_year <- function(
  lowhf_mask_y <- terra::project(x=lowhf_mask, y=stack_y, method = "near")
  
  # save so that we pass directories, not objects, to furrr
- stack_path  <- file.path(tempdir(), sprintf("stack_y_%d.tif", year))
- lowhf_path  <- file.path(tempdir(), sprintf("lowhf_mask_y_%d.tif", year))
+ cache_dir <- file.path(ia_dir, "cache_year_stacks")
+ dir.create(cache_dir, showWarnings = FALSE, recursive = TRUE)
  
+ stack_path <- file.path(cache_dir, sprintf("stack_y_%d.tif", year))
+ lowhf_path <- file.path(cache_dir, sprintf("lowhf_mask_y_%d.tif", year))
  terra::writeRaster(stack_y, stack_path, overwrite = TRUE)
  terra::writeRaster(lowhf_mask_y, lowhf_path, overwrite = TRUE)
+ 
+ 
+ # use existing on-disk files for vectors (already have gpkg paths)
+ subbasins_path <- file.path(ia_dir, "hydrobasins_masked_merged_subset.gpkg")
+ combined_poly_path <- file.path(ia_dir, "combined_industry_footprint.gpkg")
+ 
  
  ###
  # train and backfill models per subbasin
@@ -158,8 +166,8 @@ train_and_backfill_per_year <- function(
      abiotic_vars          = abiotic_vars,
      biotic_vars           = biotic_vars,
      categorical_responses = categorical_responses,
-     combined_poly         = combined_poly,
-     all_subbasins_subset  = all_subbasins_subset,
+     combined_poly_path    = combined_poly_path,    
+     subbasins_path        = subbasins_path,
      ia_dir                = ia_dir,
      neworder              = neworder,
      quiet                 = quiet
