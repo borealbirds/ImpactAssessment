@@ -1,7 +1,7 @@
 # ---
-# title: Impact Assessment: train models per subbasin
+# title: Impact Assessment: train models per subbasin and backfill industry footprints
 # author: Mannfred Boehm
-# created: May 7, 2025
+# created: August 7, 2025
 # ---
 
 library(BAMexploreR)
@@ -157,7 +157,7 @@ train_and_backfill_per_year <- function(
  
  # apply model fitting and backfilling over all subbasins
  res <- future_map(
-   seq_len(nrow(all_subbasins_subset)),
+   todo_idx,
    \(i) train_and_backfill_subbasin_s(
      subbasin_index        = i,
      year                  = year,
@@ -172,14 +172,30 @@ train_and_backfill_per_year <- function(
      neworder              = neworder,
      quiet                 = quiet
    ),
-   .options  = furrr::furrr_options(packages = c("terra","xgboost","dplyr")),
+   .options  = furrr::furrr_options(packages = c("terra","xgboost","dplyr"), seed=123L),
    .progress = TRUE)
  
  invisible(res)
  
 } # close train_and_backfill_per_year()
 
+
+# PART IV: check which subbasins have already completed -----------------------------
+year <- 2020
+base_dir <- file.path(ia_dir, "xgboost_models", sprintf("year=%d", year))
+
+paths <- vapply(seq_len(nrow(all_subbasins_subset)), \(i)
+                file.path(base_dir, sprintf("subbasin=%s", i),
+                          sprintf("backfilled_stack_subbasin-%03d.tif", i)),
+                character(1))
+
+done_idx <- which(file.exists(paths))
+todo_idx <- setdiff(seq_len(nrow(all_subbasins_subset)), done_idx)
+
+message("done: ", length(done_idx), "  |  remaining: ", length(todo_idx))
+
+
+
+# PART V: backfill biotic features-----------------------------
 train_and_backfill_per_year(year = 2020, all_subbasins_subset = all_subbasins_subset)
-
-
 

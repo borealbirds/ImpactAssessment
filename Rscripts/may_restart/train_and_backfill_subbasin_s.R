@@ -99,7 +99,7 @@ train_and_backfill_subbasin_s <- function(
       
       # train
       dtrain_b <- xgboost::xgb.DMatrix(data = as.matrix(X), label = y, missing = NA)
-      params_b <- xgboost::xgb.params(objective = "reg:squarederror", eval_metric = "rmse", max_depth = 3, eta = 0.2, nthread = 1)
+      params_b <- xgboost::xgb.params(objective = "reg:squarederror", eval_metric = "rmse", max_depth = 3, eta = 0.2, nthread = 1, seed = 123)
       cv_b <-xgboost::xgb.cv(params = params_b, data = dtrain_b, nrounds=5000, nfold=5, early_stopping_rounds = 50, verbose=FALSE)
       model_b <- xgboost::xgb.train(params = params_b, data = dtrain_b, nrounds = cv_b$early_stop$best_iteration, verbose = 0)
       
@@ -128,9 +128,24 @@ train_and_backfill_subbasin_s <- function(
       K <- nlevels(y_fac)
       y <- as.integer(y_fac) - 1
       
+      # if there is only one land cover class, backfill with that class
+      if (K < 2) {
+        single_code <- as.numeric(levels(y_fac))[1]     # true code (e.g., 5 for "conifer" in SCANFI)
+        vals <- rep(single_code, length(backfill_idx))  # singular prediction
+        
+        r <- cov_s[[1]] * NA_real_
+        r[backfill_idx] <- vals
+        out_layers[[b]] <- r
+        
+        if (!quiet) message("subbasin ", subbasin_index, " year ", year,
+                            " — categorical '", b, "' has one class (", single_code,
+                            "); filled without training.")
+        next
+      }
+      
       # train (don't use as.matrix on X as we did with continuous features)
       dtrain_b <- xgboost::xgb.DMatrix(data = as.matrix(X), label = y, missing = NA)
-      params_b <- xgboost::xgb.params(objective = "multi:softmax", eval_metric = "mlogloss", max_depth = 3, eta = 0.2, num_class = K, nthread = 1)
+      params_b <- xgboost::xgb.params(objective = "multi:softmax", eval_metric = "mlogloss", max_depth = 3, eta = 0.2, num_class = K, nthread = 1, seed = 123)
       cv_b <-xgboost::xgb.cv(params = params_b, data = dtrain_b, nrounds=5000, nfold=5, early_stopping_rounds = 50, verbose=FALSE)
       model_b <- xgboost::xgb.train(params = params_b, data = dtrain_b, nrounds = cv_b$early_stop$best_iteration, verbose = 0)
       
@@ -158,14 +173,18 @@ train_and_backfill_subbasin_s <- function(
     r[backfill_idx] <- vals
     out_layers[[b]] <- r
     
-    if (!quiet) {message("subbasin ", subbasin_index, " year ", year, " — finished ", j, " of ", length(biotic_cols)," (", b, ")")}
-    
   } # close for loop
   
   # after backfilling all covariates, build and save new stack for subbasin_s
-  out_stack <- terra::rast(out_layers) 
-  names(out_stack) <- names(out_layers)
+  # keep only the layers that were actually created (remove NULL layers)
+  keep <- vapply(out_layers, inherits, logical(1), what = "SpatRaster")
+  out_stack <- terra::rast(out_layers[keep]) 
+  names(out_stack) <- names(out_layers[keep])
   
   terra::writeRaster(out_stack, file.path(out_dir, sprintf("backfilled_stack_subbasin-%03d.tif", subbasin_index)), overwrite = TRUE)
+  
+  if (!quiet) {
+    message("finished subbasin ", subbasin_index, " for year ", year,
+            " (", nlyr(out_stack), " layers written)")}
   
 } # close train_and_backfill_subbasin_s()
