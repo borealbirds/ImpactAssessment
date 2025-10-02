@@ -7,7 +7,6 @@
 library(BAMexploreR)
 library(furrr)
 library(terra)
-library(tidyterra)
 library(tidyverse)
 library(xgboost)
 
@@ -29,11 +28,11 @@ predictor_metadata <-
   dplyr::tibble(BAMexploreR::predictor_metadata) |>
   dplyr::filter(version == "v5") |>
   dplyr::select(predictor, definition, predictor_class) |>
-  dplyr::mutate(across('predictor', str_replace, 'Year', 'year')) |>
-  dplyr::mutate(across('predictor', str_replace, 'Method','method'))
+  dplyr::mutate(dplyr::across('predictor', stringr::str_replace, 'Year', 'year')) |>
+  dplyr::mutate(dplyr::across('predictor', stringr::str_replace, 'Method','method'))
 
 # define soil covariate names
-soil_covs <- tibble(predictor = c("cec_0-5cm_mean_1000", "cec_100-200cm_mean_1000",
+soil_covs <- tibble::tibble(predictor = c("cec_0-5cm_mean_1000", "cec_100-200cm_mean_1000",
                                   "cec_15-30cm_mean_1000", "cec_30-60cm_mean_1000",  
                                   "cec_5-15cm_mean_1000", "cec_60-100cm_mean_1000", 
                                   "soc_0-5cm_mean_1000",  "soc_100-200cm_mean_1000",
@@ -43,7 +42,7 @@ soil_covs <- tibble(predictor = c("cec_0-5cm_mean_1000", "cec_100-200cm_mean_100
 
 # convert some abiotic variables as biotic variables
 actually_biotic_what <- c("StandardDormancy_1km", "StandardGreenup_1km", "Peatland_5x5", "Peatland_1km")
-actually_biotic_df <- tibble(predictor = actually_biotic_what,
+actually_biotic_df <- tibble::tibble(predictor = actually_biotic_what,
                              predictor_class = c("Annual Climate", "Annual Climate", "Wetland", "Wetland"))
 # index abiotic variables
 abiotic_vars <-
@@ -84,7 +83,7 @@ lowhf_mask <- terra::rast(file.path(ia_dir, "CanHF_1km_lessthan1.tif"))
 # train models per subbasin per year
 # soil_cache: pass an env() to reuse across years; if NULL a fresh one is used
 source(file.path(getwd(), "Rscripts", "may_restart", "train_and_backfill_subbasin_s.R"))
-plan(multisession, workers = 3)  
+plan(multisession, workers = 1)  
 
 
 train_and_backfill_per_year <- function(
@@ -157,22 +156,22 @@ train_and_backfill_per_year <- function(
  
  # apply model fitting and backfilling over all subbasins
  res <- future_map(
-   todo_idx,
+   todo_idx[1],
    \(i) train_and_backfill_subbasin_s(
      subbasin_index        = i,
      year                  = year,
      stack_y_path          = stack_path,
      lowhf_mask_y_path     = lowhf_path,
-     abiotic_vars          = abiotic_vars,
-     biotic_vars           = biotic_vars,
-     categorical_responses = categorical_responses,
+     abiotic_vars          = as.data.frame(abiotic_vars),
+     biotic_vars           = as.data.frame(biotic_vars),
+     categorical_responses = as.character(categorical_responses),
      combined_poly_path    = combined_poly_path,    
      subbasins_path        = subbasins_path,
      ia_dir                = ia_dir,
-     neworder              = neworder,
+     neworder              = as.character(neworder),
      quiet                 = quiet
    ),
-   .options  = furrr::furrr_options(packages = c("terra","xgboost","dplyr"), seed=123L),
+   .options  = furrr::furrr_options(packages = c("terra","xgboost"), seed=123L, globals = FALSE),
    .progress = TRUE)
  
  invisible(res)
@@ -199,3 +198,22 @@ message("done: ", length(done_idx), "  |  remaining: ", length(todo_idx))
 # PART V: backfill biotic features-----------------------------
 train_and_backfill_per_year(year = 2020, all_subbasins_subset = all_subbasins_subset)
 
+
+
+# PART VI: for manual processing-------------------------------
+for (i in todo_idx) {
+  train_and_backfill_subbasin_s(
+    subbasin_index        = i,
+    year                  = year,
+    stack_y_path          = stack_path,
+    lowhf_mask_y_path     = lowhf_path,
+    abiotic_vars          = as.data.frame(abiotic_vars),
+    biotic_vars           = as.data.frame(biotic_vars),
+    categorical_responses = as.character(categorical_responses),
+    combined_poly_path    = combined_poly_path,
+    subbasins_path        = subbasins_path,
+    ia_dir                = ia_dir,
+    neworder              = as.character(neworder),
+    quiet                 = FALSE
+  )
+}

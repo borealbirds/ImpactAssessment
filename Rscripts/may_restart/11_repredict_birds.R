@@ -76,7 +76,7 @@ predict_bird_density_per_bcr_year <- function(
        
 ) {
   
-  # PART I: import observed and backfilled covariate data ----------------------
+  # PART I: import and format observed and backfilled covariate data ----------------------
   # subset bam_boundary to the current BCR
   bcr_poly  <- bam_boundary[which(paste("country", "subUnit", sep="_") == bcr)]
   
@@ -98,9 +98,7 @@ predict_bird_density_per_bcr_year <- function(
   flat_bf <- terra::rast(lapply(vars, mosaic_one)); names(flat_bf) <- vars
   flat_bf <- terra::mask(flat_bf, bcr_poly) # constrain to current BCR polygon
   
-  
-  
-  # industry footprint cropped to current BCR
+  # import industry footprint cropped to current BCR
   industry_bcr <- terra::crop(terra::vect(combined_poly_path), bcr_poly)
   
   # import and crop observed subbasins to industry pixels in the current BCR

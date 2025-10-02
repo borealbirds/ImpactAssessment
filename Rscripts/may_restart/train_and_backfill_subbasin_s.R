@@ -26,19 +26,17 @@ train_and_backfill_subbasin_s <- function(
   cov_train_s <- terra::mask(x = cov_s, mask = lowhf_mask_s)
   
   # convert covariate stack to a dataframe for modelling
-  df_train <- 
-    terra::as.data.frame(cov_train_s, xy=TRUE) |> 
-    dplyr::as_tibble() |> 
-    dplyr::rename(easting=x, northing=y) |> 
-    dplyr::mutate(
-      easting  = easting/1000,
-      northing = northing/1000)
+  df_train <- terra::as.data.frame(cov_train_s, xy=TRUE) 
+  names(df_train)[names(df_train) == "x"] <- "easting"
+  names(df_train)[names(df_train) == "y"] <- "northing"
+  df_train$easting  <- df_train$easting  / 1000
+  df_train$northing <- df_train$northing / 1000
   
   # define predictors and responses
   abiotic_cols <- base::intersect(names(df_train), abiotic_vars$predictor)
   biotic_cols <- base::intersect(names(df_train), biotic_vars$predictor)
-  biotic_cols <- stats::na.omit(biotic_cols[match(neworder, biotic_cols)])
-  biotic_cols_cont <- setdiff(biotic_cols, categorical_responses)
+  biotic_cols <- stats::na.omit(biotic_cols[base::match(neworder, biotic_cols)])
+  biotic_cols_cont <- base::setdiff(biotic_cols, categorical_responses)
   
   # for backfilling: find industry pixels in subbasin_s and rasterize onto cov_s grid
   industry_s <- terra::crop(combined_poly, subbasin_s)
@@ -53,14 +51,12 @@ train_and_backfill_subbasin_s <- function(
   
   # later we'll update this dataframe with backfilled features 
   # following the order of `neworder`
-  df_backfill <- 
-    terra::as.data.frame(cov_s, xy = TRUE, na.rm = FALSE) |>
-    dplyr::as_tibble() |>
-    dplyr::rename(easting = x, northing = y) |>
-    dplyr::mutate(
-      easting  = easting/1000,
-      northing = northing/1000) |> 
-    dplyr::slice(backfill_idx)
+  df_backfill <- terra::as.data.frame(cov_s, xy = TRUE, na.rm = FALSE)
+  names(df_backfill)[names(df_backfill) == "x"] <- "easting"
+  names(df_backfill)[names(df_backfill) == "y"] <- "northing"
+  df_backfill$easting  <- df_backfill$easting  / 1000
+  df_backfill$northing <- df_backfill$northing / 1000
+  df_backfill <- df_backfill[backfill_idx, , drop = FALSE]
   
   # set output directory for current year
   out_dir <- file.path(ia_dir, "xgboost_models",
@@ -84,8 +80,8 @@ train_and_backfill_subbasin_s <- function(
     if (!length(idx)) next  # skip this covariate
     
     # predictors for biotic_cols[b]
-    predictors_train <- c(abiotic_cols, intersect(setdiff(biotic_cols_cont, b), names(df_train)), "easting","northing")
-    X <- dplyr::select(df_train[idx, , drop = FALSE], all_of(predictors_train))
+    predictors_train <- c(abiotic_cols, base::intersect(base::setdiff(biotic_cols_cont, b), names(df_train)), "easting","northing")
+    X <- df_train[idx, base::intersect(predictors_train, names(df_train)), drop = FALSE]
     X <- X[, colSums(!is.na(X)) > 0, drop = FALSE] # drop columns with all NAs
     if (!ncol(X)) next # skip if no predictor columns after drops
     train_cols <- colnames(X) # keep track of variables that were available (prediction needs to be limited to these)
@@ -98,16 +94,19 @@ train_and_backfill_subbasin_s <- function(
       y <- log(as.numeric(df_train[[b]][idx]) + 1)
       
       # train
-      dtrain_b <- xgboost::xgb.DMatrix(data = as.matrix(X), label = y, missing = NA)
+      M <- data.matrix(X)            # safer than as.matrix() for mixed types
+      storage.mode(M) <- "double"    # ensure double
+      
+      dtrain_b <- xgboost::xgb.DMatrix(data = M, label = y, missing = NA)
       params_b <- xgboost::xgb.params(objective = "reg:squarederror", eval_metric = "rmse", max_depth = 3, eta = 0.2, nthread = 1, seed = 123)
       cv_b <-xgboost::xgb.cv(params = params_b, data = dtrain_b, nrounds=5000, nfold=5, early_stopping_rounds = 50, verbose=FALSE)
       model_b <- xgboost::xgb.train(params = params_b, data = dtrain_b, nrounds = cv_b$early_stop$best_iteration, verbose = 0)
       
       # set up backfill data
-      X_backfill <- dplyr::select(df_backfill, dplyr::any_of(train_cols))
+      X_backfill <- df_backfill[ ,base::intersect(train_cols, names(df_backfill)), drop = FALSE]
       
       # add any missing training columns as NA
-      miss <- setdiff(train_cols, colnames(X_backfill))
+      miss <- base::setdiff(train_cols, colnames(X_backfill))
       if (length(miss)) {
         X_backfill[miss] <- NA_real_
       }
@@ -151,10 +150,10 @@ train_and_backfill_subbasin_s <- function(
       
       # backfill (categoricals do not serve as predictors in the next iteration..too complicated)
       # set up backfill data
-      X_backfill <- dplyr::select(df_backfill, dplyr::any_of(train_cols))
+      X_backfill <- df_backfill[, base::intersect(train_cols, names(df_backfill)), drop = FALSE]
       
       # add any missing training columns as NA
-      miss <- setdiff(train_cols, colnames(X_backfill))
+      miss <- base::setdiff(train_cols, colnames(X_backfill))
       if (length(miss)) {
         X_backfill[miss] <- NA_real_
       }
