@@ -3,10 +3,9 @@
 # author: Mannfred Boehm
 # created: September 28, 2025
 # ---
-
+library(gbm)
 library(furrr)
 library(terra)
-library(tidyterra)
 library(tidyverse)
 
 
@@ -24,184 +23,222 @@ bam_boundary <- terra::vect(file.path(root, "Regions", "BAM_BCR_NationalModel_Un
 # import merged + subsetted subbasins
 all_subbasins_subset <- vect(file.path(ia_dir, "hydrobasins_masked_merged_subset.gpkg"))
 
-# import low hf layer
-lowhf_mask <- terra::rast(file.path(ia_dir, "CanHF_1km_lessthan1.tif"))
+# import industry footprint pixels
+combined_poly_path <- file.path(ia_dir, "combined_industry_footprint.gpkg")
+
+# create a reference table for which subbasins are in which BCRs 
+# (some subbasins will be in multiple BCRs, and that's OK)
+bcr_subbasins_ref <-
+  {
+    # logical matrix: rows=subbasins, cols=BCRs
+    hits <- terra::relate(centroids(all_subbasins_subset), bam_boundary, relation = "intersects")
+    
+    # row/col indexes of TRUE
+    ij <- which(hits, arr.ind = TRUE)
+    
+    tibble(
+      HYBAS_ID = all_subbasins_subset$first_HYBAS_ID[ij[, 1]],
+      bcr_label = paste(bam_boundary$country[ij[, 2]], bam_boundary$subUnit[ij[, 2]], sep = "_"),
+      bcr_code = gsub("_", "", bcr_label) # e.g., "can_14" -> "can14" for filenames like PIGR_can14.Rdata
+    )
+  }
 
 
-
-# helper functions -------------------------------------------------
-
-# gets directories for all species density models for a given BCR
-.models_for_bcr <- function(models_root, bcr_id) {
-  Sys.glob(file.path(models_root, "*", paste0("*_", bcr_id, ".Rdata"))) |>
-    tibble(path = _) |>
-    mutate(spec_code = basename(dirname(path)), bcr_id = bcr_id)
+# helper: mosaic (backfilled) subbasin stacks into a single BCR-wide stack
+.mosaic_backfilled_stacks <- function(sub_ids, year, template) {
+  
+  ids_chr <- as.character(sub_ids)
+  
+  # lookup index used during training: position in the reference object
+  idx_chr <- match(sub_ids, all_subbasins_subset$first_HYBAS_ID)
+ 
+  ptab <- tibble(
+    HYBAS_ID = ids_chr,
+    subbasin_index = idx_chr,
+    path = file.path(
+      ia_dir, "xgboost_models", paste0("year=", as.character(year)),
+      paste0("subbasin=", as.character(idx_chr)),
+      paste0("backfilled_stack_subbasin-", sprintf("%03d", idx_chr), ".tif")
+    )
+  )
+  
+  stacks <- setNames(lapply(ptab$path, terra::rast), ptab$HYBAS_ID)
+  
+  # resample helper, template is an arbitrary layer from `stack_obs`
+  .align_to <- function(x) {
+    if (!terra::compareGeom(x, template, stopOnError = FALSE)) {
+      terra::resample(x, template, method = "bilinear")
+    } else x
+  }
+  
+  # union of layer names across stacks
+  vars <- sort(unique(unlist(lapply(stacks, names))))
+  
+  mosaic_one <- function(v) {
+    rlist <- list()
+    for (nm in names(stacks)) {
+      r <- stacks[[nm]]
+      if (v %in% names(r)) rlist[[nm]] <- .align_to(r[[v]])
+    }
+    Reduce(terra::cover, rlist)
+  }
+  
+  mosaics <- lapply(vars, mosaic_one)
+  out <- terra::rast(mosaics)  # all share the same template now
+  names(out) <- vars
+  out
 }
 
-# loads gbm model lists (lists of 32 bootstraps)
-.load_gbm_list <- function(path) {
-  e <- new.env(parent = emptyenv()); load(path, envir = e)
-  nm <- ls(e)
-  hit <- purrr::detect(nm, ~ {
-    x <- get(.x, envir = e); is.list(x) && length(x) > 0 && inherits(x[[1]], "gbm")
-  })
-  if (is.null(hit)) stop("no list of gbm models found in: ", path)
-  get(hit, envir = e)
-}
+# define disturbance variables, which we'll set to zero when re-predicting
+disturbance_vars <-
+  dplyr::tibble(BAMexploreR::predictor_metadata) |>
+  dplyr::filter(version == "v5") |>
+  dplyr::select(predictor, definition, predictor_class) |>
+  dplyr::filter(predictor_class == "Disturbance")
 
-# finds best trees per bootstrap
-.best_trees <- function(m) {
-  bt <- tryCatch(m$gbm.call$best.trees, error = function(...) NULL)
-  if (!is.null(bt)) return(bt)
-  nt <- tryCatch(m$n.trees, error = function(...) NULL)
-  if (is.null(nt)) stop("cannot determine n.trees for model.")
-  nt
-}
-
-# 
-.align_df <- function(df, varnames) {
-  miss <- setdiff(varnames, colnames(df))
-  if (length(miss)) stop("missing predictors: ", paste(miss, collapse = ", "))
-  df[, varnames, drop = FALSE]
-}
-
-
-
+# for running in parallel
+bam_boundary_path <- file.path(root, "Regions", "BAM_BCR_NationalModel_Unbuffered.shp")
+subbasins_path    <- file.path(ia_dir, "hydrobasins_masked_merged_subset.gpkg")
+combined_poly_path <- file.path(ia_dir, "combined_industry_footprint.gpkg")
 
 
 # define density prediction function -------------------------------
-predict_bird_density_per_bcr_year <- function(
-    year,
-    bcr,
-       
-) {
+predict_bird_density_per_bcr_year <- function(species, year, bcr_subbasins_ref){
+ 
+  # fetch the 22 BCRs that intersect our subbasins
+  bcrs <- unique(bcr_subbasins_ref$bcr_label)
   
-  # PART I: import and format observed and backfilled covariate data ----------------------
-  # subset bam_boundary to the current BCR
-  bcr_poly  <- bam_boundary[which(paste("country", "subUnit", sep="_") == bcr)]
-  
-  # find which subbasins are in the current BCR
-  subbasin_hits <- unique(intersect(all_subbasins_subset["HYBAS_ID"], bcr_poly)$HYBAS_ID)
-  
-  # import backfilled subbasins (only those in current BCR) 
-  backfill_path_fn <- function(hits) {file.path(ia_dir, "xgboost_models", as.character(year), sprintf("subbasin=%03d", hits), sprintf("backfilled_stack_subbasin-%03d.tif", hits))}
-  backfill_paths_table <- data.frame(HYBAS_ID = subbasin_hits, path = vapply(subbasin_hits, backfill_path_fn, FUN.VALUE = character(1)))
-  backfilled_stacks <- setNames(lapply(backfill_paths_table$path, terra::rast), backfill_paths_table$HYBAS_ID)
-
-  # convert `backfilled_stacks` list to a single raster stack
-  vars <- sort(unique(unlist(lapply(backfilled_stacks, names)))) # get possible layer names
-  mosaic_one <- function(v) {  
-    rlist1 <- lapply(backfilled_stacks, \(r) if (v %in% names(r)) r[[v]] else NULL) # if a covariate is in a stack, extract that layer
-    rlist2 <- purrr::compact(rlist) # remove NULL layers
-    Reduce(terra::cover, rlist2) # fill NAs in A with B
-  }
-  flat_bf <- terra::rast(lapply(vars, mosaic_one)); names(flat_bf) <- vars
-  flat_bf <- terra::mask(flat_bf, bcr_poly) # constrain to current BCR polygon
-  
-  # import industry footprint cropped to current BCR
-  industry_bcr <- terra::crop(terra::vect(combined_poly_path), bcr_poly)
-  
-  # import and crop observed subbasins to industry pixels in the current BCR
-  stack_y <- 
-    terra::rast(file.path(root, "gis", "stacks", paste0(bcr, "_", year, ".tif"))) |> 
-    terra::crop(x = _, y = industry_bcr) |> 
-    terra::mask(x = _, mask = industry_bcr)
+  # loop: for every BCR, get counterfactual species density estimates 
+  do.call(rbind, lapply(bcrs, function(bcr_label) {
     
-  
-  # PART II: find species with models in the current BCR----------------------
-  
-  
-  
-  # Precompute per-subbasin footprint cell coordinates (and areas)
-  sub_list <- vector("list", length = nrow(sub_in_bcr))
-  names(sub_list) <- as.character(sub_in_bcr[[subbasin_id_col]])
-  
-  for (i in seq_along(sub_list)) {
-    sid <- as.integer(sub_in_bcr[[subbasin_id_col]][i])
-    bf_path <- backfill_stack_fn(sid)
-    if (!file.exists(bf_path)) { sub_list[[i]] <- NULL; next }
+    # load locally for every worker
+    bam_boundary         <- terra::vect(bam_boundary_path)
+    all_subbasins_subset <- terra::vect(subbasins_path)
     
-    r_bf <- rast(bf_path)
-    # industry mask for this subbasin on the backfilled grid
-    ind_sub <- crop(ind_bcr, sub_in_bcr[i, ])
-    if (nrow(ind_sub) == 0) { sub_list[[i]] <- NULL; next }
-    mask_sub <- rasterize(ind_sub, r_bf[[1]], field = 1, background = NA, touches = TRUE)
-    cells <- which(!is.na(values(mask_sub)))
-    if (!length(cells)) { sub_list[[i]] <- NULL; next }
-    
-    xy <- xyFromCell(r_bf, cells)
-    area_vec <- if (use_cell_area) terra::cellSize(r_bf[[1]], unit = "ha")[cells] else rep(1, length(cells))
-    sub_list[[i]] <- list(sid = sid, bf_path = bf_path, xy = xy, area = area_vec)
-  }
-  sub_list <- purrr::compact(sub_list)
-  if (!length(sub_list)) return(list(per_species = tibble(), per_subbasin = tibble()))
+    # get BCR code
+    bcr_code <- gsub("_", "", bcr_label)
   
-  # Species that actually have models for this BCR
-  mdl_tbl <- .models_for_bcr(models_root, bcr_id)
-  if (!nrow(mdl_tbl)) return(list(per_species = tibble(), per_subbasin = tibble()))
-  
-  # Summaries per species (load model once; stream through subbasins)
-  per_species <- pmap_dfr(mdl_tbl, function(path, spec_code, bcr_id) {
-    gbms <- .load_gbm_list(path)
-    varn <- gbms[[1]]$var.names
-    nB   <- length(gbms)
-    tot_obs <- numeric(nB); tot_bkf <- numeric(nB)
+    # subset bam_boundary to the current BCR
+    bcr_subUnit <- as.numeric(str_extract(bcr_code, "(\\d)+"))
+    bcr_poly <- terra::aggregate(bam_boundary[bam_boundary$country == "can" & bam_boundary$subUnit == bcr_subUnit, ])
+   
+    # subset subbasins to current BCR
+    s <- which(terra::relate(all_subbasins_subset, bcr_poly, relation = "intersects"))
+    subbasins_in_bcr <- all_subbasins_subset[s,]
     
-    for (sl in sub_list) {
-      # observed predictors from mosaic at the subbasin footprint cells
-      X_obs <- terra::extract(rs_mosaic[[varn]], sl$xy, ID = FALSE) |>
-        as.data.frame() |>
-        .align_df(varn)
       
-      # backfilled predictors from the subbasin stack at the same cells
-      r_bf <- rast(sl$bf_path)
-      X_bkf <- terra::extract(r_bf[[varn]], sl$xy, ID = FALSE) |>
-        as.data.frame() |>
-        .align_df(varn)
-      
-      # accumulate per-bootstrap totals
-      for (b in seq_len(nB)) {
-        nt <- .best_trees(gbms[[b]])
-        p_obs <- stats::predict(gbms[[b]], newdata = X_obs, type = "response", n.trees = nt)
-        p_bkf <- stats::predict(gbms[[b]], newdata = X_bkf, type = "response", n.trees = nt)
-        tot_obs[b] <- tot_obs[b] + sum(p_obs * sl$area, na.rm = TRUE)
-        tot_bkf[b] <- tot_bkf[b] + sum(p_bkf * sl$area, na.rm = TRUE)
-      }
+    # observed stack --------------------------------
+    obs_path <- file.path(root, "gis", "stacks", paste0(bcr_code, "_", year, ".tif"))
+    
+    # subset industry footprints to current BCR
+    industry_bcr <- 
+      terra::crop(vect(combined_poly_path), bcr_poly) |> 
+      terra::mask(bcr_poly)
+    
+    # subset covariate stack to industry pixels
+    stack_obs <- 
+      terra::rast(obs_path) |>
+      terra::crop(x=_, industry_bcr) |> 
+      terra::mask(x=_, industry_bcr) 
+    
+    
+    # backfilled stack --------------------------------
+    
+    stack_bf <-
+      .mosaic_backfilled_stacks(subbasins_in_bcr$first_HYBAS_ID, year, template=stack_obs$year) |>
+      terra::crop(bcr_poly) |>
+      terra::mask(bcr_poly)
+    
+    # fill out backfilled raster with abiotic and disturbance covariates
+    abiotic_and_disturbance_vars <- setdiff(names(stack_obs), names(stack_bf))
+    if (length(abiotic_and_disturbance_vars) > 0) {
+      stack_bf <- c(stack_bf, stack_obs[[abiotic_and_disturbance_vars]])
     }
     
+    # zero out disturbance layers in backfilled stack
+    disturbance_layers <- intersect(names(stack_bf), disturbance_vars$predictor)
+    if (length(disturbance_layers) > 0) {
+      stack_bf[[disturbance_layers]] <- 0
+      stack_bf[[disturbance_layers]] <- mask(stack_bf[[disturbance_layers]], stack_obs[[disturbance_layers]])
+    }
+                        
+  
+    # load bootstrap models for this species x BCR ----
+    rdata_path <- file.path(root, "output", "06_bootstraps", species, paste0(species, "_", bcr_code, ".Rdata"))
+    if (!file.exists(rdata_path)) return(NULL)
+    
+    loaded_names <- load(rdata_path)
+    mdl_list <- get(loaded_names[1])  # assume the .Rdata contains a single object: list of 32 gbm models
+    
+    # variable set (order & match to model)
+    # take the first model’s variable names; gbm stores them in attr(m, "var.names") or m$var.names
+    varnames <- if (!is.null(attr(mdl_list[[1]], "var.names"))) attr(mdl_list[[1]], "var.names") else mdl_list[[1]]$var.names
+    
+    # restrict and order stacks to model vars (drop any extras)
+    X_obs <- stack_obs[[intersect(varnames, names(stack_obs))]]
+    X_bf  <- stack_bf [[intersect(varnames, names(stack_bf ))]]
+    
+    # align to the same var set across both stacks
+    keep <- intersect(names(X_obs), names(X_bf))
+    X_obs <- X_obs[[keep]]
+    X_bf  <- X_bf [[keep]]
+    
+    if (length(keep) == 0) return(NULL)
+
+    
+    # per-bootstrap predictions and subbasin sums ----------------
+    # (sum over pixels; if your model predicts density per unit area and pixel areas are equal, this is proportional to population)
+    # replace type="response" if your gbm objects need different predict args
+    pred_sum <- function(r_pred) {
+      
+      # get one-column result named 'sum' (no ID column)
+      out <- terra::extract(r_pred * 100, subbasins_in_bcr, fun = sum, na.rm = TRUE, ID = FALSE)
+      
+      tibble::tibble(HYBAS_ID = subbasins_in_bcr$first_HYBAS_ID, sum = out$lyr1)
+    }
+    
+    # create density surfaces for 32 bootstraps
+    obs_density <- lapply(mdl_list, \(m) terra::predict(X_obs, m, type = "response"))    
+    bf_density  <- lapply(mdl_list, \(m) terra::predict(X_bf, m, type = "response"))
+    
+    # get population estimates
+    obs_sums <- lapply(obs_density, pred_sum)
+    bf_sums <- lapply(bf_density, pred_sum)
+    
+    # bind by HYBAS_ID, compute mean/sd across bootstraps
+    obs_mat <- reduce(obs_sums, left_join, by = "HYBAS_ID") |> arrange(HYBAS_ID)
+    bf_mat  <- reduce(bf_sums , left_join, by = "HYBAS_ID") |> arrange(HYBAS_ID)
+    
+    # drop HYBAS_ID to get numeric matrices
+    obs_vals <- as.matrix(obs_mat[,-1, drop = FALSE])
+    bf_vals  <- as.matrix(bf_mat [,-1, drop = FALSE])
+    
     tibble(
-      spec_code = spec_code,
-      bcr_id = bcr_id,
-      year = year,
-      observed_mean = mean(tot_obs), observed_sd = sd(tot_obs),
-      backfilled_mean = mean(tot_bkf), backfilled_sd = sd(tot_bkf),
-      delta_mean = mean(tot_obs - tot_bkf), delta_sd = sd(tot_obs - tot_bkf),
-      ratio_mean = mean(tot_obs / tot_bkf), ratio_sd = sd(tot_obs / tot_bkf)
-    )
-  })
-  
-  # Count footprint cells per subbasin (handy for QA/QC)
-  per_subbasin <- tibble(
-    year = year,
-    bcr_id = bcr_id,
-    sub_id = vapply(sub_list, `[[`, integer(1), "sid"),
-    n_cells = vapply(sub_list, function(z) nrow(z$xy), integer(1))
-  )
-  
-  if (!is.null(out_dir)) {
-    dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
-    readr::write_csv(per_species,  file.path(out_dir, sprintf("species_summary_%s_%s.csv", bcr_id, year)))
-    readr::write_csv(per_subbasin, file.path(out_dir, sprintf("footprint_cells_per_subbasin_%s_%s.csv", bcr_id, year)))
-  }
-  
-  list(per_species = per_species, per_subbasin = per_subbasin)
+      species         = species,
+      subbasin        = obs_mat$HYBAS_ID,
+      bcr             = bcr_code,
+      treatment       = "observed",
+      population_mean = rowMeans(obs_vals, na.rm = TRUE),
+      population_sd   = apply(obs_vals, 1, sd, na.rm = TRUE)) |>
+      bind_rows(
+        tibble(
+          species         = species,
+          subbasin        = bf_mat$HYBAS_ID,
+          bcr             = bcr_code,
+          treatment       = "backfilled",
+          population_mean = rowMeans(bf_vals, na.rm = TRUE),
+          population_sd   = apply(bf_vals, 1, sd, na.rm = TRUE)))
+ })) 
 }
 
+# set up for parallel processing
+plan(multisession, workers = max(1, parallel::detectCores() - 1)) 
+# (optional) reproducible RNG across workers for any stochastic bits
+opts <- furrr::furrr_options(seed = TRUE, scheduling = 1)
 
-# predict bird densities  ------------------------------------------
-# For each subbasin x year × species:
-# observed: predict abundance on raster stack with industry footprint
-# backfilled: predict abundance on raster stack with footprint replaced by intact vegetation
-
-
-
+# 
+res_cawa_osfl_2020 <-
+  future_map_dfr(c("CAWA", "OSFL"),
+    ~ predict_bird_density_per_bcr_year(.x, 2020, bcr_subbasins_ref),
+    .options = opts,
+    .progress = TRUE)
