@@ -23,12 +23,14 @@ rebuild_population_from_mean_rasters_industry <- function(species_vec, year) {
       bcr_code  <- sub(paste0("^", sp, "_([A-Za-z]+\\d+)_", year, "_(observed|backfilled)\\.tif$"), "\\1", base)
       treatment <- sub(paste0("^", sp, "_([A-Za-z]+\\d+)_", year, "_(observed|backfilled)\\.tif$"), "\\2", base)
       
-      r_mean <- terra::rast(f)                         # units: individuals / km^2
-      # Always mask to **industry only**; if no industry overlaps this raster, skip
+      r_mean <- terra::rast(f)                         # units: individuals / ha
+      # always mask to **industry only**; if no industry overlaps this raster, skip
       ind_r  <- tryCatch(terra::mask(terra::crop(r_mean, industry), industry),
                          error = function(e) NULL)
       if (is.null(ind_r) || terra::nlyr(ind_r) == 0) return(NULL)
       
+      # I wrote the rasters as birds per km2
+      # birds/km² × km² per cell = birds per cell (correct for these rasters)
       area_km2 <- terra::cellSize(ind_r, unit = "km")
       r_abund  <- ind_r * area_km2
       
@@ -65,3 +67,32 @@ pop_summary <- res_cawa_osfl_2020_rebuilt %>%
   )
 
 pop_summary
+
+
+
+# find the subbasin with largest population change ------------------
+# filter to one species and pivot observed/backfilled to columns
+cawa_diff <- res_cawa_osfl_2020_rebuilt %>%
+  filter(species == "CAWA") %>%
+  select(subbasin, treatment, population_mean) %>%
+  tidyr::pivot_wider(names_from = treatment, values_from = population_mean) %>%
+  mutate(
+    abs_diff = backfilled - observed,
+    rel_diff = (backfilled - observed) / observed * 100   # percent change
+  )
+
+# Find the subbasin with the largest change
+cawa_diff_max <- cawa_diff %>%
+  filter(!is.na(abs_diff)) %>%
+  arrange(desc(abs_diff)) %>%
+  slice(1)
+
+cawa_diff_max
+
+
+all_subbasins_subset <- vect(file.path(ia_dir, "hydrobasins_masked_merged_subset.gpkg"))
+
+sub_max <- all_subbasins_subset[
+  all_subbasins_subset$first_HYBAS_ID == cawa_diff_max$subbasin, ]
+
+plot(sub_max, main = paste("CAWA max population change subbasin:", cawa_diff_max$subbasin))

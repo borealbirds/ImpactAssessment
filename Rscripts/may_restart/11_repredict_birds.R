@@ -231,7 +231,8 @@ predict_bird_density_per_bcr_year <- function(species, year, bcr_subbasins_ref){
     bf_density  <- lapply(mdl_list, \(m) terra::predict(X_bf, m, fun = gbm_fun))
     
     # write mean prediction rasters
-    obs_mean <- mean(terra::rast(obs_density)) * 100  # *100 to convert ha → km²
+    # # *100 to convert ha → km²
+    obs_mean <- mean(terra::rast(obs_density)) * 100  
     bf_mean  <- mean(terra::rast(bf_density)) * 100
     
     obs_fn <- file.path(outdir, paste0(species, "_", bcr_code, "_", year, "_observed.tif"))

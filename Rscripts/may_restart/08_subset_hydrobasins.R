@@ -137,3 +137,39 @@ subbasin_stats <- tibble(
 # total_subbasins total_area mean_area sd_area median_area min_area max_area
 # <int>      <dbl>     <dbl>   <dbl>       <dbl>    <dbl>    <dbl>
 #   1             295   4068351.    13791.  17513.       9408.    1355.  179656.
+
+
+
+# PART IV: count patches-------------------------------
+# Split into single-part polygons (so each row = one patch)
+og_single <- terra::disagg(oilgas_polygons)
+mn_single <- terra::disagg(mines_polygons_y)
+
+# Count patches with patch_id == 1 (ignore background 0)
+n_oilgas_patches <- sum(og_single$patch_id == 1, na.rm = TRUE)
+n_mines_patches  <- sum(mn_single$patch_id == 1, na.rm = TRUE)
+
+n_oilgas_patches #193
+n_mines_patches #585
+
+
+# --- Compute patch areas (km²) ---
+og_single$area_km2 <- terra::expanse(og_single, unit = "km")
+mn_single$area_km2 <- terra::expanse(mn_single, unit = "km")
+
+# --- Summaries per industry ---
+og_summary <- tibble(
+  industry = "oilgas",
+  n_patches = sum(og_single$patch_id == 1, na.rm = TRUE),
+  total_area_km2 = sum(og_single$area_km2[og_single$patch_id == 1], na.rm = TRUE),
+  mean_area_km2  = mean(og_single$area_km2[og_single$patch_id == 1], na.rm = TRUE),
+  sd_area_km2    = sd(og_single$area_km2[og_single$patch_id == 1], na.rm = TRUE)
+)
+
+mn_summary <- tibble(
+  industry = "mines",
+  n_patches = sum(mn_single$patch_id == 1, na.rm = TRUE),
+  total_area_km2 = sum(mn_single$area_km2[mn_single$patch_id == 1], na.rm = TRUE),
+  mean_area_km2  = mean(mn_single$area_km2[mn_single$patch_id == 1], na.rm = TRUE),
+  sd_area_km2    = sd(mn_single$area_km2[mn_single$patch_id == 1], na.rm = TRUE)
+)

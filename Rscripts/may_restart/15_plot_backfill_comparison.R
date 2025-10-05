@@ -7,68 +7,73 @@ library(maptiles)
 root <- "G:/Shared drives/BAM_NationalModels5"
 ia_dir <- file.path(root, "data", "Extras", "sandbox_data", "impactassessment_sandbox")
 
-
+# from "create_pop_summary_table.R"
+# cawa_diff_max
+# A tibble: 1 × 5
+# subbasin backfilled observed abs_diff rel_diff
+# <dbl>      <dbl>    <dbl>    <dbl>    <dbl>
+#   1 7060245400      3869.    2000.    1869.     93.5
 
 # plot observed raster layer---------------------------
 # import all merged subbasins
 all_subbasins <- vect(file.path(ia_dir, "hydrobasins_masked_merged.gpkg"))
 
 # Athabasca Oil Sands is in BCR60, 61, and 80
-ath_poly <- as.polygons(ext(c(-114.8, -110.0, 55.4, 58.8)), crs = "EPSG:4326")
-ath_poly <- project(ath_poly, crs(all_subbasins))
+aoi_poly <- as.polygons(ext(c(-114.487, -112.278, 57.289, 57.803)), crs = "EPSG:4326")
+aoi_poly <- project(aoi_poly, crs(all_subbasins))
 crs(ath_poly)
 
-# peace river small region
-ath_poly_small<- as.polygons(ext(c(-118.0, -114.9, 56.3, 57.4)), crs = "EPSG:4326")
-ath_poly_small <- project(ath_poly_small, crs(all_subbasins))
-
-
-pr_poly <- as.polygons(ext(c(-119.6, -114.6, 55.0, 57.6)), crs = "EPSG:4326")
-pr_poly <- project(pr_poly, crs(all_subbasins))
 
 # find subbasins overlapping with oil sands
-sb_ath <- {
-  hits <- terra::relate(all_subbasins, ath_poly_small, relation = "intersects")
+aoi_subbasins <- {
+  hits <- terra::relate(all_subbasins, aoi_poly, relation = "intersects")
   all_subbasins[rowSums(hits) > 0, ]
 }
+
+# OR find subbasins overlapping with max pop change
+aoi_subbasins <-  all_subbasins_subset[
+  all_subbasins_subset$first_HYBAS_ID == cawa_diff_max$subbasin, ]
 
 # choose some layer to plot
 bcr60 <- 
   rast(file.path(root, "gis", "stacks", "can60_2020.tif"))[["SCANFIprcD_1km"]] |> 
-  crop(x=_, y=sb_ath) |> 
-  mask(x=_, mask=sb_ath)
+  crop(x=_, y=aoi_subbasins) |> 
+  mask(x=_, mask=aoi_subbasins)
 
 bcr61 <- 
-  rast(file.path(root, "gis", "stacks", "can61_2020.tif"))[["SCANFIprcD_1km"]] |> 
-  crop(x=_, y=sb_ath) |> 
-  mask(x=_, mask=sb_ath)
+  rast(file.path(root, "gis", "stacks", "can61_2020.tif"))[["SCANFI_1km"]] |> 
+  crop(x=_, y=aoi_subbasins) |> 
+  mask(x=_, mask=aoi_subbasins)
 
 bcr80 <- 
-  rast(file.path(root, "gis", "stacks", "can80_2020.tif"))[["SCANFIprcD_1km"]] |> 
-  crop(x=_, y=sb_ath) |> 
-  mask(x=_, mask=sb_ath)
+  rast(file.path(root, "gis", "stacks", "can80_2020.tif"))[["SCANFI_1km"]] |> 
+  crop(x=_, y=aoi_subbasins) |> 
+  mask(x=_, mask=aoi_subbasins)
 
+bcr11 <-
+  rast(file.path(root, "gis", "stacks", "can11_2020.tif"))[["SCANFI_1km"]] |> 
+  crop(x=_, y=aoi_subbasins) |> 
+  mask(x=_, mask=aoi_subbasins)
 
-bcr11 <- 
-  rast(file.path(root, "gis", "stacks", "can11_2020.tif"))[["SCANFIprcD_1km"]] |> 
-  crop(x=_, y=sb_ath) |> 
-  mask(x=_, mask=sb_ath)
 
 # athabasca
 r_mos <- mosaic(mosaic(bcr60, bcr61), bcr80) 
 
 # peace river
-r_mos <- mosaic(mosaic(bcr60, bcr61), bcr11) 
+r_mos <- mosaic(mosaic(bcr60, bcr61), bcr11)
+
+# prairies
+r_mos <- mosaic(mosaic(bcr80, bcr61), bcr11) 
 
 # import industry footprint polygon
 combined_poly <- vect(file.path(ia_dir, "combined_industry_footprint.gpkg"))
 combined_poly <- terra::intersect(
-  terra::project(combined_poly, crs(sb_ath)),
-  terra::aggregate(sb_ath)  # dissolve subbasins to avoid dup splits
+  terra::project(combined_poly, crs(aoi_subbasins)),
+  terra::aggregate(aoi_subbasins)  # dissolve subbasins to avoid dup splits
 )
 
 ggplot() +
-  geom_spatraster(data = r_mos) +
+  geom_spatraster(data = as.factor(r_mos)) +
   scale_fill_viridis_c(na.value = NA, name = "SCANFIprcD_1km") +
   #geom_spatvector(data = sb_ath, fill = NA, linewidth = 0.5) +
   geom_spatvector(data = combined_poly, fill = NA, linewidth = 0.5, colour="white") +
@@ -79,7 +84,7 @@ ggplot() +
 # compare to backfilled layers---------------------------
 # find subbasin indexes for sb_ath
 all_subbasins_subset <- vect(file.path(ia_dir, "hydrobasins_masked_merged_subset.gpkg"))
-m   <- which(terra::relate(all_subbasins_subset, ath_poly_small, "intersects"), arr.ind = TRUE)
+m   <- which(terra::relate(all_subbasins_subset, aoi_subbasins, "intersects"), arr.ind = TRUE)
 idx_in_order_of_sb_ath <- m[order(m[,2]), 1] # [1] 154 207 274 275 276 277 279 280 284
 
 sub_ids <- all_subbasins_subset$first_HYBAS_ID[idx_in_order_of_sb_ath]
@@ -117,11 +122,11 @@ mosaic_backfilled_onevar <- function(sub_ids, year, layer_nm,
   out
 }
 
-layer_nm <- "SCANFIprcD_1km"
+layer_nm <- "SCANFI_1km"
 
 # observed (already built)
 # r_mos <- mosaic(r60, r61)      # from the previous step
-obs_ath <- terra::mask(terra::crop(r_mos[[layer_nm]], sb_ath), sb_ath)
+obs_ath <- terra::mask(terra::crop(r_mos[[layer_nm]], aoi_subbasins), aoi_subbasins)
 
 # backfilled mosaic
 r_bf <- mosaic_backfilled_onevar(
@@ -133,7 +138,7 @@ r_bf <- mosaic_backfilled_onevar(
   template       = r_mos[[layer_nm]]        # ensures same grid as observed
 )
 
-bf_ath <- terra::mask(terra::crop(r_bf, sb_ath), sb_ath)
+bf_ath <- terra::mask(terra::crop(r_bf, aoi_subbasins), aoi_subbasins)
 bf_ath <- terra::cover(bf_ath, obs_ath)
 
 ggplot() +
