@@ -33,8 +33,12 @@ build_mosaics_by_year <- function(
     categorical_predictors = c("ABoVE_1km","method","NLCD_1km","MODISLCC_1km",
                                "MODISLCC_5x5","SCANFI_1km","VLCE_1km"),
     stacks_dir = file.path(root, "gis", "stacks"),
-    outdir     = file.path(ia_dir)
+    outdir     = file.path(ia_dir),
+    soil_cache = NULL
 ){
+  
+  # set a cache so that the soil data doesn't need to be loaded on every iteration
+  if (is.null(soil_cache)) soil_cache <- new.env(parent = emptyenv())
   
   # define output directory and file names
   dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
@@ -56,13 +60,12 @@ build_mosaics_by_year <- function(
       # guard tiles with missing crs
       if (is.na(terra::crs(r)) || terra::crs(r) == "") terra::crs(r) <- target_crs
       
-      # project the bounding box of the all_subbasins_subset (fast)
+      # project the bounding box of the all_subbasins_subset 
       # then crop the current stack (less memory downstream)
       subb_local_ext <- terra::project(
         terra::ext(all_subbasins_subset),
         from = target_crs,
-        to   = terra::crs(r)
-      )
+        to   = terra::crs(r))
      
       terra::crop(r, subb_local_ext)  # extent crop only
     })
@@ -163,8 +166,8 @@ build_mosaics_by_year <- function(
       
       caf_aligned <- terra::project(
         caf, r_mos, method = "bilinear",
-        filename = tempfile(fileext = ".tif"), overwrite = TRUE
-      )
+        filename = tempfile(fileext = ".tif"), overwrite = TRUE)
+      
       names(caf_aligned) <- "CAfire"
       
       if ("CAfire" %in% names(r_mos)) r_mos <- r_mos[[setdiff(names(r_mos), "CAfire")]]
@@ -175,6 +178,31 @@ build_mosaics_by_year <- function(
       message("Year ", y, ": CAfire not found at ", caf_path, " (skipping)")
       
     }
+    
+  
+    # import soils stack and add to covariate stack
+    soil_src  <- terra::rast(file.path(ia_dir,"isric_soil", "isric_soil_covariates_masked.tif"))
+    
+    # identify the geometry of the current year’s covariate stack
+    geom_key <- paste(nrow(r_mos), ncol(r_mos), as.character(terra::ext(r_mos)), crs(r_mos), sep="|")
+    
+    # on the first loop (year) we import and align the soil stack
+    # on subsequent iterations (years) we save time by using `get()`
+    if (exists(geom_key, envir = soil_cache)) {
+      soil_aligned <- get(geom_key, envir = soil_cache)
+    } else {
+    
+    soil_aligned <- terra::project(
+      soil_src, r_mos, method = "bilinear",
+      filename = tempfile(fileext = ".tif"), overwrite = TRUE) |>
+      terra::crop(x= _, y = r_mos) |>
+      terra::mask(x= _, mask = r_mos[[1]])
+    assign(geom_key, soil_aligned, envir = soil_cache)
+    } 
+    
+    r_mos <- c(r_mos, soil_aligned)          
+    message("successfully added soil stack to covariate stack for year ", y)                        
+    
     
     # crop and mask to subbasin extent
     r_out <- 
