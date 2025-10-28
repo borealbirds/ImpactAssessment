@@ -279,7 +279,7 @@ subbasin_stats <- tibble(
 # subset subbasins to just those with high human footprint (ie HF >= 1)
 # because we don't need to train or backfill areas without disturbance
 
-# import raster with non-intact human footprint
+# import raster with high human footprint
 highhf_mask <- terra::rast(file.path(ia_dir, "hirshpearson", "CanHF_1km_morethan1.tif"))
 
 # import subbasins multi-polygon (merged so that every subbasin has sufficient low HF pixels)

@@ -20,6 +20,7 @@ bcrs_needed <- BAMexploreR::bam_get_bcr(version = "v5", ext = all_subbasins_subs
   
 # define temporal scope
 years <- seq(from = 1990, to = 2020, by = 5)
+# years <- seq(from = 2020, to = 2020, by = 5)
 
 # -----------------------------------------------------
 # for every year, import BCR covariate stacks and mosaic
@@ -156,7 +157,7 @@ build_mosaics_by_year <- function(
     
     
     # CAfire: add time-since-disturbance layer for this year ---
-    caf_path <- file.path(ia_dir, paste0("CAfire_", y, "_masked.tif"))
+    caf_path <- file.path(ia_dir, "CAfire", paste0("CAfire_", y, "_masked.tif"))
    
      if (file.exists(caf_path)) {
        
