@@ -4,21 +4,58 @@
 # created: August 7, 2025
 # ---
 
+#1. attach packages ----------------------------------------------
+print("* attaching packages on master *")
+library(BART)
 library(BAMexploreR)
-library(furrr)
+library(parallel)
 library(terra)
 library(tidyverse)
-library(xgboost)
 
 
-# set root path -------------------------------------------------
-root <- "G:/Shared drives/BAM_NationalModels5"
+#2. define local or cluster --------------------------------------
+test <- TRUE
+cc <- FALSE
+
+
+#3. set number of tasks for local vs cluster ---------------------
+if(cc){ n_tasks <- 32}
+if(!cc | test){ n_tasks <- 4}
+
+
+#4. create and register clusters ---------------------------------
+# creates 32 copies of R running in parallel via 32 tasks, on one of the cluster's sockets (processors). 
+# Belgua has ~965 nodes
+print("* creating clusters *")
+cl <- makePSOCKcluster(n_tasks, type="PSOCK")
+
+# print number of tasks and host name for confirmation
+cl
+
+
+
+#5. set root path ------------------------------------------------
+print("* setting root file path *")
+
+if(!cc){root <- "G:/Shared drives/BAM_NationalModels5"}
+if(cc){root <- "/home/mannfred/scratch"}
+
 ia_dir <- file.path(root, "data", "Extras", "sandbox_data", "impactassessment_sandbox")
 
+tmpcl <- clusterExport(cl, c("root"))
 
 
-# define model covariates ----------------------------------------
+#6. attach packages on clusters ----------------------------------
+# `clusterEvalQ` evaluates a literal expression on each cluster node. 
+print("* Loading packages on workers *")
+tmpcl <- clusterEvalQ(cl, library(BART))
+tmpcl <- clusterEvalQ(cl, library(BAMexploreR))
+tmpcl <- clusterEvalQ(cl, library(terra))
+tmpcl <- clusterEvalQ(cl, library(tidyverse))
 
+
+
+#7. define model covariates --------------------------------------
 # define predictor and response variables
 # store predictor metadata as a reference
 predictor_metadata <-
@@ -61,7 +98,7 @@ biotic_vars <- biotic_vars[match(neworder, biotic_vars$predictor), ]
 
 
 
-# define data paths ----------------------------------------
+#8. define data paths ----------------------------------------
 
 # subbasins polygon
 all_subbasins_subset_path <- file.path(ia_dir, "hydrobasins_masked_merged_subset.gpkg")
@@ -73,13 +110,17 @@ highhf_mask_path <- file.path(ia_dir, "hirshpearson", "CanHF_1km_morethan1.tif")
 lowhf_mask_path <- file.path(ia_dir, "hirshpearson", "CanHF_1km_lessthan1.tif")
 
 # covariate stack for year y
-stack_y_path <- terra::rast(file.path(ia_dir, sprintf("covariates_mosaiced_%d.tif", year)))
+stack_y_path <- file.path(ia_dir, sprintf("covariates_mosaiced_%d.tif", 2020))
+
+# categorical covariates
+categorical_responses = c("ABoVE_1km", "NLCD_1km","MODISLCC_1km",
+                          "MODISLCC_5x5","SCANFI_1km","VLCE_1km")
 
 # training and backfilling function (subbasin level)
 source(file.path(getwd(), "Rscripts", "may_restart", "08_train_and_backfill_subbasin_s.R"))
 
 
-# define model training function ----------------------------------------
+#9. define model training function ----------------------------------------
 
 # train models per subbasin per year
 train_and_backfill_per_year <- function(
@@ -104,11 +145,11 @@ train_and_backfill_per_year <- function(
 
  # import low hf layer and project to current stack
  lowhf_mask <- terra::rast(lowhf_mask_path)
- lowhf_mask <- terra::project(x=lowhf_mask_y, y=stack_y, method = "near")
+ lowhf_mask <- terra::project(x=lowhf_mask, y=stack_y, method = "near")
  
  # import high hf layer and project to current stack
  highhf_mask <- terra::rast(highhf_mask_path)
- highhf_mask <- terra::project(x=highhf_mask_y, y=stack_y, method = "near")
+ highhf_mask <- terra::project(x=highhf_mask, y=stack_y, method = "near")
  
  # import subbasin boundaries
  all_subbasins_subset <- terra::vect(all_subbasins_subset_path)
@@ -119,6 +160,9 @@ train_and_backfill_per_year <- function(
  ###
  
  # apply model fitting and backfilling over all subbasins
+ 
+ for (i in 1:length(all_subbasins_subset)) {
+ 
  res <- train_and_backfill_subbasin_s(
      subbasin_index        = i,
      year                  = year,
@@ -128,24 +172,71 @@ train_and_backfill_per_year <- function(
      all_subbasins_subset  = all_subbasins_subset, 
      abiotic_vars          = abiotic_vars,
      biotic_vars           = biotic_vars,
-     categorical_responses = c("ABoVE_1km", "NLCD_1km","MODISLCC_1km",
-                               "MODISLCC_5x5","SCANFI_1km","VLCE_1km"),
+     categorical_responses = categorical_responses,
      ia_dir                = ia_dir,
      neworder              = neworder,
      quiet                 = quiet)
+ 
+ } # close loop over subbasins
  
  invisible(res)
  
 } # close train_and_backfill_per_year()
 
 
+# logfile function to track progress
+make_logger <- function(logfile) {
+  dir.create(dirname(logfile), recursive = TRUE, showWarnings = FALSE)
+  function(fmt, ...) {
+    line <- sprintf("[%s pid=%d host=%s] %s\n",
+                    format(Sys.time(), "%F %T"),
+                    Sys.getpid(),
+                    Sys.info()[["nodename"]],
+                    sprintf(fmt, ...))
+    cat(line, file = logfile, append = TRUE)
+  }
+}
 
-# train models and backfill biotic features for year y -----------------------------
-train_and_backfill_per_year(year = 2020, 
-                            all_subbasins_subset_path = all_subbasins_subset_path,
-                            lowhf_mask_path = lowhf_mask_path,
-                            highhf_mask_path = highhf_mask_path,
-                            stack_y_path = stack_y_path,
-                            categorical_responses = c("ABoVE_1km", "NLCD_1km","MODISLCC_1km",
-                                                      "MODISLCC_5x5","SCANFI_1km","VLCE_1km"))
+
+#10. export the necessary variables and functions to the cluster -------------------
+print("* exporting objects and functions to cluster *")
+clusterExport(cl, c("neworder", "abiotic_vars", "biotic_vars", "categorical_responses",
+                    "train_and_backfill_subbasin_s", "all_subbasins_subset_path", 
+                    "highhf_mask_path", "lowhf_mask_path", "stack_y_path", 
+                    "ia_dir", "train_and_backfill_per_year", "make_logger"))
+
+#11. train models and backfill biotic features for year y -----------------------------
+print("* running backfilling in parallel *")
+
+# run backfilling in parallel by subbasin
+subs <- 1:length(all_subbasins_subset)  
+subs <- 1:2 # for testing
+# parLapply runs the backfilling for every i in `subs`
+backfill_results <- 
+  parLapplyLB(cl, 
+              X = subs, 
+              fun = function(i) train_and_backfill_subbasin_s(
+                subbasin_index = i, 
+                year           = 2020,
+                stack_y        = terra::rast(stack_y_path),
+                lowhf_mask     = terra::rast(lowhf_mask_path),
+                highhf_mask    = terra::rast(highhf_mask_path),
+                abiotic_vars   = abiotic_vars, 
+                biotic_vars    = biotic_vars,
+                ia_dir         = ia_dir,
+                quiet          = FALSE,
+                neworder       = neworder,
+                categorical_responses = categorical_responses,
+                all_subbasins_subset  = terra::vect(all_subbasins_subset_path)))
+  
+
+#12. stop the cluster----
+print("* stopping cluster :-)*")
+stopCluster(cl)
+
+#13. save backfilled raster for this species x year
+print("* saving raster file *")
+print(backfill_results)
+
+if(cc){ q() }
 
