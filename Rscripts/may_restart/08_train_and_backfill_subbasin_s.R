@@ -89,7 +89,8 @@ train_and_backfill_subbasin_s <- function(
   # store BART metrics here
   metrics <- list()
   
-  # train a model for each vegetation feature, and backfill
+  # train a model for each vegetation feature
+  # backfill each feature where human footprint is high
   for (b in biotic_cols) {
     
     t0 <- proc.time()[3]
@@ -99,9 +100,13 @@ train_and_backfill_subbasin_s <- function(
     idx <- which(!is.na(df_train[[b]]))
     if (length(idx) == 0) next  # skip `b` if absent from this subbasin
     
-    # the predictors for biotic_cols[b] are abiotic_cols, biotic_cols (except b), lat/long
+    # biotic predictors that precede `b` in `neworder`
+    b_before <- biotic_cols_cont[seq_len(match(b, biotic_cols_cont) - 1)]
+    
+    # the predictors for biotic_cols[b] are abiotic_cols, 
+    # biotic_cols (except b and those before it in `neworder`), and lat/long
     # note: categorical biotic features excluded from predicting continuous biotic features
-    predictors <- c(abiotic_cols, setdiff(biotic_cols_cont, b), "x", "y")
+    predictors <- c(abiotic_cols, b_before, "x", "y")
     
     # subset the global predictors to those in the current subbasin
     predictors <- intersect(predictors, names(df_train)) 
@@ -132,12 +137,13 @@ train_and_backfill_subbasin_s <- function(
                          y.train = y, 
                          x.test = as.matrix(df_backfill_bart),
                          type = "wbart",
-                         ntree = 50L, 
-                         ndpost = 600L, 
-                         nskip = 200L, 
+                         k=2, #shrinkage
+                         ntree = 75L, 
+                         ndpost = 700L, 
+                         nskip = 300L, 
                          sparse = TRUE, # sampler focuses on informative predictors (not all predictors treated as informative)
                          sigest  = sd(y), # the rough error standard deviation used in the prior
-                         sigdf=2) 
+                         sigdf=1.5) 
       
       # estimate posterior mean and sd
       # `draws` is a matrix: rows = posterior draws, columns = pixels

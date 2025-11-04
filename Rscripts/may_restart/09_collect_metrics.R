@@ -1,6 +1,16 @@
 # helper: collect metrics from a BART fit
 collect_metrics <- function(fit, y, covariate, subbasin, year, top_var = NA_character_) {
-  yhat_draws <- fit$yhat.train                # ndpost x n
+  yhat_draws <- fit$yhat.train                # assumes ndpost x n
+  mu    <- colMeans(yhat_draws)
+  var_f <- apply(yhat_draws, 2L, var)
+  sig2  <- mean(fit$sigma^2)
+  se_pred <- sqrt(var_f + sig2)
+  
+  lower <- mu - 1.96 * se_pred
+  upper <- mu + 1.96 * se_pred
+  coverage95 <- mean(y >= lower & y <= upper)
+  
+  
   fhat_mean  <- colMeans(yhat_draws)
   resid      <- y - fhat_mean
   
@@ -10,13 +20,8 @@ collect_metrics <- function(fit, y, covariate, subbasin, year, top_var = NA_char
   # Bayesian R^2 (Gelman): compute per draw, summarise
   ss_total <- sum( (y - mean(y))^2 )
   R2_post  <- apply(yhat_draws, 1L, function(mu) 1 - sum((y - mu)^2)/ss_total)
-  r2_med   <- stats::median(R2_post)
-  r2_lohi  <- stats::quantile(R2_post, c(.025, .975))
-  
-  # 95% predictive coverage on train (using posterior predictive mean ± quantiles of yhat)
-  lower <- apply(yhat_draws, 2L, stats::quantile, 0.025)
-  upper <- apply(yhat_draws, 2L, stats::quantile, 0.975)
-  coverage95 <- mean(y >= lower & y <= upper)
+  r2_med   <- median(R2_post)
+  r2_lohi  <- quantile(R2_post, c(.025, .975))
   
   data.frame(
     covariate   = covariate,
