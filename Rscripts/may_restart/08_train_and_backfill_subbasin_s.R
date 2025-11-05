@@ -162,7 +162,22 @@ train_and_backfill_subbasin_s <- function(
       out_layers[[paste0(b, "_mean")]] <- b_mean
       out_layers[[paste0(b, "_sd")]]   <- b_sd
       
-      # variable importance if exposed 
+      # posterior predictive check: get posterior predictions for training data
+      post_pred_train <- fit$yhat.train
+      ppc_mean <- mean(colMeans(post_pred_train))
+      ppc_sd <- mean(apply(post_pred_train, 2, sd))
+      
+      # p = the probability the test statistic in a replicated data 
+      # set exceeds that in the original data
+      # Calculate Bayesian p-value (proportion of times observed statistic > predicted)
+      obs_mean <- mean(y)
+      obs_sd <- sd(y)
+      
+      # compare each posterior draw with observed statistics
+      p_value_mean <- mean(apply(post_pred_train, 1, function(x) mean(x) > obs_mean))
+      p_value_sd <- mean(apply(post_pred_train, 1, function(x) sd(x) > obs_sd))
+      
+      # extract variable with highest importance 
       top_var <- NA_character_
       if ("varprob" %in% names(fit)) {
         top_var <- names(sort(colMeans(fit$varprob), decreasing=TRUE))[1]
