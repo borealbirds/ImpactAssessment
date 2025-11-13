@@ -129,6 +129,11 @@ train_and_backfill_subbasin_s <- function(
     # because we can't backfill covariates that we didn't train models for
     df_backfill_bart  <- df_backfill[, colnames(df_train_bart), drop = FALSE]
     
+    # check that the backfill dataframe doesn't have any all-NA predictors
+    # if it does, remove them from both training and backfill dataframes
+    df_backfill_bart <- df_backfill_bart[, colSums(!is.na(df_backfill_bart )) > 0]
+    df_train_bart <- df_train_bart[, colnames(df_backfill_bart), drop = FALSE]
+    
     # train: check if continuous or categorical
     if (!(b %in% categorical_responses)){
       
@@ -192,7 +197,6 @@ train_and_backfill_subbasin_s <- function(
         top_var <- names(sort(vc, decreasing=TRUE))[1]
       }
       
-      # DOES OUR COVERAGE CALCULATION MAKE SENSE??? see 09_collect_metrics
       # collect metrics (one row per year x subbasin x covariate)
       metrics[[length(metrics) + 1L]] <- collect_metrics(
         fit, y,
@@ -244,7 +248,18 @@ train_and_backfill_subbasin_s <- function(
       } else {
         y_int <- unname(fwd_map[as.character(y_codes)])  # 1..K'
         
-        fit <- BART::mbart(x.train = as.matrix(X_train), y.train = y_int, x.test  = as.matrix(X_backfill))
+        # reproducible per (year, subbasin, covariate)
+        set.seed(abs(as.integer(sprintf("%d%03d", subbasin_index, which(biotic_cols==b)))))
+        
+        fit <- BART::mbart(x.train = as.matrix(df_train_bart), 
+                           y.train = y_int, 
+                           x.test  = as.matrix(df_backfill_bart),
+                           type = "pbart",
+                           k = 3,
+                           ntree = 50L,
+                           ndpost = 700L,
+                           nskip = 300L,
+                           sparse = TRUE)
       
         # prob.test: draws x ntest x K; average over draws -> ntest x K'
         class_probs <- apply(fit$prob.test, c(2, 3), mean)
