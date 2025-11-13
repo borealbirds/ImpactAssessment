@@ -74,7 +74,7 @@ train_and_backfill_subbasin_s <- function(
   df_backfill[, c("x","y")] <- sweep(df_backfill[, c("x","y")], 2, cx, "-")
   df_backfill[, c("x","y")] <- sweep(df_backfill[, c("x","y")], 2, sx, "/")
   
-  logp("train rows=%d; backfill rows=%d", nrow(df_train), nrow(df_backfill))
+  logp("backfill rows=%d", nrow(df_backfill))
   
   # define predictors and responses
   abiotic_cols <- intersect(names(df_train), abiotic_vars$predictor)
@@ -118,8 +118,15 @@ train_and_backfill_subbasin_s <- function(
     
     # drop predictors that are all NAs
     df_train_bart <- df_train_bart[, colSums(!is.na(df_train_bart)) > 0]
+    logp("train rows=%d", nrow(df_train_bart))
+    logp("train columns=%d", ncol(df_train_bart))
+    
+    # drop predictors with zero variance
+    col_sd <- sapply(df_train_bart, function(x) sd(x, na.rm = TRUE))
+    df_train_bart <- df_train_bart[, col_sd > 0, drop = FALSE] 
     
     # subset backfill dataframe to the same abiotic_cols, biotic_cols, lat/long
+    # because we can't backfill covariates that we didn't train models for
     df_backfill_bart  <- df_backfill[, colnames(df_train_bart), drop = FALSE]
     
     # train: check if continuous or categorical
@@ -137,19 +144,19 @@ train_and_backfill_subbasin_s <- function(
                          y.train = y, 
                          x.test = as.matrix(df_backfill_bart),
                          type = "wbart",
-                         k=2, #shrinkage
-                         ntree = 75L, 
+                         k = 3, #shrinkage
+                         ntree = 50L, 
                          ndpost = 700L, 
                          nskip = 300L, 
                          sparse = TRUE, # sampler focuses on informative predictors (not all predictors treated as informative)
                          sigest  = sd(y), # the rough error standard deviation used in the prior
-                         sigdf=1.5) 
+                         sigdf = 3) 
       
       # estimate posterior mean and sd
       # `draws` is a matrix: rows = posterior draws, columns = pixels
-      draws <- fit$yhat.test
+      draws <- fit$yhat.test # yhat.test are the predicted values of b at high HF locations
       pred_mean <- as.numeric(fit$yhat.test.mean) 
-      pred_sd   <- apply(draws, 2, sd)
+      pred_sd   <- apply(draws, 2, sd) # uncertainty in model-predicted values of b per pixel
       
       # allocate full-length vectors (including NAs where inputs were NA)
       b_mean <- rep(NA_real_, nrow(df_backfill))
@@ -157,18 +164,17 @@ train_and_backfill_subbasin_s <- function(
       b_mean <- pred_mean
       b_sd   <- pred_sd
       
-      # write for hierarchical use + outputs
+      # write for using in next iteration (following `neworder`), and for outputs
       df_backfill[[b]] <- b_mean
       out_layers[[paste0(b, "_mean")]] <- b_mean
       out_layers[[paste0(b, "_sd")]]   <- b_sd
       
       # posterior predictive check: get posterior predictions for training data
-      post_pred_train <- fit$yhat.train
+      post_pred_train <- fit$yhat.train # yhat.train are the predicted values of b at low HF locations (values are from the fitted model, not the training dataset)
       ppc_mean <- mean(colMeans(post_pred_train))
       ppc_sd <- mean(apply(post_pred_train, 2, sd))
       
-      # p = the probability the test statistic in a replicated data 
-      # set exceeds that in the original data
+      # p is the probability the test statistic in a replicated data set exceeds that in the original data
       # Calculate Bayesian p-value (proportion of times observed statistic > predicted)
       obs_mean <- mean(y)
       obs_sd <- sd(y)
@@ -186,6 +192,7 @@ train_and_backfill_subbasin_s <- function(
         top_var <- names(sort(vc, decreasing=TRUE))[1]
       }
       
+      # DOES OUR COVERAGE CALCULATION MAKE SENSE??? see 09_collect_metrics
       # collect metrics (one row per year x subbasin x covariate)
       metrics[[length(metrics) + 1L]] <- collect_metrics(
         fit, y,

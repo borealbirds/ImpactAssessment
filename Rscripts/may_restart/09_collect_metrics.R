@@ -6,10 +6,19 @@ collect_metrics <- function(fit, y, covariate, subbasin, year, top_var = NA_char
   sig2  <- mean(fit$sigma^2)
   se_pred <- sqrt(var_f + sig2)
   
-  lower <- mu - 1.96 * se_pred
-  upper <- mu + 1.96 * se_pred
-  coverage95 <- mean(y >= lower & y <= upper)
+  sigma_draws <- fit$sigma  # length ndpost
+  yrep_draws <- fit$yhat.train + matrix(
+    rnorm(length(fit$yhat.train), sd = rep(sigma_draws, each = ncol(fit$yhat.train))),
+    nrow = nrow(fit$yhat.train))
   
+  # compute 95% posterior predictive intervals
+  pred_lower <- apply(yrep_draws, 2, quantile, 0.025)
+  pred_upper <- apply(yrep_draws, 2, quantile, 0.975)
+  
+  # compute empirical coverage
+  # the overlap between the posterior of y and the observed y
+  # ~95 is desirable because it's a balance between accurate but not over-fit
+  coverage95 <- mean(y >= pred_lower & y <= pred_upper)
   
   fhat_mean  <- colMeans(yhat_draws)
   resid      <- y - fhat_mean
