@@ -13,8 +13,10 @@ train_and_backfill_subbasin_s <- function(
     quiet = FALSE
 ) {
   
-  # source BART metrics summary function
-  source(file.path(getwd(), "Rscripts", "may_restart", "09_collect_metrics.R"))
+  # source BART metrics summary functions
+  source(file.path(getwd(), "Rscripts", "may_restart", "09_collect_metrics_gbart.R"))
+  source(file.path(getwd(), "Rscripts", "may_restart", "09_collect_metrics_mbart.R"))
+  
   
   # for logging progress
   logfile <- file.path(ia_dir, "logs", sprintf("Y%d_S%03d.log", year, subbasin_index))
@@ -160,14 +162,8 @@ train_and_backfill_subbasin_s <- function(
       # estimate posterior mean and sd
       # `draws` is a matrix: rows = posterior draws, columns = pixels
       draws <- fit$yhat.test # yhat.test are the predicted values of b at high HF locations
-      pred_mean <- as.numeric(fit$yhat.test.mean) 
-      pred_sd   <- apply(draws, 2, sd) # uncertainty in model-predicted values of b per pixel
-      
-      # allocate full-length vectors (including NAs where inputs were NA)
-      b_mean <- rep(NA_real_, nrow(df_backfill))
-      b_sd   <- rep(NA_real_, nrow(df_backfill))
-      b_mean <- pred_mean
-      b_sd   <- pred_sd
+      b_mean <- as.numeric(fit$yhat.test.mean) 
+      b_sd   <- apply(draws, 2, sd) # uncertainty in model-predicted values of b per pixel
       
       # write for using in next iteration (following `neworder`), and for outputs
       df_backfill[[b]] <- b_mean
@@ -198,7 +194,7 @@ train_and_backfill_subbasin_s <- function(
       }
       
       # collect metrics (one row per year x subbasin x covariate)
-      metrics[[length(metrics) + 1L]] <- collect_metrics(
+      metrics[[length(metrics) + 1L]] <- collect_metrics_gbart(
         fit, y,
         covariate = b,
         subbasin  = subbasin_index,
@@ -254,36 +250,53 @@ train_and_backfill_subbasin_s <- function(
         # reproducible per (year, subbasin, covariate)
         set.seed(abs(as.integer(sprintf("%d%03d", subbasin_index, which(biotic_cols==b)))))
         
+        # multinomial bart keeps every 10th posterior sample (gbart keeps every sample)
+        # so mbart will take at least 10 times longer
+        # gbart assumes continuous residuals → conjugate priors → less autocorrelation → no thinning
+        # mbart uses latent variables → non-conjugate updates → more autocorrelation → needs thinning
         fit <- BART::mbart(x.train = as.matrix(df_train_bart), 
                            y.train = y_int, 
                            x.test  = as.matrix(df_backfill_bart),
                            type = "pbart",
                            k = 3,
                            ntree = 50L,
-                           ndpost = 700L,
-                           nskip = 300L,
+                           ndpost = 500L,
+                           nskip = 200L,
+                           keepevery = 5L,
+                           printevery = 450,
                            sparse = TRUE)
       
         # average posterior: nback x K'
-        class_probs <- apply(fit$prob.test, c(2, 3), mean)
+        ndpost  <- nrow(fit$prob.test)
+        npixels <- ncol(fit$prob.test) / fit$K
+        K       <- fit$K
+        
+        # reshape to: draws × pixels × classes
+        prob_array <- array(
+          fit$prob.test,
+          dim = c(ndpost, npixels, K)
+        )
+        
+        # average over draws → pixels × classes
+        class_probs <- apply(prob_array, c(2, 3), mean)
         
         # mode
         pred_idx <- max.col(class_probs, ties.method = "first") 
-        mode_codes <- as.integer(inv_map[as.character(pred_idx)]) # back to original codes  
+        b_mode <- as.integer(inv_map[as.character(pred_idx)]) # back to original codes  
         
         # max probability per pixel
         b_maxprob <- apply(class_probs, 1, max)
         
         # entropy with small epsilon to avoid log(0)
         eps <- 1e-12
-        b_entropy[keep2] <- -rowSums(class_probs * log(pmax(class_probs, eps)))
+        b_entropy <- -rowSums(class_probs * log(pmax(class_probs, eps)))
         
         # per-class probabilities
         for (k in seq_len(K)) {
-          orig <- present[k]
-          nm <- paste0(b, "_prob_", orig)
+          nm <- paste0(b, "_prob_", present[k])
           per_class[[nm]] <- class_probs[, k]
         }
+        
         
       } # close if single or multi-class
       
@@ -296,15 +309,13 @@ train_and_backfill_subbasin_s <- function(
       # add per-class probability layers
       for (nm in names(per_class)) out_layers[[nm]] <- per_class[[nm]]
       
-      # nEED A CUSTOM COLLECT METRICS FOR CATEGORICAL COVARS
-      metrics[[length(metrics) + 1L]] <- collect_metrics(
+      metrics[[length(metrics) + 1L]] <- collect_metrics_mbart(
         fit,
-        y_codes_all,
+        y         = y_int,
+        X_train   = df_train_bart,
         covariate = b,
         subbasin  = subbasin_index,
-        year      = year,
-        top_var   = NA_character_
-      )
+        year      = year)
       
     } # close if continuous or categorical
     

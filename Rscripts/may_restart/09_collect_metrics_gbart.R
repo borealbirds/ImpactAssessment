@@ -1,5 +1,5 @@
 # helper: collect metrics from a BART fit
-collect_metrics <- function(fit, y, covariate, subbasin, year, top_var = NA_character_) {
+collect_metrics_gbart <- function(fit, y, covariate, subbasin, year, top_var = NA_character_) {
   yhat_draws <- fit$yhat.train                # assumes ndpost x n
   mu    <- colMeans(yhat_draws)
   var_f <- apply(yhat_draws, 2L, var)
