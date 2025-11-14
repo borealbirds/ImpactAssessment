@@ -211,42 +211,45 @@ train_and_backfill_subbasin_s <- function(
       # get original codes, even if the raster is a factor
       if (terra::is.factor(cov_s[[b]])) {
         lut <- levels(cov_s[[b]])[[1]]$value  # original cell values
-        y_codes_all <- lut[ as.integer(df_train[[b]][idx]) ]
+        y_codes <- lut[ as.integer(df_train[[b]][idx]) ]
       } else {
-        y_codes_all <- as.integer(df_train[[b]][idx])
+        y_codes <- as.integer(df_train[[b]][idx])
       }
       
-      # align y with X_train 
-      y_codes <- y_codes_all
-      if (!length(y_codes)) { logp("[%s] skip: empty y_codes after keep1", b); next } # make sure y isn’t empty 
+      # make sure y isn’t empty 
+
+      if (!length(y_codes)) { logp("[%s] skip: empty y_codes after keep1", b); next } 
       
-      # land cover classes actually present in the training subset
+      # land cover classes that are actually present in the training subset
       present <- sort(unique(y_codes))
+      K <- length(present)
+      if (K == 0) { logp("[%s] skip: no classes present", b); next }
       
       # pre-allocate outputs
       b_mode    <- rep(NA_real_, nrow(df_backfill))
       b_maxprob <- rep(NA_real_, nrow(df_backfill))
       b_entropy <- rep(NA_real_, nrow(df_backfill))
-      per_class <- list()  # will fill below when K>=2
+      per_class <- list()  # will fill in if K >= 2
       
       # build a forward and inverse map only over present classes (size K')
       fwd_map  <- setNames(seq_along(present), present)   # original code -> 1..K'
       inv_map  <- setNames(present, seq_along(present))   # 1..K' -> original code
-      K <- length(present)
-      if (K == 0) { logp("[%s] skip: no classes present", b); next }
       
+      # determine complexity of landcover classes
       if (K < 2) {
+        
         # trivial: only one class in training data
-        b_mode[keep2]    <- present[1]
-        b_maxprob[keep2] <- 1
-        b_entropy[keep2] <- 0
+        b_mode    <- rep(present[1], nrow(df_backfill)) # the one and only landcover class present
+        b_maxprob <- rep(1, nrow(df_backfill)) 
+        b_entropy <- rep(0, nrow(df_backfill))
 
         nm <- paste0(b, "_prob_", present[1])
-        v <- rep(NA_real_, nrow(df_backfill)); v[keep2] <- 1
-        per_class[[nm]] <- v
+        per_class[[nm]] <- rep(1, nrow(df_backfill))
         
       } else {
-        y_int <- unname(fwd_map[as.character(y_codes)])  # 1..K'
+        
+        # training labels mapped 1..K'
+        y_int <- unname(fwd_map[as.character(y_codes)])  
         
         # reproducible per (year, subbasin, covariate)
         set.seed(abs(as.integer(sprintf("%d%03d", subbasin_index, which(biotic_cols==b)))))
@@ -261,27 +264,27 @@ train_and_backfill_subbasin_s <- function(
                            nskip = 300L,
                            sparse = TRUE)
       
-        # prob.test: draws x ntest x K; average over draws -> ntest x K'
+        # average posterior: nback x K'
         class_probs <- apply(fit$prob.test, c(2, 3), mean)
         
-        # map (1..K') and map back to original codes
-        pred_idx <- max.col(class_probs, ties.method = "first")  # 1..K'
+        # mode
+        pred_idx <- max.col(class_probs, ties.method = "first") 
         mode_codes <- as.integer(inv_map[as.character(pred_idx)]) # back to original codes  
         
-        # place into full-length vectors
-        b_mode[keep2]    <- mode_codes
-        b_maxprob[keep2] <- apply(class_probs, 1, max)
+        # max probability per pixel
+        b_maxprob <- apply(class_probs, 1, max)
+        
         # entropy with small epsilon to avoid log(0)
         eps <- 1e-12
         b_entropy[keep2] <- -rowSums(class_probs * log(pmax(class_probs, eps)))
         
-        # per-class prob layers (named by original code)
+        # per-class probabilities
         for (k in seq_len(K)) {
-          nm <- paste0(b, "_prob_", present[k])   # name by original code
-          v  <- rep(NA_real_, nrow(df_backfill))
-          v[keep2] <- class_probs[, k]
-          per_class[[nm]] <- v
+          orig <- present[k]
+          nm <- paste0(b, "_prob_", orig)
+          per_class[[nm]] <- class_probs[, k]
         }
+        
       } # close if single or multi-class
       
       # outputs
@@ -292,6 +295,16 @@ train_and_backfill_subbasin_s <- function(
       
       # add per-class probability layers
       for (nm in names(per_class)) out_layers[[nm]] <- per_class[[nm]]
+      
+      # nEED A CUSTOM COLLECT METRICS FOR CATEGORICAL COVARS
+      metrics[[length(metrics) + 1L]] <- collect_metrics(
+        fit,
+        y_codes_all,
+        covariate = b,
+        subbasin  = subbasin_index,
+        year      = year,
+        top_var   = NA_character_
+      )
       
     } # close if continuous or categorical
     
