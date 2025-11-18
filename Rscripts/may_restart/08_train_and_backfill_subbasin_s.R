@@ -103,7 +103,11 @@ train_and_backfill_subbasin_s <- function(
     if (length(idx) == 0) next  # skip `b` if absent from this subbasin
     
     # biotic predictors that precede `b` in `neworder`
-    b_before <- biotic_cols_cont[seq_len(match(b, biotic_cols_cont) - 1)]
+    if (!(b %in% categorical_responses)){
+      b_before <- biotic_cols_cont[seq_len(match(b, biotic_cols_cont) - 1)]
+    } else {
+      b_before <- biotic_cols_cont 
+    }
     
     # the predictors for biotic_cols[b] are abiotic_cols, 
     # biotic_cols (except b and those before it in `neworder`), and lat/long
@@ -124,7 +128,7 @@ train_and_backfill_subbasin_s <- function(
     logp("train columns=%d", ncol(df_train_bart))
     
     # drop predictors with zero variance
-    col_sd <- sapply(df_train_bart, function(x) sd(x, na.rm = TRUE))
+    col_sd <- sapply(df_train_bart, function(x) sd(as.numeric(x), na.rm = TRUE))
     df_train_bart <- df_train_bart[, col_sd > 0, drop = FALSE] 
     
     # subset backfill dataframe to the same abiotic_cols, biotic_cols, lat/long
@@ -203,22 +207,20 @@ train_and_backfill_subbasin_s <- function(
       
     } else { # if b is categorical, use the following protocol
       
-      # BART::mbart expects class integers 1..K
-      # get original codes, even if the raster is a factor
-      if (terra::is.factor(cov_s[[b]])) {
-        lut <- levels(cov_s[[b]])[[1]]$value  # original cell values
-        y_codes <- lut[ as.integer(df_train[[b]][idx]) ]
-      } else {
-        y_codes <- as.integer(df_train[[b]][idx])
-      }
+      # BART::mbart needs the landcover classes as a consecutive sequence of integers 1..K' 
+      # but actual classes could be any arbitrary non-consecutive sequence of integers 1..K
+      # so, we convert 1..K -> 1..K' -> train -> backfill as 1..K' -> convert back to 1..K
+      lut <- levels(cov_s[[b]])[[1]]$value  # LookUpTable: *possible* (not actual) original cell values
+      y_codes <- lut[ as.integer(df_train[[b]][idx]) ] # the vector of original landcover codes for the selected training pixels. don't use df_train_bart because it's missing `b`
       
       # make sure y isn’t empty 
-
-      if (!length(y_codes)) { logp("[%s] skip: empty y_codes after keep1", b); next } 
+      if (!length(y_codes)) { logp("[%s] skip: empty y_codes", b); next } 
       
-      # land cover classes that are actually present in the training subset
+      # land cover classes that are *actually* present in the training subset
+      # this is built from `df_train` so it may have some classes dropped during NA filtering
+      # therefore `fit$K` may have fewer than K classes
       present <- sort(unique(y_codes))
-      K <- length(present)
+      K <- length(present) 
       if (K == 0) { logp("[%s] skip: no classes present", b); next }
       
       # pre-allocate outputs
@@ -244,8 +246,8 @@ train_and_backfill_subbasin_s <- function(
         
       } else {
         
-        # training labels mapped 1..K'
-        y_int <- unname(fwd_map[as.character(y_codes)])  
+        # training labels mapped to 1..K'
+        y_int <- unname(fwd_map[y_codes])  
         
         # reproducible per (year, subbasin, covariate)
         set.seed(abs(as.integer(sprintf("%d%03d", subbasin_index, which(biotic_cols==b)))))
@@ -266,37 +268,57 @@ train_and_backfill_subbasin_s <- function(
                            printevery = 450,
                            sparse = TRUE)
       
-        # average posterior: nback x K'
-        ndpost  <- nrow(fit$prob.test)
-        npixels <- ncol(fit$prob.test) / fit$K
-        K       <- fit$K
+        # fit$prob.test has dimensions: posterior density (ndpost) x (# high HF pixels x # classes in training set)
+        # therefore, for every high HF pixel we have a probability estimate for every class learned in from the training set
+        # and this is multiplied by the density of the posterior distribution (ndpost)
+        # however, we want to split from 2-D prob.test to 3-D `prob_array` (see below)
+        ndpost <- nrow(fit$prob.test) # density of posterior distribution
+        K_model <- fit$K # number of classes in df_train_bart
+        npixels <- as.integer(ncol(fit$prob.test) / K_model) # number of high HF pixels
         
-        # reshape to: draws × pixels × classes
-        prob_array <- array(
-          fit$prob.test,
-          dim = c(ndpost, npixels, K)
-        )
+        # reshape `prob.test` into draws x pixels x model-classes
+        prob_array <- array(fit$prob.test, dim = c(ndpost, npixels, K_model))
         
-        # average over draws → pixels × classes
-        class_probs <- apply(prob_array, c(2, 3), mean)
+        # get the mean probability per pixel x class
+        # each row is a pixel, each column is a class with probability of said class
+        # class_probs_model is indexed in MBART’s internal class order which we'll convert to `class_probs` below
+        class_probs_model <- apply(prob_array, c(2,3), mean) #
         
-        # mode
-        pred_idx <- max.col(class_probs, ties.method = "first") 
-        b_mode <- as.integer(inv_map[as.character(pred_idx)]) # back to original codes  
+        # which model column corresponds to each desired code?
+        cols <- match(present, fit$cats)   
         
-        # max probability per pixel
-        b_maxprob <- apply(class_probs, 1, max)
+        # build final class_probs in correct ecological order
+        class_probs <- matrix(0, nrow = npixels, ncol = length(present))
         
-        # entropy with small epsilon to avoid log(0)
+        # match each ecological class to MBART’s output column
+        # insert probability 0 for any class not present in training
+        # produce a probability matrix in the correct ecological order
+        for (i in seq_along(present)) {
+          ci <- cols[i]
+          if (!is.na(ci)) {
+            class_probs[, i] <- class_probs_model[, ci]
+          } else {
+            # probability = 0 if class not seen in the training subset 
+            class_probs[, i] <- 0
+          }
+        }
+        
+        # most likely ecological class
+        pred_idx  <- max.col(class_probs, ties.method = "first")
+        b_mode    <- present[pred_idx]   # back to original ecological codes
+        
+        # uncertainty
         eps <- 1e-12
         b_entropy <- -rowSums(class_probs * log(pmax(class_probs, eps)))
         
-        # per-class probabilities
-        for (k in seq_len(K)) {
-          nm <- paste0(b, "_prob_", present[k])
-          per_class[[nm]] <- class_probs[, k]
-        }
+        # probability of the chosen class
+        b_maxprob <- apply(class_probs, 1, max)
         
+        # per-class probabilities 
+        for (k in seq_len(K)) { 
+          nm <- paste0(b, "_prob_", present[k]) 
+          per_class[[nm]] <- class_probs[, k] 
+          }
         
       } # close if single or multi-class
       
@@ -309,6 +331,7 @@ train_and_backfill_subbasin_s <- function(
       # add per-class probability layers
       for (nm in names(per_class)) out_layers[[nm]] <- per_class[[nm]]
       
+      if (K >= 2){
       metrics[[length(metrics) + 1L]] <- collect_metrics_mbart(
         fit,
         y         = y_int,
@@ -316,6 +339,9 @@ train_and_backfill_subbasin_s <- function(
         covariate = b,
         subbasin  = subbasin_index,
         year      = year)
+      } else {
+        metrics[[length(metrics) + 1L]] <- NULL
+      }
       
     } # close if continuous or categorical
     
