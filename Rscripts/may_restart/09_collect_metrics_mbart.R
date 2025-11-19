@@ -7,6 +7,26 @@ collect_metrics_mbart <- function(fit, X_train, y,
   # need to use predict for the multinomial case
   pred <- predict(fit, newdata = X_train)   # no type="prob"
   
+  # get most influential variable
+  # collect metrics for the categorical branch
+  extract_varprob_mbart <- function(fit) {
+    # fit$varprob is list(ndpost) of numeric(p)
+    vp <- fit$varprob
+    ndpost <- length(vp)
+    p      <- length(vp[[1]])
+    
+    # convert to ndpost × p matrix
+    mat <- do.call(rbind, vp)  # ndpost × p
+    
+    # mean over posterior draws
+    varprob_mean <- colMeans(mat)
+    
+    varprob_mean
+  }
+  
+  varprob_mean <- extract_varprob_mbart(fit)
+  top_var <- names(sort(varprob_mean, decreasing = TRUE))[1]
+  
   # 2. Extract K, n, ndpost
   K      <- pred$K
   prob   <- pred$prob.test        # ndpost × (K*n)
@@ -28,13 +48,9 @@ collect_metrics_mbart <- function(fit, X_train, y,
   # 5. Predicted class (MAP in mapped 1..K space)
   pred_idx <- max.col(prob_mean, ties.method = "first")
   
-  # y is in original coding (e.g., 12,23,44)
-  # pred_idx is in mapped coding (1..K)
-  
-  # SO: the calling code must map y to 1..K before calling this function
-  #     (this matches usage in the main script)
-  
-  accuracy <- mean(pred_idx == y)
+  # Ensure y is integer-coded 1..K
+  y_mapped <- as.integer(y)
+  accuracy <- mean(pred_idx == y_mapped, na.rm=TRUE)
   
   # 6. Entropy
   eps <- 1e-12
@@ -47,6 +63,7 @@ collect_metrics_mbart <- function(fit, X_train, y,
     year         = year,
     ntrain       = length(y),
     accuracy     = accuracy,
-    mean_entropy = mean(entropy)
+    mean_entropy = mean(entropy),
+    top_var      = top_var
   )
 }

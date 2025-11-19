@@ -58,23 +58,24 @@ train_and_backfill_subbasin_s <- function(
   df_backfill <- terra::as.data.frame(cov_s, xy = TRUE, na.rm = FALSE, cells = TRUE) 
   
   # pixel indices in highhf_mask_s to backfill
-  backfill_idx <- which(!is.na(terra::values(highhf_mask_s)))
-  if (!length(backfill_idx)) {
-    if (!quiet) message("No industry pixels in subbasin ", subbasin_index, " for year ", year, "; skipping.")
-    return(invisible(NULL))
-  }
-  
-  # subset rows to high-HF pixels
-  df_backfill <- df_backfill[backfill_idx, , drop = FALSE]
-  
+  df_full <- terra::as.data.frame(cov_s, xy = TRUE, na.rm = FALSE, cells = TRUE)
+  hf_vals <- terra::values(highhf_mask_s)
+  backfill_cells <- which(!is.na(hf_vals))
+  backfill_cellnums <- df_full$cell[backfill_cells] # then use the 'cell' numbers
+  df_backfill <- df_full[df_full$cell %in% backfill_cellnums, , drop = FALSE] 
+ 
   # coordinate scaling: learn on training, apply to backfill
-  xy_train_scaled <- scale(df_train[, c("x","y")])
-  cx <- attr(xy_train_scaled, "scaled:center")
-  sx <- attr(xy_train_scaled, "scaled:scale")
+  # compute center/scale from rows with valid x,y (should be many unless something odd)
+  xy_ok <- which(!is.na(df_train[["x"]]) & !is.na(df_train[["y"]]))
+  xy_center <- colMeans(df_train[xy_ok, c("x", "y"), drop = FALSE], na.rm = TRUE)
+  xy_scale  <- apply(df_train[xy_ok, c("x", "y"), drop = FALSE], 2, sd, na.rm = TRUE)
+  
+  xy_train_scaled <- sweep(df_train[, c("x","y"), drop = FALSE], 2, xy_center, FUN = "-")
+  xy_train_scaled <- sweep(xy_train_scaled, 2, xy_scale, FUN = "/")
   
   df_train[, c("x","y")] <- xy_train_scaled
-  df_backfill[, c("x","y")] <- sweep(df_backfill[, c("x","y")], 2, cx, "-")
-  df_backfill[, c("x","y")] <- sweep(df_backfill[, c("x","y")], 2, sx, "/")
+  df_backfill[, c("x","y")] <- sweep(df_backfill[, c("x","y")], 2, xy_center, "-")
+  df_backfill[, c("x","y")] <- sweep(df_backfill[, c("x","y")], 2, xy_scale,  "/")
   
   logp("backfill rows=%d", nrow(df_backfill))
   
@@ -93,7 +94,8 @@ train_and_backfill_subbasin_s <- function(
   
   # train a model for each vegetation feature
   # backfill each feature where human footprint is high
-  for (b in biotic_cols) {
+  # for (b in biotic_cols)
+  for (b in c("SCANFIclosure_1km", "SCANFIprcC_1km", "SCANFI_1km", "MODISLCC_1km")) {
     
     t0 <- proc.time()[3]
     logp("[%s] fit (%s)", b, if (b %in% categorical_responses) "categorical" else "continuous")
@@ -210,8 +212,9 @@ train_and_backfill_subbasin_s <- function(
       # BART::mbart needs the landcover classes as a consecutive sequence of integers 1..K' 
       # but actual classes could be any arbitrary non-consecutive sequence of integers 1..K
       # so, we convert 1..K -> 1..K' -> train -> backfill as 1..K' -> convert back to 1..K
-      lut <- levels(cov_s[[b]])[[1]]$value  # LookUpTable: *possible* (not actual) original cell values
-      y_codes <- lut[ as.integer(df_train[[b]][idx]) ] # the vector of original landcover codes for the selected training pixels. don't use df_train_bart because it's missing `b`
+      raw_codes <- df_train[[b]][idx]
+      y_codes <- as.integer(raw_codes) # the vector of original landcover codes for the selected training pixels. don't use df_train_bart because it's missing `b`
+      y_codes <- y_codes[!is.na(y_codes)]
       
       # make sure y isn’t empty 
       if (!length(y_codes)) { logp("[%s] skip: empty y_codes", b); next } 
@@ -227,8 +230,7 @@ train_and_backfill_subbasin_s <- function(
       b_mode    <- rep(NA_real_, nrow(df_backfill))
       b_maxprob <- rep(NA_real_, nrow(df_backfill))
       b_entropy <- rep(NA_real_, nrow(df_backfill))
-      per_class <- list()  # will fill in if K >= 2
-      
+
       # build a forward and inverse map only over present classes (size K')
       fwd_map  <- setNames(seq_along(present), present)   # original code -> 1..K'
       inv_map  <- setNames(present, seq_along(present))   # 1..K' -> original code
@@ -242,7 +244,6 @@ train_and_backfill_subbasin_s <- function(
         b_entropy <- rep(0, nrow(df_backfill))
 
         nm <- paste0(b, "_prob_", present[1])
-        per_class[[nm]] <- rep(1, nrow(df_backfill))
         
       } else {
         
@@ -314,12 +315,6 @@ train_and_backfill_subbasin_s <- function(
         # probability of the chosen class
         b_maxprob <- apply(class_probs, 1, max)
         
-        # per-class probabilities 
-        for (k in seq_len(K)) { 
-          nm <- paste0(b, "_prob_", present[k]) 
-          per_class[[nm]] <- class_probs[, k] 
-          }
-        
       } # close if single or multi-class
       
       # outputs
@@ -327,9 +322,6 @@ train_and_backfill_subbasin_s <- function(
       out_layers[[b]]  <- b_mode
       out_layers[[paste0(b, "_maxprob")]]  <- b_maxprob
       out_layers[[paste0(b, "_entropy")]]  <- b_entropy
-      
-      # add per-class probability layers
-      for (nm in names(per_class)) out_layers[[nm]] <- per_class[[nm]]
       
       if (K >= 2){
       metrics[[length(metrics) + 1L]] <- collect_metrics_mbart(
@@ -357,15 +349,19 @@ train_and_backfill_subbasin_s <- function(
   
   template <- cov_s[[1]]
   result_raster <- terra::rast(template, nlyr = length(created))
-  names(result_raster) <- created
   
   # fill only the high-HF cells
+  backfill_idx <- match(df_backfill$cell, backfill_cellnums)
   for (j in seq_along(created)) {
     v <- rep(NA_real_, terra::ncell(template))
-    vals <- out_layers[[ created[j] ]] # already original codes (if landcover classes)
-    v[backfill_idx] <- vals
+    vals <- out_layers[[ created[j] ]]
+    o <- order(backfill_idx)  # ensure vals align with raster cell order
+    v[backfill_cellnums] <- vals[o]
     result_raster[[j]] <- v
   }
+  
+  # assign the actual layer names
+  names(result_raster) <- created
   
   # write
   out_dir <- file.path(ia_dir, "bart_models", year, sprintf("subbasin_%s", subbasin_index))
@@ -378,6 +374,13 @@ train_and_backfill_subbasin_s <- function(
   
   logp("writing %d layers to %s", length(created), out_dir)
   
+  
+  # save metrics for post-processing later on
+  saveRDS(metrics, file.path(out_dir, sprintf("subbasin_%03d_metrics.rds", subbasin_index)))
+  
   invisible(TRUE)
 
 } # close train_and_backfill_subbasin_s()
+
+# note: every continuous covariate will have two layers (mean and sd)
+# and every categorical covariate will have 

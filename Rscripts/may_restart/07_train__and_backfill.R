@@ -209,7 +209,7 @@ clusterExport(cl, c("neworder", "abiotic_vars", "biotic_vars", "categorical_resp
 print("* running backfilling in parallel *")
 
 # run backfilling in parallel by subbasin
-subs <- 1:2 # for testing
+subs <- 301 # for testing
 # parLapply runs the backfilling for every i in `subs`
 backfill_results <- 
   parLapplyLB(cl, 
