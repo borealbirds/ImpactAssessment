@@ -331,9 +331,7 @@ train_and_backfill_subbasin_s <- function(
         covariate = b,
         subbasin  = subbasin_index,
         year      = year)
-      } else {
-        metrics[[length(metrics) + 1L]] <- NULL
-      }
+      } 
       
     } # close if continuous or categorical
     
