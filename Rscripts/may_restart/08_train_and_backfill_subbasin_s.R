@@ -1,10 +1,10 @@
 train_and_backfill_subbasin_s <- function(
     subbasin_index, 
     year, 
-    stack_y,     # SpatRaster (already loaded)
-    lowhf_mask,  # SpatRaster (already loaded)
-    highhf_mask, # SpatRaster (already loaded)
-    all_subbasins_subset, # SpatVector(already loaded)
+    stack_y,     # SpatRaster 
+    lowhf_mask,  # SpatRaster 
+    highhf_mask, # SpatRaster 
+    all_subbasins_subset, # SpatVector
     abiotic_vars, # tibble with column `predictor`
     biotic_vars,  # tibble with column `predictor`
     categorical_responses, # character vector of layer names
@@ -36,73 +36,83 @@ train_and_backfill_subbasin_s <- function(
   
   logp("cropped/masked; ncell=%d", terra::ncell(cov_s))
   
-  # for training: align low-HF to covariate stack s
+  # for training: identify low HF pixels in subbasin_s 
   lowhf_mask_s <- 
     terra::crop(x = lowhf_mask, y = cov_s) |> 
     terra::resample(x = _, y = cov_s, method = "near")
   
-  # for backfilling: find high HF pixels in subbasin_s
+  # for backfilling: identify high HF pixels in subbasin_s 
   highhf_mask_s <- 
     terra::crop(x = highhf_mask, y = subbasin_s) |> 
     terra::resample(x = _, y = cov_s, method = "near") |> 
     terra::mask(x = _, mask = cov_s[[1]])
   
-  # for training: select pixels in covariate stack with low hf
-  cov_train_s <- terra::mask(x = cov_s, mask = lowhf_mask_s)
-  
-  # convert covariate stacks to a dataframe for training/backfilling
-  # rows are pixels, columns are covariates
+  # for training and backfilling: select pixels marked with 1s 
+  # convert covariate stacks to a dataframe for training/backfilling (rows are pixels, columns are covariates)
   # df_train will have NAs filtered per covariate using `idx` in `for (b in biotic_cols) {`
-  # df_backfill will have NAs filtered globally   using `backfill_idx` below
-  df_train    <- terra::as.data.frame(cov_train_s, xy=TRUE, na.rm = FALSE, cells = TRUE)
-  df_backfill <- terra::as.data.frame(cov_s, xy = TRUE, na.rm = FALSE, cells = TRUE) 
+  cov_train_s <- terra::mask(x = cov_s, mask = lowhf_mask_s)
+  df_train    <- terra::as.data.frame(cov_train_s, xy = T, na.rm = F, cells = T)
   
-  # pixel indices in highhf_mask_s to backfill
+  # put non-NA pixels in highhg_mask_s into a dataframe
+  # keep track of non-NA pixels in `backfill_cells`
+  # these will be used for re-populating an empty raster with backfill values 
   df_full <- terra::as.data.frame(cov_s, xy = TRUE, na.rm = FALSE, cells = TRUE)
-  hf_vals <- terra::values(highhf_mask_s)
-  backfill_cells <- which(!is.na(hf_vals))
-  backfill_cellnums <- df_full$cell[backfill_cells] # then use the 'cell' numbers
-  df_backfill <- df_full[df_full$cell %in% backfill_cellnums, , drop = FALSE] 
- 
-  # coordinate scaling: learn on training, apply to backfill
+  backfill_cells <- df_full$cell[which(!is.na(values(highhf_mask_s)))]
+  df_backfill <- df_full[df_full$cell %in% backfill_cells, drop = FALSE, ] 
+  
+  # coordinate scaling: define mean and variance of lat/long across subbasin_s
   # compute center/scale from rows with valid x,y (should be many unless something odd)
-  xy_ok <- which(!is.na(df_train[["x"]]) & !is.na(df_train[["y"]]))
-  xy_center <- colMeans(df_train[xy_ok, c("x", "y"), drop = FALSE], na.rm = TRUE)
-  xy_scale  <- apply(df_train[xy_ok, c("x", "y"), drop = FALSE], 2, sd, na.rm = TRUE)
+  xy_ok <- which(!is.na(df_full[["x"]]) & !is.na(df_full[["y"]]))
+  xy_center <- colMeans(df_full[xy_ok, c("x", "y"), drop = FALSE], na.rm = TRUE)
+  xy_scale  <- apply(df_full[xy_ok, c("x", "y"), drop = FALSE], 2, sd, na.rm = TRUE)
   
-  xy_train_scaled <- sweep(df_train[, c("x","y"), drop = FALSE], 2, xy_center, FUN = "-")
-  xy_train_scaled <- sweep(xy_train_scaled, 2, xy_scale, FUN = "/")
-  
-  df_train[, c("x","y")] <- xy_train_scaled
+  df_train[, c("x","y")]    <- sweep(df_train[c("x","y")], 2, xy_center, "-") #subtract center from every coordinate
+  df_train[, c("x","y")]    <- sweep(df_train[c("x","y")], 2, xy_scale, "/") # divide every coordinate by variance
   df_backfill[, c("x","y")] <- sweep(df_backfill[, c("x","y")], 2, xy_center, "-")
   df_backfill[, c("x","y")] <- sweep(df_backfill[, c("x","y")], 2, xy_scale,  "/")
   
   logp("backfill rows=%d", nrow(df_backfill))
   
   # define predictors and responses
-  abiotic_cols <- intersect(names(df_train), abiotic_vars$predictor)
-  biotic_cols  <- intersect(names(df_train), biotic_vars$predictor)
-  biotic_cols  <- na.omit(biotic_cols[match(neworder, biotic_cols)])    # enforce hierarchy
-  biotic_cols_cont <- setdiff(biotic_cols, categorical_responses)
+  abiotic_cols <- intersect(names(df_train), abiotic_vars$predictor) # abiotic features present in subbasin_s
+  biotic_cols  <- intersect(names(df_train), biotic_vars$predictor)  # biotic features present in subbasin_s
+  biotic_cols  <- na.omit(biotic_cols[match(neworder, biotic_cols)]) # enforce hierarchy
+  biotic_cols_cont <- setdiff(biotic_cols, categorical_responses) # identify continuous biotic features in subbasin_s
   
   # collect backfilled layers in `out_layers` list 
   # each element will be a numeric of the mean posterior values of a backfilled covariate 
   out_layers <- list()
 
-  # store BART metrics here
+  # store BART metrics here, each element will be a single row dataframe with model metrics as columns
   metrics <- list()
   
   # train a model for each vegetation feature
   # backfill each feature where human footprint is high
-  # for (b in biotic_cols)
-  for (b in c("SCANFIclosure_1km", "SCANFIprcC_1km", "SCANFI_1km", "MODISLCC_1km")) {
+  # 
+  for (b in biotic_cols) {
     
     t0 <- proc.time()[3]
-    logp("[%s] fit (%s)", b, if (b %in% categorical_responses) "categorical" else "continuous")
+    logp("[%s] in process: (%s)", b, if (b %in% categorical_responses) "categorical" else "continuous")
     
     # training data: keep only the rows where biotic feature `b` is observed
     idx <- which(!is.na(df_train[[b]]))
-    if (length(idx) == 0) next  # skip `b` if absent from this subbasin
+    
+    # if no rows or the variable is constant, just fill the output with the constant value
+    if (length(idx) == 0 || length(unique(df_train[[b]][idx])) < 2) {
+      const_val <- unique(df_train[[b]][idx])
+      # if even idx has no valid rows (empty), define const_val as NA or 0? 
+      # choose 0 because Douglas Fir absent -> ecologically meaningful absence
+      if (length(const_val) == 0) const_val <- 0
+      
+      # fill outputs
+      df_backfill[[b]] <- const_val
+      out_layers[[paste0(b, "_mean")]] <- rep(const_val, nrow(df_backfill))
+      out_layers[[paste0(b, "_sd")]]   <- rep(0,          nrow(df_backfill))  # no uncertainty
+      
+      logp("[%s] constant in subbasin: backfill raster populated with %s", b, const_val)
+      next
+    }
+  
     
     # biotic predictors that precede `b` in `neworder`
     if (!(b %in% categorical_responses)){
@@ -243,8 +253,6 @@ train_and_backfill_subbasin_s <- function(
         b_maxprob <- rep(1, nrow(df_backfill)) 
         b_entropy <- rep(0, nrow(df_backfill))
 
-        nm <- paste0(b, "_prob_", present[1])
-        
       } else {
         
         # training labels mapped to 1..K'
@@ -349,12 +357,20 @@ train_and_backfill_subbasin_s <- function(
   result_raster <- terra::rast(template, nlyr = length(created))
   
   # fill only the high-HF cells
-  backfill_idx <- match(df_backfill$cell, backfill_cellnums)
+  # fill only the high-HF cells (correct cell alignment)
   for (j in seq_along(created)) {
     v <- rep(NA_real_, terra::ncell(template))
+    
     vals <- out_layers[[ created[j] ]]
-    o <- order(backfill_idx)  # ensure vals align with raster cell order
-    v[backfill_cellnums] <- vals[o]
+    
+    # sort cells and values by cell number
+    ord <- order(backfill_cellnums)
+    sorted_cells <- backfill_cellnums[ord]
+    sorted_vals  <- vals[ord]
+    
+    # write correctly-aligned values
+    v[sorted_cells] <- sorted_vals
+    
     result_raster[[j]] <- v
   }
   
@@ -381,4 +397,4 @@ train_and_backfill_subbasin_s <- function(
 } # close train_and_backfill_subbasin_s()
 
 # note: every continuous covariate will have two layers (mean and sd)
-# and every categorical covariate will have 
+# and every categorical covariate will have three layers (mode, entropy, )

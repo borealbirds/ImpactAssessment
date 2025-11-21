@@ -98,114 +98,56 @@ biotic_vars <- biotic_vars[match(neworder, biotic_vars$predictor), ]
 
 
 
-#8. define data paths ----------------------------------------
-
-# subbasins polygon
-all_subbasins_subset_path <- file.path(ia_dir, "hydrobasins_masked_merged_subset.gpkg")
-
-# high human footprint raster
-highhf_mask_path <- file.path(ia_dir, "hirshpearson", "CanHF_1km_morethan1.tif")
-
-# low human footprint raster
-lowhf_mask_path <- file.path(ia_dir, "hirshpearson", "CanHF_1km_lessthan1.tif")
-
-# covariate stack for year y
-stack_y_path <- file.path(ia_dir, sprintf("covariates_mosaiced_%d.tif", 2020))
-
-# categorical covariates
-categorical_responses = c("ABoVE_1km", "NLCD_1km","MODISLCC_1km",
-                          "MODISLCC_5x5","SCANFI_1km","VLCE_1km")
-
-# training and backfilling function (subbasin level)
-source(file.path(getwd(), "Rscripts", "may_restart", "08_train_and_backfill_subbasin_s.R"))
-
-
-#9. define model training function ----------------------------------------
-
-# train models per subbasin per year
-train_and_backfill_per_year <- function(
-    year,
-    all_subbasins_subset_path,
-    lowhf_mask_path,
-    highhf_mask_path,
-    stack_y_path,
-    categorical_responses,
-    quiet = FALSE){
-  
- ###
- # import covariate stack, low HF layer for training, high HF layer for backfilling
- ###
+#8. import data and helper functions ----------------------------------------
+# import covariate stack, low HF layer for training, high HF layer for backfilling
  
- # import pre-mosaiced covariate stack for year_y
- stack_y <- terra::rast(stack_y_path)
+# import pre-mosaiced covariate stack for year_y
+stack_y <- terra::rast(file.path(ia_dir, sprintf("covariates_mosaiced_%d.tif", 2020)))
  
- # ensure categoricals are factors
- cats_present <- intersect(categorical_responses, names(stack_y))
- for (nm in cats_present) stack_y[[nm]] <- terra::as.factor(stack_y[[nm]])
+# ensure categoricals are factors
+categorical_responses = c("ABoVE_1km", "NLCD_1km","MODISLCC_1km", "MODISLCC_5x5","SCANFI_1km","VLCE_1km")
+cats_present <- intersect(categorical_responses, names(stack_y))
+for (cat in cats_present) stack_y[[cat]] <- terra::as.factor(stack_y[[cat]])
 
- # import low hf layer and project to current stack
- lowhf_mask <- terra::rast(lowhf_mask_path)
- lowhf_mask <- terra::project(x=lowhf_mask, y=stack_y, method = "near")
+# import low hf layer and project to current stack
+lowhf_mask <- terra::rast(file.path(ia_dir, "hirshpearson", "CanHF_1km_lessthan1.tif"))
+lowhf_mask <- terra::project(x=lowhf_mask, y=stack_y, method = "near")
  
- # import high hf layer and project to current stack
- highhf_mask <- terra::rast(highhf_mask_path)
- highhf_mask <- terra::project(x=highhf_mask, y=stack_y, method = "near")
+# import high hf layer and project to current stack
+highhf_mask <- terra::rast(file.path(ia_dir, "hirshpearson", "CanHF_1km_morethan1.tif"))
+highhf_mask <- terra::project(x=highhf_mask, y=stack_y, method = "near")
  
- # import subbasin boundaries
- all_subbasins_subset <- terra::vect(all_subbasins_subset_path)
- 
- 
- ###
- # train and backfill models per subbasin
- ###
- 
- # apply model fitting and backfilling over all subbasins
- 
- for (i in 1:length(all_subbasins_subset)) {
- 
- res <- train_and_backfill_subbasin_s(
-     subbasin_index        = i,
-     year                  = year,
-     stack_y               = stack_y,
-     lowhf_mask            = lowhf_mask,
-     highhf_mask           = highhf_mask,
-     all_subbasins_subset  = all_subbasins_subset, 
-     abiotic_vars          = abiotic_vars,
-     biotic_vars           = biotic_vars,
-     categorical_responses = categorical_responses,
-     ia_dir                = ia_dir,
-     neworder              = neworder,
-     quiet                 = quiet)
- 
- } # close loop over subbasins
- 
- invisible(res)
- 
-} # close train_and_backfill_per_year()
+# import subbasin boundaries and project to current stack
+all_subbasins_subset <- terra::vect(file.path(ia_dir, "hydrobasins_masked_merged_subset.gpkg"))
+all_subbasins_subset <- terra::project(x=all_subbasins_subset, y=stack_y)
 
-
+ 
 # logfile function to track progress
-make_logger <- function(logfile) {
+make_logger <- function(logfile) { # create a new log file
   dir.create(dirname(logfile), recursive = TRUE, showWarnings = FALSE)
-  function(fmt, ...) {
+  function(fmt, ...) { # write a new line
     line <- sprintf("[%s pid=%d host=%s] %s\n",
                     format(Sys.time(), "%F %T"),
                     Sys.getpid(),
                     Sys.info()[["nodename"]],
                     sprintf(fmt, ...))
     cat(line, file = logfile, append = TRUE)
-  }
-}
+  } # close new line writing function
+} # close file generating function
+
+# training and backfilling function (subbasin level)
+source(file.path(getwd(), "Rscripts", "may_restart", "08_train_and_backfill_subbasin_s.R"))
 
 
-#10. export the necessary variables and functions to the cluster -------------------
+
+#9. export the necessary variables and functions to the cluster -------------------
 print("* exporting objects and functions to cluster *")
 clusterExport(cl, c("neworder", "abiotic_vars", "biotic_vars", "categorical_responses",
-                    "train_and_backfill_subbasin_s", "all_subbasins_subset_path", 
-                    "highhf_mask_path", "lowhf_mask_path", "stack_y_path", 
-                    "ia_dir", "train_and_backfill_per_year", "make_logger"))
+                    "train_and_backfill_subbasin_s", "all_subbasins_subset", 
+                    "highhf_mask", "lowhf_mask", "stack_y", 
+                    "ia_dir", "make_logger"))
 
-#11. train models and backfill biotic features for year y -----------------------------
+#10. train models and backfill biotic features for year y -----------------------------
 print("* running backfilling in parallel *")
 
 # run backfilling in parallel by subbasin
@@ -214,26 +156,30 @@ subs <- 301 # for testing
 backfill_results <- 
   parLapplyLB(cl, 
               X = subs, 
-              fun = function(i) train_and_backfill_subbasin_s(
-                subbasin_index = i, 
-                year           = 2020,
-                stack_y        = terra::rast(stack_y_path),
-                lowhf_mask     = terra::rast(lowhf_mask_path),
-                highhf_mask    = terra::rast(highhf_mask_path),
-                abiotic_vars   = abiotic_vars, 
-                biotic_vars    = biotic_vars,
-                ia_dir         = ia_dir,
-                quiet          = FALSE,
-                neworder       = neworder,
-                categorical_responses = categorical_responses,
-                all_subbasins_subset  = terra::vect(all_subbasins_subset_path)))
-  
+              fun = function(i) {
+                tryCatch(
+                  train_and_backfill_subbasin_s(
+                  subbasin_index = i, 
+                  year           = 2020,
+                  stack_y        = stack_y,
+                  lowhf_mask     = low_hf_mask,
+                  highhf_mask    = highhf_mask,
+                  abiotic_vars   = abiotic_vars, 
+                  biotic_vars    = biotic_vars,
+                  ia_dir         = ia_dir,
+                  quiet          = FALSE,
+                  neworder       = neworder,
+                  categorical_responses = categorical_responses,
+                  all_subbasins_subset  = all_subbasins_subset)
+    ) # close trycatch
+  } # close function
+)  # close parapply 
 
-#12. stop the cluster----
+#11. stop the cluster----
 print("* stopping cluster :-)*")
 stopCluster(cl)
 
-#13. save backfilled raster for this species x year
+#12. save backfilled raster for this species x year
 print("* saving raster file *")
 print(backfill_results)
 
