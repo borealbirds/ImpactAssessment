@@ -51,14 +51,14 @@ train_and_backfill_subbasin_s <- function(
   # convert covariate stacks to a dataframe for training/backfilling (rows are pixels, columns are covariates)
   # df_train will have NAs filtered per covariate using `idx` in `for (b in biotic_cols) {`
   cov_train_s <- terra::mask(x = cov_s, mask = lowhf_mask_s)
-  df_train    <- terra::as.data.frame(cov_train_s, xy = T, na.rm = F, cells = T)
+  df_train    <- terra::as.data.frame(cov_train_s, xy = TRUE, na.rm = FALSE)
   
-  # put non-NA pixels in highhg_mask_s into a dataframe
+  # put marked pixels (1s) from highhf_mask_s into a dataframe
   # keep track of non-NA pixels in `backfill_cells`
   # these will be used for re-populating an empty raster with backfill values 
   df_full <- terra::as.data.frame(cov_s, xy = TRUE, na.rm = FALSE, cells = TRUE)
-  backfill_cells <- df_full$cell[which(!is.na(values(highhf_mask_s)))]
-  df_backfill <- df_full[df_full$cell %in% backfill_cells, drop = FALSE, ] 
+  backfill_idx <- df_full$cell[which(values(highhf_mask_s) == 1)]
+  df_backfill <- df_full[df_full$cell %in% backfill_idx, drop = FALSE, ] 
   
   # coordinate scaling: define mean and variance of lat/long across subbasin_s
   # compute center/scale from rows with valid x,y (should be many unless something odd)
@@ -97,12 +97,12 @@ train_and_backfill_subbasin_s <- function(
     # training data: keep only the rows where biotic feature `b` is observed
     idx <- which(!is.na(df_train[[b]]))
     
-    # if no rows or the variable is constant, just fill the output with the constant value
+    # check that sample size of b > 1, and for b invariance
     if (length(idx) == 0 || length(unique(df_train[[b]][idx])) < 2) {
+      
       const_val <- unique(df_train[[b]][idx])
-      # if even idx has no valid rows (empty), define const_val as NA or 0? 
-      # choose 0 because Douglas Fir absent -> ecologically meaningful absence
-      if (length(const_val) == 0) const_val <- 0
+      # if idx has no valid rows (empty), define const_val as NA (as it would be in V5 rasters)
+      if (length(const_val) == 0) const_val <- NA
       
       # fill outputs
       df_backfill[[b]] <- const_val
@@ -113,7 +113,6 @@ train_and_backfill_subbasin_s <- function(
       next
     }
   
-    
     # biotic predictors that precede `b` in `neworder`
     if (!(b %in% categorical_responses)){
       b_before <- biotic_cols_cont[seq_len(match(b, biotic_cols_cont) - 1)]
@@ -121,23 +120,19 @@ train_and_backfill_subbasin_s <- function(
       b_before <- biotic_cols_cont 
     }
     
-    # the predictors for biotic_cols[b] are abiotic_cols, 
-    # biotic_cols (except b and those before it in `neworder`), and lat/long
+    # the predictors for b are abiotic_cols, b_before, and lat/long
     # note: categorical biotic features excluded from predicting continuous biotic features
     predictors <- c(abiotic_cols, b_before, "x", "y")
     
-    # subset the global predictors to those in the current subbasin
-    predictors <- intersect(predictors, names(df_train)) 
-    
-    # training data frame (i.e. predictors) for b
+    # create training data frame (i.e. predictors) for b
     # columns are abiotic_cols, biotic_cols (except b), lat/long
-    # rows are pixel locations with low HF
+    # rows are pixel locations with low HF (idx are non-NA cells for b)
     df_train_bart <- df_train[idx, predictors, drop = FALSE]
     
     # drop predictors that are all NAs
     df_train_bart <- df_train_bart[, colSums(!is.na(df_train_bart)) > 0]
-    logp("train rows=%d", nrow(df_train_bart))
-    logp("train columns=%d", ncol(df_train_bart))
+    logp("training pixels = %d", nrow(df_train_bart))
+    logp("training predictors = %d", ncol(df_train_bart))
     
     # drop predictors with zero variance
     col_sd <- sapply(df_train_bart, function(x) sd(as.numeric(x), na.rm = TRUE))
@@ -147,7 +142,7 @@ train_and_backfill_subbasin_s <- function(
     # because we can't backfill covariates that we didn't train models for
     df_backfill_bart  <- df_backfill[, colnames(df_train_bart), drop = FALSE]
     
-    # check that the backfill dataframe doesn't have any all-NA predictors
+    # check that the backfill dataframe doesn't have any all-NA predictors (different pixels than training locations, so it's possible..)
     # if it does, remove them from both training and backfill dataframes
     df_backfill_bart <- df_backfill_bart[, colSums(!is.na(df_backfill_bart )) > 0]
     df_train_bart <- df_train_bart[, colnames(df_backfill_bart), drop = FALSE]
@@ -157,7 +152,7 @@ train_and_backfill_subbasin_s <- function(
       
       # define continuous response, and subset pixels to non-NAs for a given `b`
       # we use `df_train` instead of `df_train_bart` because the latter is purposely missing `b`
-      y <- as.numeric(df_train[[b]][idx])
+      y <- as.numeric(df_train[[b]][idx]) # idx ensures length(y) == length(df_train_bart)
 
       # reproducible per (year, subbasin, covariate)
       set.seed(abs(as.integer(sprintf("%d%03d", subbasin_index, which(biotic_cols==b)))))
@@ -165,7 +160,7 @@ train_and_backfill_subbasin_s <- function(
       # train and predict with BART
       fit <- BART::gbart(x.train = as.matrix(df_train_bart), 
                          y.train = y, 
-                         x.test = as.matrix(df_backfill_bart),
+                         x.test = as.matrix(df_backfill_bart), # has the same columns as df_train_bart
                          type = "wbart",
                          k = 3, #shrinkage
                          ntree = 50L, 
@@ -176,29 +171,24 @@ train_and_backfill_subbasin_s <- function(
                          sigdf = 3) 
       
       # estimate posterior mean and sd
-      # `draws` is a matrix: rows = posterior draws, columns = pixels
-      draws <- fit$yhat.test # yhat.test are the predicted values of b at high HF locations
-      b_mean <- as.numeric(fit$yhat.test.mean) 
-      b_sd   <- apply(draws, 2, sd) # uncertainty in model-predicted values of b per pixel
+      # yhat.test are the predicted values of b at high HF locations (rows = posterior draws, columns = pixels)
+      b_mean <- as.numeric(fit$yhat.test.mean) # mean prediction for b at high HF locations
+      b_sd   <- apply(fit$yhat.test, 2, sd) # uncertainty in model-predicted values of b per pixel
       
-      # write for using in next iteration (following `neworder`), and for outputs
+      # replace backfilled b in backfilling dataset for using in next iteration (following `neworder`), and for outputs
       df_backfill[[b]] <- b_mean
-      out_layers[[paste0(b, "_mean")]] <- b_mean
+      out_layers[[paste0(b, "_mean")]] <- b_mean # add values of b to a list
       out_layers[[paste0(b, "_sd")]]   <- b_sd
       
       # posterior predictive check: get posterior predictions for training data
-      post_pred_train <- fit$yhat.train # yhat.train are the predicted values of b at low HF locations (values are from the fitted model, not the training dataset)
-      ppc_mean <- mean(colMeans(post_pred_train))
-      ppc_sd <- mean(apply(post_pred_train, 2, sd))
+      # yhat.train are the predicted values of b at low HF locations (values are from the fitted model, not the training dataset)
+      ppc_mean <- mean(colMeans(fit$yhat.train))
+      ppc_sd <- mean(apply(fit$yhat.train, 2, sd))
       
       # p is the probability the test statistic in a replicated data set exceeds that in the original data
-      # Calculate Bayesian p-value (proportion of times observed statistic > predicted)
-      obs_mean <- mean(y)
-      obs_sd <- sd(y)
-      
-      # compare each posterior draw with observed statistics
-      p_value_mean <- mean(apply(post_pred_train, 1, function(x) mean(x) > obs_mean))
-      p_value_sd <- mean(apply(post_pred_train, 1, function(x) sd(x) > obs_sd))
+      # calculate Bayesian p-value (proportion of times observed statistic > predicted)
+      p_value_mean <- mean(apply(fit$yhat.train, 1, function(x) mean(x) > mean(y)))
+      p_value_sd   <- mean(apply(fit$yhat.train, 1, function(x) sd(x) > sd(y)))
       
       # extract variable with highest importance 
       top_var <- NA_character_
@@ -357,19 +347,17 @@ train_and_backfill_subbasin_s <- function(
   result_raster <- terra::rast(template, nlyr = length(created))
   
   # fill only the high-HF cells
-  # fill only the high-HF cells (correct cell alignment)
   for (j in seq_along(created)) {
-    v <- rep(NA_real_, terra::ncell(template))
     
-    vals <- out_layers[[ created[j] ]]
+    v <- rep(NA_real_, terra::ncell(template)) # create NAs for every cell
+    vals <- out_layers[[ created[j] ]] # fetch backfilled values from out_layers list
     
     # sort cells and values by cell number
-    ord <- order(backfill_cellnums)
-    sorted_cells <- backfill_cellnums[ord]
-    sorted_vals  <- vals[ord]
+    # sorted_cells <- backfill_idx[order(backfill_idx)]
+    # sorted_vals  <- vals[order(backfill_idx)]
     
     # write correctly-aligned values
-    v[sorted_cells] <- sorted_vals
+    v[backfill_idx] <- vals
     
     result_raster[[j]] <- v
   }
