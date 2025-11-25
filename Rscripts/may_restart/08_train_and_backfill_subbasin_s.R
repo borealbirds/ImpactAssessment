@@ -54,7 +54,7 @@ train_and_backfill_subbasin_s <- function(
   df_train    <- terra::as.data.frame(cov_train_s, xy = TRUE, na.rm = FALSE)
   
   # put marked pixels (1s) from highhf_mask_s into a dataframe
-  # keep track of non-NA pixels in `backfill_cells`
+  # keep track of non-NA pixels in `backfill_idx`
   # these will be used for re-populating an empty raster with backfill values 
   df_full <- terra::as.data.frame(cov_s, xy = TRUE, na.rm = FALSE, cells = TRUE)
   backfill_idx <- df_full$cell[which(values(highhf_mask_s) == 1)]
@@ -88,7 +88,6 @@ train_and_backfill_subbasin_s <- function(
   
   # train a model for each vegetation feature
   # backfill each feature where human footprint is high
-  # 
   for (b in biotic_cols) {
     
     t0 <- proc.time()[3]
@@ -212,24 +211,23 @@ train_and_backfill_subbasin_s <- function(
       # BART::mbart needs the landcover classes as a consecutive sequence of integers 1..K' 
       # but actual classes could be any arbitrary non-consecutive sequence of integers 1..K
       # so, we convert 1..K -> 1..K' -> train -> backfill as 1..K' -> convert back to 1..K
-      raw_codes <- df_train[[b]][idx]
-      y_codes <- as.integer(raw_codes) # the vector of original landcover codes for the selected training pixels. don't use df_train_bart because it's missing `b`
-      y_codes <- y_codes[!is.na(y_codes)]
       
+      # the vector of original landcover codes for the selected training pixels. `idx` ensures no NAs present
+      # don't use df_train_bart because it's missing `b`. 
+      y_codes <- as.character(df_train[[b]][idx]) 
+
       # make sure y isn’t empty 
       if (!length(y_codes)) { logp("[%s] skip: empty y_codes", b); next } 
       
       # land cover classes that are *actually* present in the training subset
-      # this is built from `df_train` so it may have some classes dropped during NA filtering
-      # therefore `fit$K` may have fewer than K classes
       present <- sort(unique(y_codes))
       K <- length(present) 
       if (K == 0) { logp("[%s] skip: no classes present", b); next }
       
       # pre-allocate outputs
-      b_mode    <- rep(NA_real_, nrow(df_backfill))
-      b_maxprob <- rep(NA_real_, nrow(df_backfill))
-      b_entropy <- rep(NA_real_, nrow(df_backfill))
+      b_mode    <- rep(NA_real_, nrow(df_backfill_bart))
+      b_maxprob <- rep(NA_real_, nrow(df_backfill_bart))
+      b_entropy <- rep(NA_real_, nrow(df_backfill_bart))
 
       # build a forward and inverse map only over present classes (size K')
       fwd_map  <- setNames(seq_along(present), present)   # original code -> 1..K'
@@ -253,8 +251,9 @@ train_and_backfill_subbasin_s <- function(
         
         # multinomial bart keeps every 10th posterior sample (gbart keeps every sample)
         # so mbart will take at least 10 times longer
-        # gbart assumes continuous residuals → conjugate priors → less autocorrelation → no thinning
-        # mbart uses latent variables → non-conjugate updates → more autocorrelation → needs thinning
+        # gbart assumes continuous residuals -> conjugate priors -> less autocorrelation -> no thinning
+        # mbart uses latent variables -> non-conjugate updates -> more autocorrelation -> needs thinning
+        # mbart runs K times (e.g. 11 classes will take 11 times longer than gbart)
         fit <- BART::mbart(x.train = as.matrix(df_train_bart), 
                            y.train = y_int, 
                            x.test  = as.matrix(df_backfill_bart),
