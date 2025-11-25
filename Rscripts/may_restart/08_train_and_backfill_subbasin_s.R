@@ -271,7 +271,7 @@ train_and_backfill_subbasin_s <- function(
         # and this is multiplied by the density of the posterior distribution (ndpost)
         # however, we want to split from 2-D prob.test to 3-D `prob_array` (see below)
         ndpost <- nrow(fit$prob.test) # density of posterior distribution
-        K_model <- fit$K # number of classes in df_train_bart
+        K_model <- fit$K # the internal ordered set of classes recognized by mbart()
         npixels <- as.integer(ncol(fit$prob.test) / K_model) # number of high HF pixels
         
         # reshape `prob.test` into draws x pixels x model-classes
@@ -349,11 +349,7 @@ train_and_backfill_subbasin_s <- function(
   for (j in seq_along(created)) {
     
     v <- rep(NA_real_, terra::ncell(template)) # create NAs for every cell
-    vals <- out_layers[[ created[j] ]] # fetch backfilled values from out_layers list
-    
-    # sort cells and values by cell number
-    # sorted_cells <- backfill_idx[order(backfill_idx)]
-    # sorted_vals  <- vals[order(backfill_idx)]
+    vals <- as.numeric(out_layers[[ created[j] ]]) # fetch backfilled values from out_layers list
     
     # write correctly-aligned values
     v[backfill_idx] <- vals
