@@ -98,29 +98,7 @@ biotic_vars <- biotic_vars[match(neworder, biotic_vars$predictor), ]
 
 
 
-#8. import data and helper functions ----------------------------------------
-# import covariate stack, low HF layer for training, high HF layer for backfilling
- 
-# import pre-mosaiced covariate stack for year_y
-stack_y <- terra::rast(file.path(ia_dir, sprintf("covariates_mosaiced_%d.tif", 2020)))
- 
-# ensure categoricals are factors
-categorical_responses = c("ABoVE_1km", "NLCD_1km","MODISLCC_1km", "MODISLCC_5x5","SCANFI_1km","VLCE_1km")
-cats_present <- intersect(categorical_responses, names(stack_y))
-for (cat in cats_present) stack_y[[cat]] <- terra::as.factor(stack_y[[cat]])
-
-# import low hf layer and project to current stack
-lowhf_mask <- terra::rast(file.path(ia_dir, "hirshpearson", "CanHF_1km_lessthan1.tif"))
-lowhf_mask <- terra::project(x=lowhf_mask, y=stack_y, method = "near")
- 
-# import high hf layer and project to current stack
-highhf_mask <- terra::rast(file.path(ia_dir, "hirshpearson", "CanHF_1km_morethan1.tif"))
-highhf_mask <- terra::project(x=highhf_mask, y=stack_y, method = "near")
- 
-# import subbasin boundaries and project to current stack
-all_subbasins_subset <- terra::vect(file.path(ia_dir, "hydrobasins_masked_merged_subset.gpkg"))
-all_subbasins_subset <- terra::project(x=all_subbasins_subset, y=stack_y)
-
+#8. import helper functions ----------------------------------------
  
 # logfile function to track progress
 make_logger <- function(logfile) { # create a new log file
@@ -142,10 +120,9 @@ source(file.path(getwd(), "Rscripts", "may_restart", "08_train_and_backfill_subb
 
 #9. export the necessary variables and functions to the cluster -------------------
 print("* exporting objects and functions to cluster *")
-clusterExport(cl, c("neworder", "abiotic_vars", "biotic_vars", "categorical_responses",
-                    "train_and_backfill_subbasin_s", "all_subbasins_subset", 
-                    "highhf_mask", "lowhf_mask", "stack_y", 
-                    "ia_dir", "make_logger"))
+clusterExport(cl, c("neworder", "abiotic_vars", "biotic_vars", 
+                    "train_and_backfill_subbasin_s", "ia_dir", "make_logger"))
+
 
 #10. train models and backfill biotic features for year y -----------------------------
 print("* running backfilling in parallel *")
@@ -156,13 +133,36 @@ subs <- 301 # for testing
 backfill_results <- 
   parLapplyLB(cl, 
               X = subs, 
-              fun = function(i) {
+              fun = function(i, year = 2020) {
+                
+                # load spatial objects inside of each worker to avoid "external pointer is not valid"
+                library(terra)
+                # import pre-mosaiced covariate stack for year_y
+                stack_y <- terra::rast(file.path(ia_dir, sprintf("covariates_mosaiced_%d.tif", year)))
+                
+                # ensure categoricals are factors
+                categorical_responses = c("ABoVE_1km", "NLCD_1km","MODISLCC_1km", "MODISLCC_5x5","SCANFI_1km","VLCE_1km")
+                cats_present <- intersect(categorical_responses, names(stack_y))
+                for (cat in cats_present) stack_y[[cat]] <- terra::as.factor(stack_y[[cat]])
+                
+                # import low hf layer and project to current stack
+                lowhf_mask <- terra::rast(file.path(ia_dir, "hirshpearson", "CanHF_1km_lessthan1.tif"))
+                lowhf_mask <- terra::project(x=lowhf_mask, y=stack_y, method = "near")
+                
+                # import high hf layer and project to current stack
+                highhf_mask <- terra::rast(file.path(ia_dir, "hirshpearson", "CanHF_1km_morethan1.tif"))
+                highhf_mask <- terra::project(x=highhf_mask, y=stack_y, method = "near")
+                
+                # import subbasin boundaries and project to current stack
+                all_subbasins_subset <- terra::vect(file.path(ia_dir, "hydrobasins_masked_merged_subset.gpkg"))
+                all_subbasins_subset <- terra::project(x=all_subbasins_subset, y=stack_y)
+                
                 tryCatch(
                   train_and_backfill_subbasin_s(
                   subbasin_index = i, 
                   year           = 2020,
                   stack_y        = stack_y,
-                  lowhf_mask     = low_hf_mask,
+                  lowhf_mask     = lowhf_mask,
                   highhf_mask    = highhf_mask,
                   abiotic_vars   = abiotic_vars, 
                   biotic_vars    = biotic_vars,
@@ -170,9 +170,16 @@ backfill_results <-
                   quiet          = FALSE,
                   neworder       = neworder,
                   categorical_responses = categorical_responses,
-                  all_subbasins_subset  = all_subbasins_subset)
-    ) # close trycatch
-  } # close function
+                  all_subbasins_subset  = all_subbasins_subset
+                ), # close train_and_backfill_subbasin_s
+                
+                error = function(e) {
+                  message("Error in subbasin ", i, ": ", conditionMessage(e))
+                  return(NULL) 
+                } # close error
+                
+            ) # close trycatch
+    } # close function in parapply
 )  # close parapply 
 
 #11. stop the cluster----

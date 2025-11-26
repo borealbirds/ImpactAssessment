@@ -1,7 +1,7 @@
 train_and_backfill_subbasin_s <- function(
     subbasin_index, 
     year, 
-    stack_y,     # SpatRaster 
+    stack_y_path,     # SpatRaster 
     lowhf_mask,  # SpatRaster 
     highhf_mask, # SpatRaster 
     all_subbasins_subset, # SpatVector
@@ -13,10 +13,11 @@ train_and_backfill_subbasin_s <- function(
     quiet = FALSE
 ) {
   
+  # import covariate stack, low HF layer for training, high HF layer for backfilling
+  
   # source BART metrics summary functions
   source(file.path(getwd(), "Rscripts", "may_restart", "09_collect_metrics_gbart.R"))
   source(file.path(getwd(), "Rscripts", "may_restart", "09_collect_metrics_mbart.R"))
-  
   
   # for logging progress
   logfile <- file.path(ia_dir, "logs", sprintf("Y%d_S%03d.log", year, subbasin_index))
@@ -379,5 +380,3 @@ train_and_backfill_subbasin_s <- function(
 
 } # close train_and_backfill_subbasin_s()
 
-# note: every continuous covariate will have two layers (mean and sd)
-# and every categorical covariate will have three layers (mode, entropy, )
