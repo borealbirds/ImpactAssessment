@@ -175,7 +175,10 @@ backfill_results <-
                 
                 error = function(e) {
                   message("Error in subbasin ", i, ": ", conditionMessage(e))
-                  return(NULL) 
+                  return(list(
+                    subbasin = i,
+                    error = conditionMessage(e)
+                  ))
                 } # close error
                 
             ) # close trycatch

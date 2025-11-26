@@ -1,7 +1,7 @@
 train_and_backfill_subbasin_s <- function(
     subbasin_index, 
     year, 
-    stack_y_path,     # SpatRaster 
+    stack_y,     # SpatRaster 
     lowhf_mask,  # SpatRaster 
     highhf_mask, # SpatRaster 
     all_subbasins_subset, # SpatVector
@@ -12,8 +12,6 @@ train_and_backfill_subbasin_s <- function(
     neworder, 
     quiet = FALSE
 ) {
-  
-  # import covariate stack, low HF layer for training, high HF layer for backfilling
   
   # source BART metrics summary functions
   source(file.path(getwd(), "Rscripts", "may_restart", "09_collect_metrics_gbart.R"))
