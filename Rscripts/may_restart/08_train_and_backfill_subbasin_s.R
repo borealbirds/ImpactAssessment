@@ -133,8 +133,9 @@ train_and_backfill_subbasin_s <- function(
     logp("training predictors = %d", ncol(df_train_bart))
     
     # drop predictors with zero variance
+    # note: in subbasin 57 we had the unlikely case of only a single non-NA value for CAfire, which gives sd()=NA
     col_sd <- sapply(df_train_bart, function(x) sd(as.numeric(x), na.rm = TRUE))
-    df_train_bart <- df_train_bart[, col_sd > 0, drop = FALSE] 
+    df_train_bart <- df_train_bart[, !is.na(col_sd) & col_sd > 0 , drop = FALSE] 
     
     # subset backfill dataframe to the same abiotic_cols, biotic_cols, lat/long
     # because we can't backfill covariates that we didn't train models for

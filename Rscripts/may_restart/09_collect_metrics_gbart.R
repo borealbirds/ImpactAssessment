@@ -7,6 +7,8 @@ collect_metrics_gbart <- function(fit, y, covariate, subbasin, year, top_var = N
   se_pred <- sqrt(var_f + sig2)
   
   sigma_draws <- fit$sigma  # length ndpost
+  
+  # add gaussian noise to simulate the posterior predictive distribution
   yrep_draws <- fit$yhat.train + matrix(
     rnorm(length(fit$yhat.train), sd = rep(sigma_draws, each = ncol(fit$yhat.train))),
     nrow = nrow(fit$yhat.train))
