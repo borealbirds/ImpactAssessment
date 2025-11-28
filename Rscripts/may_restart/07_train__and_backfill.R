@@ -20,7 +20,7 @@ cc <- FALSE
 
 #3. set number of tasks for local vs cluster ---------------------
 if(cc){ n_tasks <- 32}
-if(!cc | test){ n_tasks <- 4}
+if(!cc | test){ n_tasks <- 1}
 
 
 #4. create and register clusters ---------------------------------
@@ -128,7 +128,7 @@ clusterExport(cl, c("neworder", "abiotic_vars", "biotic_vars",
 print("* running backfilling in parallel *")
 
 # run backfilling in parallel by subbasin
-subs <- c(301, 240, 57, 491, 100) # for testing
+subs <- c(57) # for testing
 # parLapply runs the backfilling for every i in `subs`
 backfill_results <- 
   parLapplyLB(cl, 
