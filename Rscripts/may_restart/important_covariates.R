@@ -5,7 +5,7 @@ data("bam_predictor_importance_v5")
 top5_by_species <- 
   bam_predictor_importance_v5 %>%
   group_by(spp, bcr) %>%
-  slice_max(order_by = mean_rel_inf, n = 5, with_ties = FALSE) 
+  slice_max(order_by = mean_rel_inf, n = 1, with_ties = FALSE) 
 
 # variable defs
 defs <- 

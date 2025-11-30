@@ -1,5 +1,5 @@
 collect_metrics_mbart <- function(fit, X_train, y, 
-                                  covariate, subbasin, year) {
+                                  covariate, subbasin, year, top_var) {
   
   # 1. Predict on the training data
   # continuous BART always computes the latent Gaussian regression function 

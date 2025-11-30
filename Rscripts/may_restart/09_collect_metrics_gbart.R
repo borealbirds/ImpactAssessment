@@ -47,6 +47,7 @@ collect_metrics_gbart <- function(fit, y, covariate, subbasin, year, top_var = N
     sigma_mean  = mean(fit$sigma),
     sigma_sd    = stats::sd(fit$sigma),
     coverage95  = coverage95,
-    top_var     = top_var
+    top_var     = top_var,
+    split       = "train"
   )
 }

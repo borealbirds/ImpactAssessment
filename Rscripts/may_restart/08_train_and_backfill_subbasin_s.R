@@ -16,6 +16,8 @@ train_and_backfill_subbasin_s <- function(
   # source BART metrics summary functions
   source(file.path(getwd(), "Rscripts", "may_restart", "09_collect_metrics_gbart.R"))
   source(file.path(getwd(), "Rscripts", "may_restart", "09_collect_metrics_mbart.R"))
+  source(file.path(getwd(), "Rscripts", "may_restart", "09_collect_holdout_metrics_gbart.R"))
+  source(file.path(getwd(), "Rscripts", "may_restart", "09_collect_holdout_metrics_mbart.R"))
   
   # for logging progress
   logfile <- file.path(ia_dir, "logs", sprintf("Y%d_S%03d.log", year, subbasin_index))
@@ -84,6 +86,9 @@ train_and_backfill_subbasin_s <- function(
 
   # store BART metrics here, each element will be a single row dataframe with model metrics as columns
   metrics <- list()
+  
+  # store confusion matrix information for this subbasin
+  confusion <- list()
   
   # train a model for each vegetation feature
   # backfill each feature where human footprint is high
@@ -156,9 +161,14 @@ train_and_backfill_subbasin_s <- function(
       # reproducible per (year, subbasin, covariate)
       set.seed(abs(as.integer(sprintf("%d%03d", subbasin_index, which(biotic_cols==b)))))
       
+      # split y into 90% training and 10% holdout
+      holdout_idx <- sample(seq_len(length(y)), size = round(0.10 * length(y)))
+      df_holdout    <- df_train_bart[holdout_idx, ] # get holdout rows before modifying df_train_bart
+      df_train_bart <- df_train_bart[-holdout_idx, ]
+      
       # train and predict with BART
       fit <- BART::gbart(x.train = as.matrix(df_train_bart), 
-                         y.train = y, 
+                         y.train = y[-holdout_idx], 
                          x.test = as.matrix(df_backfill_bart), # has the same columns as df_train_bart
                          type = "wbart",
                          k = 3, #shrinkage
@@ -168,6 +178,8 @@ train_and_backfill_subbasin_s <- function(
                          sparse = TRUE, # sampler focuses on informative predictors (not all predictors treated as informative)
                          sigest  = sd(y), # the rough error standard deviation used in the prior
                          sigdf = 3) 
+      
+      logp("[%s] gbart fit to %s", b)
       
       # estimate posterior mean and sd
       # yhat.test are the predicted values of b at high HF locations (rows = posterior draws, columns = pixels)
@@ -200,11 +212,25 @@ train_and_backfill_subbasin_s <- function(
       
       # collect metrics (one row per year x subbasin x covariate)
       metrics[[length(metrics) + 1L]] <- collect_metrics_gbart(
-        fit, y,
+        fit, y[-holdout_idx],
         covariate = b,
         subbasin  = subbasin_index,
         year      = year,
         top_var   = top_var)
+      
+      
+      # out-of-sample prediction
+      pred_holdout <- predict(fit, newdata = as.matrix(df_holdout))
+      yhat_holdout_mean <- colMeans(pred_holdout) # get mean estimate per pixel from the posterior
+      
+      metrics[[length(metrics) + 1L]] <- collect_holdout_metrics_gbart(
+        y_obs    = y[holdout_idx],
+        yhat_mean = yhat_holdout_mean,
+        covariate = b,
+        subbasin  = subbasin_index,
+        year      = year,
+        top_var   = top_var
+      )
       
     } else { # if b is categorical, use the following protocol
       
@@ -237,9 +263,9 @@ train_and_backfill_subbasin_s <- function(
       if (K < 2) {
         
         # trivial: only one class in training data
-        b_mode    <- rep(present[1], nrow(df_backfill)) # the one and only landcover class present
-        b_maxprob <- rep(1, nrow(df_backfill)) 
-        b_entropy <- rep(0, nrow(df_backfill))
+        b_mode    <- rep(present[1], nrow(df_backfill_bart)) # the one and only landcover class present
+        b_maxprob <- rep(1, nrow(df_backfill_bart)) 
+        b_entropy <- rep(0, nrow(df_backfill_bart))
 
       } else {
         
@@ -249,22 +275,29 @@ train_and_backfill_subbasin_s <- function(
         # reproducible per (year, subbasin, covariate)
         set.seed(abs(as.integer(sprintf("%d%03d", subbasin_index, which(biotic_cols==b)))))
         
+        # split y into 90% training and 10% holdout
+        holdout_idx <- sample(seq_len(length(y_int)), size = round(0.10 * length(y_int)))
+        df_holdout    <- df_train_bart[holdout_idx, ] # get holdout rows before modifying df_train_bart
+        df_train_bart <- df_train_bart[-holdout_idx, ]
+        
         # multinomial bart keeps every 10th posterior sample (gbart keeps every sample)
         # so mbart will take at least 10 times longer
         # gbart assumes continuous residuals -> conjugate priors -> less autocorrelation -> no thinning
         # mbart uses latent variables -> non-conjugate updates -> more autocorrelation -> needs thinning
         # mbart runs K times (e.g. 11 classes will take 11 times longer than gbart)
         fit <- BART::mbart(x.train = as.matrix(df_train_bart), 
-                           y.train = y_int, 
+                           y.train = y_int[-holdout_idx], 
                            x.test  = as.matrix(df_backfill_bart),
                            type = "pbart",
                            k = 3,
-                           ntree = 50L,
-                           ndpost = 500L,
+                           ntree = 30L,
+                           ndpost = 300L,
                            nskip = 200L,
-                           keepevery = 5L,
-                           printevery = 450,
+                           keepevery = 4L,
+                           printevery = 350,
                            sparse = TRUE)
+        
+        logp("[%s] mbart fit to %s", b)
       
         # fit$prob.test has dimensions: posterior density (ndpost) x (# high HF pixels x # classes in training set)
         # therefore, for every high HF pixel we have a probability estimate for every class learned in from the training set
@@ -312,6 +345,9 @@ train_and_backfill_subbasin_s <- function(
         # probability of the chosen class
         b_maxprob <- apply(class_probs, 1, max)
         
+        varprob_mean <- colMeans(do.call(rbind, fit$varprob))
+        top_var <- names(sort(varprob_mean, decreasing = TRUE))[1]
+        
       } # close if single or multi-class
       
       # outputs
@@ -323,13 +359,80 @@ train_and_backfill_subbasin_s <- function(
       if (K >= 2){
       metrics[[length(metrics) + 1L]] <- collect_metrics_mbart(
         fit,
-        y         = y_int,
+        y         = y_int[-holdout_idx],
         X_train   = df_train_bart,
         covariate = b,
         subbasin  = subbasin_index,
-        year      = year)
+        year      = year,
+        top_var   = top_var)
       } 
       
+      # out-of-sample prediction
+      pred_holdout <- predict(fit, newdata = as.matrix(df_holdout))
+      
+      # MBART internal dimensions
+      K_model <- pred_holdout$K
+      cats_model <- fit$cats   # MBART internal class order
+      
+      prob   <- pred_holdout$prob.test
+      ndpost <- nrow(prob)
+      np     <- ncol(prob) / K_model   # number of holdout rows
+      
+      # reshape ndpost × np × K_model
+      prob_arr <- array(NA_real_, dim = c(ndpost, np, K_model))
+      for (j in seq_len(K_model)) {
+        cols <- seq(from = j, to = K_model * np, by = K_model)
+        prob_arr[, , j] <- prob[, cols, drop = FALSE]
+      }
+      
+      # posterior mean probs (np × K_model)
+      prob_holdout_mean <- apply(prob_arr, c(2, 3), mean)
+      
+      # Re-map MBART class order → ecological order
+      K_present <- length(present)
+      cols <- match(present, cats_model)
+      
+      prob_holdout_ecol <- matrix(0, nrow = np, ncol = K_present)
+      
+      for (i in seq_along(present)) {
+        ci <- cols[i]
+        if (!is.na(ci)) {
+          prob_holdout_ecol[, i] <- prob_holdout_mean[, ci]
+        } else {
+          prob_holdout_ecol[, i] <- 0
+        }
+      }
+      
+      # predicted class (MAP)
+      yhat_holdout_class <- max.col(prob_holdout_ecol, ties.method = "first")
+      
+      # entropy
+      eps <- 1e-12
+      b_entropy_holdout <- -rowSums(prob_holdout_ecol * log(pmax(prob_holdout_ecol, eps)))
+      
+      # collect holdout metrics
+      metrics[[length(metrics) + 1L]] <- collect_holdout_metrics_mbart(
+        fit       = fit,
+        X_holdout = df_holdout,
+        y_holdout = y_int[holdout_idx], 
+        covariate = b,
+        subbasin  = subbasin_index,
+        year      = year,
+        top_var   = top_var
+      )
+      
+      # store data for confusion matrix
+      # actual ecological codes for the holdout rows
+      actual_holdout_class <- present[ y_int[holdout_idx] ]
+      
+      # store holdout predictions for later confusion matrix
+      confusion[[length(confusion) + 1L]] <- data.frame(
+        covariate  = b,
+        subbasin   = subbasin_index,
+        actual     = actual_holdout_class,
+        predicted  = yhat_holdout_class,
+        stringsAsFactors = FALSE
+      )
     } # close if continuous or categorical
     
     logp("[%s] fit done in %.1fs", b, proc.time()[3] - t0)
@@ -375,7 +478,10 @@ train_and_backfill_subbasin_s <- function(
   # save metrics for post-processing later on
   saveRDS(metrics, file.path(out_dir, sprintf("subbasin_%03d_metrics.rds", subbasin_index)))
   
-  invisible(TRUE)
+  # save confusion matrix information
+  saveRDS(confusion, file.path(out_dir, sprintf("subbasin_%03d_confusion.rds", subbasin_index)))
+  
+  list(subbasin = subbasin_index, ok = TRUE)
 
 } # close train_and_backfill_subbasin_s()
 

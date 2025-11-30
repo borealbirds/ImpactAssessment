@@ -140,10 +140,8 @@ backfill_results <-
                 # import pre-mosaiced covariate stack for year_y
                 stack_y <- terra::rast(file.path(ia_dir, sprintf("covariates_mosaiced_%d.tif", year)))
                 
-                # ensure categoricals are factors
+                # define categorical features
                 categorical_responses = c("ABoVE_1km", "NLCD_1km","MODISLCC_1km", "MODISLCC_5x5","SCANFI_1km","VLCE_1km")
-                cats_present <- intersect(categorical_responses, names(stack_y))
-                for (cat in cats_present) stack_y[[cat]] <- terra::as.factor(stack_y[[cat]])
                 
                 # import low hf layer and project to current stack
                 lowhf_mask <- terra::rast(file.path(ia_dir, "hirshpearson", "CanHF_1km_lessthan1.tif"))
