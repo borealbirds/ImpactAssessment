@@ -284,85 +284,65 @@ train_and_backfill_subbasin_s <- function(
         # gbart assumes continuous residuals -> conjugate priors -> less autocorrelation -> no thinning
         # mbart uses latent variables -> non-conjugate updates -> more autocorrelation -> needs thinning
         # mbart runs K times (e.g. 11 classes will take 11 times longer than gbart)
-        fit <- BART::mbart(x.train = as.matrix(df_train_bart),
+        fit <- BART::mbart2(x.train = as.matrix(df_train_bart),
                            y.train = y_int[-holdout_idx],
                            x.test  = as.matrix(df_backfill_bart),
                            type = "pbart",
                            k = 3,
                            ntree = 40L,
-                           ndpost = 400L,
-                           nskip = 200L,
+                           ndpost = 500L,
+                           nskip = 150L,
                            keepevery = 10L,
                            printevery = 350,
                            sparse = TRUE)
         
-        fit <- BART::mbart(x.train=as.matrix(df_train_bart),
-                           y.train = y_int[-holdout_idx],
-                           x.test=as.matrix(df_backfill_bart),
-                           ndpost = 750L)
-        
         logp("mbart fit to [%s]", b)
       
-        # reshape `prob.test` into draws x pixels x model-classes
-        pred <- predict(fit, newdata = as.matrix(df_backfill_bart))
+        K_model    <- fit$K
+        cats_model <- fit$cats
+        npixels    <- length(fit$prob.test.mean) / K_model
         
-        prob_test <- pred$prob.test   # ndpost × (npixels*K_model)
-        K_model   <- fit$K
-        cats_model <- fit$cats       # MBART internal class order
-        ndpost    <- nrow(prob_test)
-        npixels   <- ncol(prob_test) / K_model
+        # The mbart2() output is pixel-major:
+        # row = pixel, columns = class1..classK_model
+        class_probs_model <- matrix(fit$prob.test.mean, ncol = K_model, byrow = TRUE)
         
-        # Reshape from class-fastest → (draw × pixel × class)
-        prob_array <- array(NA_real_, dim = c(ndpost, npixels, K_model))
-        
-        for (j in seq_len(K_model)) {
-          cols_j <- ((j - 1) * npixels + 1):(j * npixels)
-          prob_array[, , j] <- prob_test[, cols_j, drop = FALSE]
-        }
-        
-        # Posterior mean across draws → (pixel × class_model)
-        class_probs_model <- apply(prob_array, c(2, 3), mean)  # npixels × K_model
-        
-        # Match ecological classes present in df_train to MBART’s internal class order
+        # map MBART class order -> ecological order
         cols <- match(present, cats_model)
         
-        # Build probability matrix in ECOLOGICAL order (pixel × length(present))
+        # create empty matrix and assign ecological classes to class_probs
         class_probs <- matrix(0, nrow = npixels, ncol = length(present))
-        
         for (i in seq_along(present)) {
           ci <- cols[i]
           if (!is.na(ci)) {
-            # Probability for this ecological class = model column ci
             class_probs[, i] <- class_probs_model[, ci]
           } else {
-            # If class not present in training → prob = 0
             class_probs[, i] <- 0
           }
         }
         
-        # Most likely class index (in ecological order)
+        # predicted class index (MAP) in ecological codes
         pred_idx <- max.col(class_probs, ties.method = "first")
         b_mode   <- present[pred_idx]
         
-        # Uncertainty: entropy
+        # Uncertainty measures
         eps <- 1e-12
         b_entropy <- -rowSums(class_probs * log(pmax(class_probs, eps)))
-        
-        # Probability of predicted class
         b_maxprob <- apply(class_probs, 1, max)
         
         # Variable importance
         varprob_mean <- colMeans(do.call(rbind, fit$varprob))
         top_var <- names(sort(varprob_mean, decreasing = TRUE))[1]
         
+        
       } # close if single or multi-class
       
-      # outputs
-      df_backfill[[b]] <- b_mode
-      out_layers[[b]]  <- b_mode
-      out_layers[[paste0(b, "_maxprob")]]  <- b_maxprob
-      out_layers[[paste0(b, "_entropy")]]  <- b_entropy
+      # store for rasterization
+      df_backfill[[b]]                         <- b_mode
+      out_layers[[b]]                          <- b_mode
+      out_layers[[paste0(b, "_maxprob")]]      <- b_maxprob
+      out_layers[[paste0(b, "_entropy")]]      <- b_entropy
       
+      # collect metrics for categorical covariate b
       if (K >= 2){
       metrics[[length(metrics) + 1L]] <- collect_metrics_mbart(
         fit,
@@ -374,72 +354,50 @@ train_and_backfill_subbasin_s <- function(
         top_var   = top_var)
       } 
       
-      # out-of-sample prediction
-      pred_holdout <- predict(fit, newdata = as.matrix(df_holdout))
-      
-      # MBART internal dimensions
-      K_model <- pred_holdout$K
-      cats_model <- fit$cats   # MBART internal class order
-      
-      prob   <- pred_holdout$prob.test
-      ndpost <- nrow(prob)
-      np     <- ncol(prob) / K_model   # number of holdout rows
-      
-      # reshape ndpost × np × K_model
-      prob_arr <- array(NA_real_, dim = c(ndpost, np, K_model))
-      for (j in seq_len(K_model)) {
-        cols <- seq(from = j, to = K_model * np, by = K_model)
-        prob_arr[, , j] <- prob[, cols, drop = FALSE]
-      }
-      
-      # posterior mean probs (np × K_model)
-      prob_holdout_mean <- apply(prob_arr, c(2, 3), mean)
-      
-      # Re-map MBART class order → ecological order
-      K_present <- length(present)
-      cols <- match(present, cats_model)
-      
-      prob_holdout_ecol <- matrix(0, nrow = np, ncol = K_present)
-      
-      for (i in seq_along(present)) {
-        ci <- cols[i]
-        if (!is.na(ci)) {
-          prob_holdout_ecol[, i] <- prob_holdout_mean[, ci]
-        } else {
-          prob_holdout_ecol[, i] <- 0
-        }
-      }
-      
-      # predicted class (MAP)
-      yhat_holdout_class <- max.col(prob_holdout_ecol, ties.method = "first")
-      
-      # entropy
-      eps <- 1e-12
-      b_entropy_holdout <- -rowSums(prob_holdout_ecol * log(pmax(prob_holdout_ecol, eps)))
-      
-      # collect holdout metrics
+      # compute metrics from the holdout data
+      # first, predict on holdout data (will be re-used for confusion matrix)
+      pred <- predict(fit, newdata = as.matrix(df_holdout))
       metrics[[length(metrics) + 1L]] <- collect_holdout_metrics_mbart(
         fit       = fit,
-        X_holdout = df_holdout,
-        y_holdout = y_int[holdout_idx], 
+        pred      = pred,
+        y_holdout = y_int[holdout_idx],
         covariate = b,
         subbasin  = subbasin_index,
         year      = year,
         top_var   = top_var
       )
       
-      # store data for confusion matrix
-      # actual ecological codes for the holdout rows
-      actual_holdout_class <- present[ y_int[holdout_idx] ]
+      # use predictions for confusion matrix
+      K_model    <- pred$K
+      cats_model <- fit$cats
+      np_holdout <- length(pred$prob.test.mean) / K_model
       
-      # store holdout predictions for later confusion matrix
+      prob_holdout_model <- matrix(
+        pred$prob.test.mean,
+        ncol = K_model,
+        byrow = TRUE
+      )
+      
+      cols <- match(present, cats_model)
+      prob_ecol <- matrix(0, nrow = np_holdout, ncol = length(present))
+      for (i in seq_along(present)) {
+        ci <- cols[i]
+        if (!is.na(ci)) {
+          prob_ecol[, i] <- prob_holdout_model[, ci]
+        }
+      }
+      
+      yhat_holdout_class <- present[max.col(prob_ecol, ties.method = "first")]
+      actual_holdout_class <- present[y_int[holdout_idx]]
+      
       confusion[[length(confusion) + 1L]] <- data.frame(
-        covariate  = b,
-        subbasin   = subbasin_index,
-        actual     = actual_holdout_class,
-        predicted  = yhat_holdout_class,
+        covariate = b,
+        subbasin  = subbasin_index,
+        actual    = actual_holdout_class,
+        predicted = yhat_holdout_class,
         stringsAsFactors = FALSE
       )
+      
     } # close if continuous or categorical
     
     logp("[%s] fit done in %.1fs", b, proc.time()[3] - t0)

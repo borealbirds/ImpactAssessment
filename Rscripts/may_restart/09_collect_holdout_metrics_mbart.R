@@ -1,37 +1,46 @@
-collect_holdout_metrics_mbart <- function(fit, X_holdout, y_holdout,
+collect_holdout_metrics_mbart <- function(fit, pred, y_holdout,
                                           covariate, subbasin, year, top_var) {
   
-  # 1. Predict on holdout rows
-  pred <- predict(fit, newdata = X_holdout)
+  K_model    <- pred$K
+  cats_model <- fit$cats
   
-  K      <- pred$K
-  prob   <- pred$prob.test      # ndpost × (K*n)
-  ndpost <- nrow(prob)
-  np     <- ncol(prob) / K
+  # pixel-major -> reshape into matrix (np × K_model)
+  np <- length(pred$prob.test.mean) / K_model
+  prob_mean_model <- matrix(
+    pred$prob.test.mean,
+    ncol = K_model,
+    byrow = TRUE
+  )
   
-  # 2. Reshape to ndpost × n × K
-  prob_arr <- array(NA_real_, dim = c(ndpost, np, K))
-  for (j in seq_len(K)) {
-    cols <- seq(from = j, to = K * np, by = K)
-    prob_arr[, , j] <- prob[, cols, drop = FALSE]
+  # remap MBART class order → ecological class order
+  K_present <- length(present)
+  cols <- match(present, cats_model)
+  
+  prob_ecol <- matrix(0, nrow = np, ncol = K_present)
+  for (i in seq_along(present)) {
+    ci <- cols[i]
+    if (!is.na(ci)) {
+      prob_ecol[, i] <- prob_mean_model[, ci]
+    } else {
+      prob_ecol[, i] <- 0
+    }
   }
   
-  # 3. Posterior mean probabilities (n × K)
-  prob_mean <- apply(prob_arr, c(2, 3), mean)
+  # predicted classes in ecological order
+  pred_idx <- max.col(prob_ecol, ties.method = "first")
+  pred_class <- present[pred_idx]
   
-  # 4. Predicted class (MAP)
-  pred_idx <- max.col(prob_mean, ties.method = "first")
+  # true ecological classes
+  true_class <- present[y_holdout]
   
-  # True labels (must be integer-coded 1..K)
-  y_mapped <- as.integer(y_holdout)
+  # accuracy
+  accuracy <- mean(pred_class == true_class, na.rm = TRUE)
   
-  accuracy <- mean(pred_idx == y_mapped, na.rm = TRUE)
-  
-  # 5. Entropy
+  # entropy
   eps <- 1e-12
-  entropy <- -rowSums(prob_mean * log(pmax(prob_mean, eps)))
+  entropy <- -rowSums(prob_ecol * log(pmax(prob_ecol, eps)))
   
-  # 6. Return metrics
+  # return metrics only (not predictions)
   data.frame(
     covariate    = covariate,
     subbasin     = subbasin,
