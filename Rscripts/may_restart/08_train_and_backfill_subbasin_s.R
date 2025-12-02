@@ -20,7 +20,7 @@ train_and_backfill_subbasin_s <- function(
   source(file.path(getwd(), "Rscripts", "may_restart", "09_collect_holdout_metrics_mbart.R"))
   
   # for logging progress
-  logfile <- file.path(ia_dir, "logs", sprintf("Y%d_S%03d.log", year, subbasin_index))
+  logfile <- file.path(ia_dir, "logs", sprintf("Y%d_S%d.log", year, subbasin_index))
   logp <- make_logger(logfile)
   on.exit(logp("done"), add = TRUE)
   
@@ -37,16 +37,14 @@ train_and_backfill_subbasin_s <- function(
   
   logp("cropped/masked; ncell=%d", terra::ncell(cov_s))
   
+ 
   # for training: identify low HF pixels in subbasin_s 
-  lowhf_mask_s <- 
-    terra::crop(x = lowhf_mask, y = cov_s) |> 
-    terra::resample(x = _, y = cov_s, method = "near")
+  lowhf_mask_s  <- terra::resample(lowhf_mask,  cov_s, method="near")
+  lowhf_mask_s  <- terra::mask(lowhf_mask_s, subbasin_s)
   
   # for backfilling: identify high HF pixels in subbasin_s 
-  highhf_mask_s <- 
-    terra::crop(x = highhf_mask, y = subbasin_s) |> 
-    terra::resample(x = _, y = cov_s, method = "near") |> 
-    terra::mask(x = _, mask = cov_s[[1]])
+  highhf_mask_s <- terra::resample(highhf_mask, cov_s, method="near")
+  highhf_mask_s <- terra::mask(highhf_mask_s, subbasin_s)
   
   # for training and backfilling: select pixels marked with 1s 
   # convert covariate stacks to a dataframe for training/backfilling (rows are pixels, columns are covariates)
@@ -58,8 +56,8 @@ train_and_backfill_subbasin_s <- function(
   # keep track of non-NA pixels in `backfill_idx`
   # these will be used for re-populating an empty raster with backfill values 
   df_full <- terra::as.data.frame(cov_s, xy = TRUE, na.rm = FALSE, cells = TRUE)
-  backfill_idx <- df_full$cell[which(values(highhf_mask_s) == 1)]
-  df_backfill <- df_full[df_full$cell %in% backfill_idx, drop = FALSE, ] 
+  backfill_idx <- which(values(highhf_mask_s) == 1)
+  df_backfill <- df_full[backfill_idx, , drop = FALSE]
   
   # coordinate scaling: define mean and variance of lat/long across subbasin_s
   # compute center/scale from rows with valid x,y (should be many unless something odd)
@@ -92,7 +90,8 @@ train_and_backfill_subbasin_s <- function(
   
   # train a model for each vegetation feature
   # backfill each feature where human footprint is high
-  for (b in biotic_cols) {
+  # for (b in biotic_cols) {
+  for (b in c("SCANFI_1km")) {
     
     t0 <- proc.time()[3]
     logp("[%s] in process: (%s)", b, if (b %in% categorical_responses) "categorical" else "continuous")
@@ -179,7 +178,7 @@ train_and_backfill_subbasin_s <- function(
                          sigest  = sd(y), # the rough error standard deviation used in the prior
                          sigdf = 3) 
       
-      logp("[%s] gbart fit to %s", b)
+      logp("gbart fit to [%s]", b)
       
       # estimate posterior mean and sd
       # yhat.test are the predicted values of b at high HF locations (rows = posterior draws, columns = pixels)
@@ -285,66 +284,74 @@ train_and_backfill_subbasin_s <- function(
         # gbart assumes continuous residuals -> conjugate priors -> less autocorrelation -> no thinning
         # mbart uses latent variables -> non-conjugate updates -> more autocorrelation -> needs thinning
         # mbart runs K times (e.g. 11 classes will take 11 times longer than gbart)
-        fit <- BART::mbart(x.train = as.matrix(df_train_bart), 
-                           y.train = y_int[-holdout_idx], 
+        fit <- BART::mbart(x.train = as.matrix(df_train_bart),
+                           y.train = y_int[-holdout_idx],
                            x.test  = as.matrix(df_backfill_bart),
                            type = "pbart",
                            k = 3,
-                           ntree = 30L,
-                           ndpost = 300L,
+                           ntree = 40L,
+                           ndpost = 400L,
                            nskip = 200L,
-                           keepevery = 4L,
+                           keepevery = 10L,
                            printevery = 350,
                            sparse = TRUE)
         
-        logp("[%s] mbart fit to %s", b)
+        fit <- BART::mbart(x.train=as.matrix(df_train_bart),
+                           y.train = y_int[-holdout_idx],
+                           x.test=as.matrix(df_backfill_bart),
+                           ndpost = 750L)
+        
+        logp("mbart fit to [%s]", b)
       
-        # fit$prob.test has dimensions: posterior density (ndpost) x (# high HF pixels x # classes in training set)
-        # therefore, for every high HF pixel we have a probability estimate for every class learned in from the training set
-        # and this is multiplied by the density of the posterior distribution (ndpost)
-        # however, we want to split from 2-D prob.test to 3-D `prob_array` (see below)
-        ndpost <- nrow(fit$prob.test) # density of posterior distribution
-        K_model <- fit$K # the internal ordered set of classes recognized by mbart()
-        npixels <- as.integer(ncol(fit$prob.test) / K_model) # number of high HF pixels
-        
         # reshape `prob.test` into draws x pixels x model-classes
-        prob_array <- array(fit$prob.test, dim = c(ndpost, npixels, K_model))
+        pred <- predict(fit, newdata = as.matrix(df_backfill_bart))
         
-        # get the mean probability per pixel x class
-        # each row is a pixel, each column is a class with probability of said class
-        # class_probs_model is indexed in MBART’s internal class order which we'll convert to `class_probs` below
-        class_probs_model <- apply(prob_array, c(2,3), mean) #
+        prob_test <- pred$prob.test   # ndpost × (npixels*K_model)
+        K_model   <- fit$K
+        cats_model <- fit$cats       # MBART internal class order
+        ndpost    <- nrow(prob_test)
+        npixels   <- ncol(prob_test) / K_model
         
-        # which model column corresponds to each desired code?
-        cols <- match(present, fit$cats)   
+        # Reshape from class-fastest → (draw × pixel × class)
+        prob_array <- array(NA_real_, dim = c(ndpost, npixels, K_model))
         
-        # build final class_probs in correct ecological order
+        for (j in seq_len(K_model)) {
+          cols_j <- ((j - 1) * npixels + 1):(j * npixels)
+          prob_array[, , j] <- prob_test[, cols_j, drop = FALSE]
+        }
+        
+        # Posterior mean across draws → (pixel × class_model)
+        class_probs_model <- apply(prob_array, c(2, 3), mean)  # npixels × K_model
+        
+        # Match ecological classes present in df_train to MBART’s internal class order
+        cols <- match(present, cats_model)
+        
+        # Build probability matrix in ECOLOGICAL order (pixel × length(present))
         class_probs <- matrix(0, nrow = npixels, ncol = length(present))
         
-        # match each ecological class to MBART’s output column
-        # insert probability 0 for any class not present in training
-        # produce a probability matrix in the correct ecological order
         for (i in seq_along(present)) {
           ci <- cols[i]
           if (!is.na(ci)) {
+            # Probability for this ecological class = model column ci
             class_probs[, i] <- class_probs_model[, ci]
           } else {
-            # probability = 0 if class not seen in the training subset 
+            # If class not present in training → prob = 0
             class_probs[, i] <- 0
           }
         }
         
-        # most likely ecological class
-        pred_idx  <- max.col(class_probs, ties.method = "first")
-        b_mode    <- present[pred_idx]   # back to original ecological codes
+        # Most likely class index (in ecological order)
+        pred_idx <- max.col(class_probs, ties.method = "first")
+        b_mode   <- present[pred_idx]
         
-        # uncertainty
+        # Uncertainty: entropy
         eps <- 1e-12
         b_entropy <- -rowSums(class_probs * log(pmax(class_probs, eps)))
         
-        # probability of the chosen class
+        # Probability of predicted class
         b_maxprob <- apply(class_probs, 1, max)
         
+        # Variable importance
         varprob_mean <- colMeans(do.call(rbind, fit$varprob))
         top_var <- names(sort(varprob_mean, decreasing = TRUE))[1]
         
@@ -468,7 +475,7 @@ train_and_backfill_subbasin_s <- function(
   dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
   terra::writeRaster(
     result_raster,
-    file.path(out_dir, sprintf("subbasin_%03d_backfill.tif", subbasin_index)),
+    file.path(out_dir, sprintf("subbasin_%d_backfill.tif", subbasin_index)),
     overwrite = TRUE
   )
   
@@ -476,12 +483,13 @@ train_and_backfill_subbasin_s <- function(
   
   
   # save metrics for post-processing later on
-  saveRDS(metrics, file.path(out_dir, sprintf("subbasin_%03d_metrics.rds", subbasin_index)))
+  saveRDS(metrics, file.path(out_dir, sprintf("subbasin_%d_metrics.rds", subbasin_index)))
   
   # save confusion matrix information
-  saveRDS(confusion, file.path(out_dir, sprintf("subbasin_%03d_confusion.rds", subbasin_index)))
+  saveRDS(confusion, file.path(out_dir, sprintf("subbasin_%d_confusion.rds", subbasin_index)))
   
   list(subbasin = subbasin_index, ok = TRUE)
 
 } # close train_and_backfill_subbasin_s()
+
 

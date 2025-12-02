@@ -20,7 +20,7 @@ cc <- FALSE
 
 #3. set number of tasks for local vs cluster ---------------------
 if(cc){ n_tasks <- 32}
-if(!cc | test){ n_tasks <- 1}
+if(!cc | test){ n_tasks <- 2}
 
 
 #4. create and register clusters ---------------------------------
