@@ -91,7 +91,7 @@ train_and_backfill_subbasin_s <- function(
   # train a model for each vegetation feature
   # backfill each feature where human footprint is high
   # for (b in biotic_cols) {
-  for (b in c("SCANFI_1km")) {
+  for (b in biotic_cols) {
     
     t0 <- proc.time()[3]
     logp("[%s] in process: (%s)", b, if (b %in% categorical_responses) "categorical" else "continuous")
