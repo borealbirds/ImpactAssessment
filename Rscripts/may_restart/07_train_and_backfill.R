@@ -14,12 +14,12 @@ library(tidyverse)
 
 
 #2. define local or cluster --------------------------------------
-test <- TRUE
-cc <- FALSE
+test <- FALSE
+cc <- TRUE
 
 
 #3. set number of tasks for local vs cluster ---------------------
-if(cc){ n_tasks <- 32}
+if(cc){ n_tasks <- 1}
 if(!cc | test){ n_tasks <- 1}
 
 
@@ -38,9 +38,10 @@ cl
 print("* setting root file path *")
 
 if(!cc){root <- "G:/Shared drives/BAM_NationalModels5"}
-if(cc){root <- "/home/mannfred/scratch"}
+if(cc){root <- "/home/mannfred/scratch/impact_assessment"}
 
-ia_dir <- file.path(root, "data", "Extras", "sandbox_data", "impactassessment_sandbox")
+if(!cc){ia_dir <- file.path(root, "data", "Extras", "sandbox_data", "impactassessment_sandbox")}
+if(cc){ia_dir} <- file.path(root)
 
 tmpcl <- clusterExport(cl, c("root"))
 
@@ -114,7 +115,8 @@ make_logger <- function(logfile) { # create a new log file
 } # close file generating function
 
 # training and backfilling function (subbasin level)
-source(file.path(getwd(), "Rscripts", "may_restart", "08_train_and_backfill_subbasin_s.R"))
+if(!cc){source(file.path(getwd(), "Rscripts", "may_restart", "08_train_and_backfill_subbasin_s.R"))}
+if(cc){source(file.path(root, "Rscripts", "08_train_and_backfill_subbasin_s.R"))}
 
 
 

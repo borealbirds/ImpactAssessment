@@ -14,10 +14,19 @@ train_and_backfill_subbasin_s <- function(
 ) {
   
   # source BART metrics summary functions
+  if(!cc){
   source(file.path(getwd(), "Rscripts", "may_restart", "09_collect_metrics_gbart.R"))
   source(file.path(getwd(), "Rscripts", "may_restart", "09_collect_metrics_mbart.R"))
   source(file.path(getwd(), "Rscripts", "may_restart", "09_collect_holdout_metrics_gbart.R"))
   source(file.path(getwd(), "Rscripts", "may_restart", "09_collect_holdout_metrics_mbart.R"))
+  }
+  
+  if(cc){
+    source(file.path(root, "Rscripts",  "09_collect_metrics_gbart.R"))
+    source(file.path(root, "Rscripts",  "09_collect_metrics_mbart.R"))
+    source(file.path(root, "Rscripts",  "09_collect_holdout_metrics_gbart.R"))
+    source(file.path(root, "Rscripts",  "09_collect_holdout_metrics_mbart.R"))
+  }
   
   # for logging progress
   logfile <- file.path(ia_dir, "logs", sprintf("Y%d_S%d.log", year, subbasin_index))
