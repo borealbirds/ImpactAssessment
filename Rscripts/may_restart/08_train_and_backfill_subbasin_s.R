@@ -10,7 +10,8 @@ train_and_backfill_subbasin_s <- function(
     categorical_responses, # character vector of layer names
     ia_dir,
     neworder, 
-    quiet = FALSE
+    quiet = FALSE,
+    cc
 ) {
   
   # source BART metrics summary functions
@@ -100,7 +101,7 @@ train_and_backfill_subbasin_s <- function(
   # train a model for each vegetation feature
   # backfill each feature where human footprint is high
   # for (b in biotic_cols) {
-  for (b in biotic_cols) {
+  for (b in categorical_responses) {
     
     t0 <- proc.time()[3]
     logp("[%s] in process: (%s)", b, if (b %in% categorical_responses) "categorical" else "continuous")
@@ -176,7 +177,7 @@ train_and_backfill_subbasin_s <- function(
       
       # train and predict with BART
       fit <- BART::gbart(x.train = as.matrix(df_train_bart), 
-                         y.train = y[-holdout_idx], 
+                         y.train = log1p(y[-holdout_idx]), # log transform to avoid negative predictions
                          x.test = as.matrix(df_backfill_bart), # has the same columns as df_train_bart
                          type = "wbart",
                          k = 3, #shrinkage
@@ -184,31 +185,45 @@ train_and_backfill_subbasin_s <- function(
                          ndpost = 700L, 
                          nskip = 300L, 
                          sparse = TRUE, # sampler focuses on informative predictors (not all predictors treated as informative)
-                         sigest  = sd(y), # the rough error standard deviation used in the prior
+                         sigest  = sd(log1p(y[-holdout_idx])), # the rough error standard deviation used in the prior
                          sigdf = 3) 
       
       logp("gbart fit to [%s]", b)
       
+      # --------------------------------------
+      # post-modelling PART 1
       # estimate posterior mean and sd
       # yhat.test are the predicted values of b at high HF locations (rows = posterior draws, columns = pixels)
-      b_mean <- as.numeric(fit$yhat.test.mean) # mean prediction for b at high HF locations
-      b_sd   <- apply(fit$yhat.test, 2, sd) # uncertainty in model-predicted values of b per pixel
+      mu_test <- fit$yhat.test.mean # posterior mean (log1p scale)
+      sigma2_test <- apply(fit$yhat.test, 2, var)  # posterior variance (log1p scale)
+      
+      b_mean <- expm1(mu_test) # E[Y] approximation for b at high HF locations
+      b_sd   <- sqrt(expm1(sigma2_test) * exp(2*mu_test + sigma2_test))  # log-normal SD
       
       # replace backfilled b in backfilling dataset for using in next iteration (following `neworder`), and for outputs
-      df_backfill[[b]] <- b_mean
+      df_backfill[[b]] <- b_mean 
       out_layers[[paste0(b, "_mean")]] <- b_mean # add values of b to a list
       out_layers[[paste0(b, "_sd")]]   <- b_sd
       
+      # --------------------------------------
+      # post-modelling PART 2
       # posterior predictive check: get posterior predictions for training data
       # yhat.train are the predicted values of b at low HF locations (values are from the fitted model, not the training dataset)
-      ppc_mean <- mean(colMeans(fit$yhat.train))
-      ppc_sd <- mean(apply(fit$yhat.train, 2, sd))
+      mu_train <- fit$yhat.train.mean
+      sigma2_train <- apply(fit$yhat.train, 2, var)
+      
+      ppc_mean <- expm1(mu_train)
+      ppc_sd   <- sqrt(mean(expm1(sigma2_train) * exp(2*mu_train + sigma2_train)))
       
       # p is the probability the test statistic in a replicated data set exceeds that in the original data
       # calculate Bayesian p-value (proportion of times observed statistic > predicted)
-      p_value_mean <- mean(apply(fit$yhat.train, 1, function(x) mean(x) > mean(y)))
-      p_value_sd   <- mean(apply(fit$yhat.train, 1, function(x) sd(x) > sd(y)))
+      # Bayesian p-values for mean and SD
+      p_value_mean <- mean(apply(expm1(fit$yhat.train), 1, function(draw) mean(draw) > mean(y[-holdout_idx])))
+      p_value_sd   <- mean(apply(expm1(fit$yhat.train), 1, function(draw) sd(draw) > sd(y[-holdout_idx])))
       
+      
+      # --------------------------------------
+      # post-modelling PART 3
       # extract variable with highest importance 
       top_var <- NA_character_
       if ("varprob" %in% names(fit)) {
@@ -220,7 +235,8 @@ train_and_backfill_subbasin_s <- function(
       
       # collect metrics (one row per year x subbasin x covariate)
       metrics[[length(metrics) + 1L]] <- collect_metrics_gbart(
-        fit, y[-holdout_idx],
+        fit = fit, 
+        y = y[-holdout_idx],
         covariate = b,
         subbasin  = subbasin_index,
         year      = year,
@@ -228,8 +244,8 @@ train_and_backfill_subbasin_s <- function(
       
       
       # out-of-sample prediction
-      pred_holdout <- predict(fit, newdata = as.matrix(df_holdout))
-      yhat_holdout_mean <- colMeans(pred_holdout) # get mean estimate per pixel from the posterior
+      pred_holdout <- predict(fit, newdata = as.matrix(df_holdout)) # log1p scale
+      yhat_holdout_mean <- expm1(colMeans(pred_holdout)) # get mean estimate per pixel from the posterior
       
       metrics[[length(metrics) + 1L]] <- collect_holdout_metrics_gbart(
         y_obs    = y[holdout_idx],
@@ -271,13 +287,23 @@ train_and_backfill_subbasin_s <- function(
       if (K < 2) {
         
         # trivial: only one class in training data
-        b_mode    <- rep(present[1], nrow(df_backfill_bart)) # the one and only landcover class present
+        b_mode    <- rep(present, nrow(df_backfill_bart)) # the one and only landcover class present
         b_maxprob <- rep(1, nrow(df_backfill_bart)) 
         b_entropy <- rep(0, nrow(df_backfill_bart))
+        
+        single_code_num <- as.numeric(present)
+        df_backfill[[b]] <- rep(present, nrow(df_backfill_bart))
+        out_layers[[b]] <- rep(present, nrow(df_backfill_bart))
+        out_layers[[paste0(b, "_maxprob")]] <- b_maxprob
+        out_layers[[paste0(b, "_entropy")]] <- b_entropy
+        
+        logp("[%s] invariant: %s", b, present)
+        
+        next
 
       } else {
         
-        # training labels mapped to 1..K'
+        # for K > 2, training labels mapped to 1..K'
         y_int <- unname(fwd_map[y_codes])  
         
         # reproducible per (year, subbasin, covariate)
@@ -342,70 +368,70 @@ train_and_backfill_subbasin_s <- function(
         varprob_mean <- colMeans(do.call(rbind, fit$varprob))
         top_var <- names(sort(varprob_mean, decreasing = TRUE))[1]
         
+        # store for rasterization
+        df_backfill[[b]]                         <- b_mode
+        out_layers[[b]]                          <- b_mode
+        out_layers[[paste0(b, "_maxprob")]]      <- b_maxprob
+        out_layers[[paste0(b, "_entropy")]]      <- b_entropy
+        
+        # collect metrics for categorical covariate b
+        if (K >= 2){
+          metrics[[length(metrics) + 1L]] <- collect_metrics_mbart(
+            fit,
+            y         = y_int[-holdout_idx],
+            X_train   = df_train_bart,
+            covariate = b,
+            subbasin  = subbasin_index,
+            year      = year,
+            top_var   = top_var)
+        } 
+        
+        # compute metrics from the holdout data
+        # first, predict on holdout data (will be re-used for confusion matrix)
+        pred <- predict(fit, newdata = as.matrix(df_holdout))
+        metrics[[length(metrics) + 1L]] <- collect_holdout_metrics_mbart(
+          fit       = fit,
+          pred      = pred,
+          y_holdout = y_int[holdout_idx],
+          covariate = b,
+          subbasin  = subbasin_index,
+          year      = year,
+          top_var   = top_var
+        )
+        
+        # use predictions for confusion matrix
+        K_model    <- pred$K
+        cats_model <- fit$cats
+        np_holdout <- length(pred$prob.test.mean) / K_model
+        
+        prob_holdout_model <- matrix(
+          pred$prob.test.mean,
+          ncol = K_model,
+          byrow = TRUE
+        )
+        
+        cols <- match(present, cats_model)
+        prob_ecol <- matrix(0, nrow = np_holdout, ncol = length(present))
+        for (i in seq_along(present)) {
+          ci <- cols[i]
+          if (!is.na(ci)) {
+            prob_ecol[, i] <- prob_holdout_model[, ci]
+          }
+        }
+        
+        yhat_holdout_class <- present[max.col(prob_ecol, ties.method = "first")]
+        actual_holdout_class <- present[y_int[holdout_idx]]
+        
+        confusion[[length(confusion) + 1L]] <- data.frame(
+          covariate = b,
+          subbasin  = subbasin_index,
+          actual    = actual_holdout_class,
+          predicted = yhat_holdout_class,
+          stringsAsFactors = FALSE
+        )
+        
         
       } # close if single or multi-class
-      
-      # store for rasterization
-      df_backfill[[b]]                         <- b_mode
-      out_layers[[b]]                          <- b_mode
-      out_layers[[paste0(b, "_maxprob")]]      <- b_maxprob
-      out_layers[[paste0(b, "_entropy")]]      <- b_entropy
-      
-      # collect metrics for categorical covariate b
-      if (K >= 2){
-      metrics[[length(metrics) + 1L]] <- collect_metrics_mbart(
-        fit,
-        y         = y_int[-holdout_idx],
-        X_train   = df_train_bart,
-        covariate = b,
-        subbasin  = subbasin_index,
-        year      = year,
-        top_var   = top_var)
-      } 
-      
-      # compute metrics from the holdout data
-      # first, predict on holdout data (will be re-used for confusion matrix)
-      pred <- predict(fit, newdata = as.matrix(df_holdout))
-      metrics[[length(metrics) + 1L]] <- collect_holdout_metrics_mbart(
-        fit       = fit,
-        pred      = pred,
-        y_holdout = y_int[holdout_idx],
-        covariate = b,
-        subbasin  = subbasin_index,
-        year      = year,
-        top_var   = top_var
-      )
-      
-      # use predictions for confusion matrix
-      K_model    <- pred$K
-      cats_model <- fit$cats
-      np_holdout <- length(pred$prob.test.mean) / K_model
-      
-      prob_holdout_model <- matrix(
-        pred$prob.test.mean,
-        ncol = K_model,
-        byrow = TRUE
-      )
-      
-      cols <- match(present, cats_model)
-      prob_ecol <- matrix(0, nrow = np_holdout, ncol = length(present))
-      for (i in seq_along(present)) {
-        ci <- cols[i]
-        if (!is.na(ci)) {
-          prob_ecol[, i] <- prob_holdout_model[, ci]
-        }
-      }
-      
-      yhat_holdout_class <- present[max.col(prob_ecol, ties.method = "first")]
-      actual_holdout_class <- present[y_int[holdout_idx]]
-      
-      confusion[[length(confusion) + 1L]] <- data.frame(
-        covariate = b,
-        subbasin  = subbasin_index,
-        actual    = actual_holdout_class,
-        predicted = yhat_holdout_class,
-        stringsAsFactors = FALSE
-      )
       
     } # close if continuous or categorical
     

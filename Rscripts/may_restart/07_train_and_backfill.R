@@ -14,8 +14,8 @@ library(tidyverse)
 
 
 #2. define local or cluster --------------------------------------
-test <- FALSE
-cc <- TRUE
+test <- TRUE
+cc <- FALSE
 
 
 #3. set number of tasks for local vs cluster ---------------------
@@ -41,10 +41,10 @@ if(!cc){root <- "G:/Shared drives/BAM_NationalModels5"}
 if(cc){root <- "/home/mannfred/scratch/impact_assessment"}
 
 if(!cc){ia_dir <- file.path(root, "data", "Extras", "sandbox_data", "impactassessment_sandbox")}
-if(cc){ia_dir} <- file.path(root)
+if(cc){ia_dir <- file.path(root)}
 
-tmpcl <- clusterExport(cl, c("root"))
-
+tmpcl <- clusterExport(cl, c("root", "ia_dir"))
+print(ia_dir)
 
 #6. attach packages on clusters ----------------------------------
 # `clusterEvalQ` evaluates a literal expression on each cluster node. 
@@ -97,6 +97,9 @@ biotic_vars <-
 neworder <- readRDS(file = file.path(ia_dir, "biotic_variable_hierarchy.rds"))
 biotic_vars <- biotic_vars[match(neworder, biotic_vars$predictor), ]
 
+if(exists("biotic_vars")){
+  print("* biotic_vars successfully constructed *")
+}else{print("* biotic_vars not constructed *")}
 
 
 #8. import helper functions ----------------------------------------
@@ -123,7 +126,7 @@ if(cc){source(file.path(root, "Rscripts", "08_train_and_backfill_subbasin_s.R"))
 #9. export the necessary variables and functions to the cluster -------------------
 print("* exporting objects and functions to cluster *")
 clusterExport(cl, c("neworder", "abiotic_vars", "biotic_vars", 
-                    "train_and_backfill_subbasin_s", "ia_dir", "make_logger"))
+                    "train_and_backfill_subbasin_s", "ia_dir", "make_logger", "cc"))
 
 
 #10. train models and backfill biotic features for year y -----------------------------
@@ -170,7 +173,8 @@ backfill_results <-
                   quiet          = FALSE,
                   neworder       = neworder,
                   categorical_responses = categorical_responses,
-                  all_subbasins_subset  = all_subbasins_subset
+                  all_subbasins_subset  = all_subbasins_subset,
+                  cc = cc
                 ), # close train_and_backfill_subbasin_s
                 
                 error = function(e) {
