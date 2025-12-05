@@ -383,7 +383,8 @@ train_and_backfill_subbasin_s <- function(
             covariate = b,
             subbasin  = subbasin_index,
             year      = year,
-            top_var   = top_var)
+            top_var   = top_var,
+            present   = present)
         } 
         
         # compute metrics from the holdout data
@@ -396,7 +397,8 @@ train_and_backfill_subbasin_s <- function(
           covariate = b,
           subbasin  = subbasin_index,
           year      = year,
-          top_var   = top_var
+          top_var   = top_var,
+          present   = present
         )
         
         # use predictions for confusion matrix

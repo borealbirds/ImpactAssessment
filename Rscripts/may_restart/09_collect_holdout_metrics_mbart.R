@@ -1,5 +1,5 @@
 collect_holdout_metrics_mbart <- function(fit, pred, y_holdout,
-                                          covariate, subbasin, year, top_var) {
+                                          covariate, subbasin, year, top_var, present) {
   
   K_model    <- pred$K
   cats_model <- fit$cats
