@@ -33,7 +33,6 @@ cov_s <-
   terra::crop(x = _, y = subbasin_s) |>
   terra::mask(x = _, mask = subbasin_s)
 
-
 # ---------------------------------------------------
 # visualize randomly selected subbasins
 
@@ -56,9 +55,12 @@ ggplot() +
 # ---------------------------------------------------
 # prepare dataframes from randomly selected subbasins
 
+# create a raster of subbasin IDs to add to each row of cov_df (below)
+subbasin_id_rast <- terra::rasterize(subbasin_s, cov_s, field = "first_HYBAS_ID")
+cov_s <- c(cov_s, subbasin_id_rast)
+
 # convert stacks from random subbasins to dataframe
 cov_df <- terra::as.data.frame(cov_s)
-saveRDS(cov_df, file=file.path(getwd(), "data/derived_data/rds_files/covariate_dataframe_random_subbasins_2020.rds"))
 
 
 # import low hf layer and project to current stack
@@ -109,7 +111,7 @@ abiotic_vars <-
 
 
 # ---------------------------------------------------
-# test for differences in environmental features between datasets
+# prepare data for testing environmental features between low and high HF pixels
 
 # combine low and high HF data (start with 88 covariates) 
 df <- rbind(cov_highhf_df, cov_lowhf_df)
@@ -121,79 +123,84 @@ inv_covs <- sapply(df, function(x) length(unique(x)) == 1)
 df2 <- df[, !inv_covs] # 3 covariates removed
 
 # remove variables that aren't in `abiotic_vars`
-df3 <- dplyr::select(df2, any_of(abiotic_vars$predictor)) 
+df3 <- dplyr::select(df2, any_of(c(abiotic_vars$predictor, "first_HYBAS_ID")))
 
 # remove disturbances because they will differ by definition
 disturbances <- c("CCNL_1km", "CanHF_1km", "CanHF_5x5", "canroad_1km", "canroad_5x5" )
 df4 <- dplyr::select(df3, -all_of(disturbances)) 
 
 # add `group` column to identify low vs high HF rows
-# ensure all remaining covariates are numerics
 #df5 <- data.frame(group = group, df4)
+#df5 <- df5[!is.na(df5$first_HYBAS_ID),]
 #saveRDS(df5, file.path(getwd(), "data/derived_data/rds_files/combined_covariate_df_random_subbasins_2020.rds"))
 df5 <- readRDS(file.path(getwd(), "data/derived_data/rds_files/combined_covariate_df_random_subbasins_2020.rds"))
 
 # no complete cases, so we can't use PCA on raw values (will use RF embeddings)
 sum(complete.cases(df5))
 
-# are low and high HF pixels environmentally distinct?
-m1 <- ranger::ranger(x = df5[, setdiff(names(df5), "group")], 
-                    y = df5$group, 
+
+# ---------------------------------------------------
+# fit models to each subbasin
+
+results <- list()
+
+for(s in unique(df5$first_HYBAS_ID)) {
+  
+  # subset to this basin
+  df_s <- dplyr::filter(df5, first_HYBAS_ID == s)
+  
+  # are low and high HF pixels environmentally distinct?
+  m1 <- ranger::ranger(x = df_s[, setdiff(names(df_s), "group")], 
+                    y = df_s$group, 
                     probability = TRUE,
                     importance = "impurity_corrected",
-                    num.trees = 300)
-saveRDS(m1, file.path(getwd(), "data/derived_data/rds_files/ranger_model1_random_subbasins_2020.rds"))
+                    num.trees = 100)
+  
+  # get environmental features driving variance
+  top_vars <- head(sort(m1$variable.importance, decreasing = TRUE), 3)
 
-# get environmental features driving variance
-top_vars <- head(sort(m1$variable.importance, decreasing = TRUE), 3)
-
-head(sort(m1$variable.importance, decreasing = TRUE))
-# ERATavesm_1km  ERATavewt_1km     ERAMAT_1km ERATavesmt_1km 
-# 4074.229       3363.591       3291.618       2934.801 
-# ERAPPTwt_1km       DD18_1km 
-# 2498.760       1808.353 
-
-# now re-run without importance (`predict()` suggests this for some reason)
-m2 <-  ranger::ranger(x = df5[, setdiff(names(df5), "group")], 
-                      y = df5$group, 
+  # now re-run without importance (`predict()` suggests this for some reason)
+  m2 <-  ranger::ranger(x = df_s[, setdiff(names(df_s), "group")], 
+                      y = df_s$group, 
                       probability = TRUE,
                       importance = "none",
-                      num.trees = 300)
+                      num.trees = 100)
 
-saveRDS(m2, file.path(getwd(), "data/derived_data/rds_files/ranger_model2_random_subbasins_2020.rds"))
+  # get terminal node embeddings
+  
+  terminal_nodes <- predict(m2, data = df_s, type = "terminalNodes")$predictions
+  #set.seed(32)
+  #sample_idx <- sample(nrow(df_s), 1000)
+  #terminal_nodes_sample <- terminal_nodes[sample_idx,]
 
+  # store results
+  results[[as.character(s)]] <- list(
+    subbasin = s,
+    model1 = m1,
+    model2 = m2,
+    top_vars = top_vars,
+    terminal_nodes = terminal_nodes
+  )
+  
+}
 
+saveRDS(results, file.path(getwd(), "data/derived_data/rds_files/rf_models.rds"))
 
-# get terminal node something..embeddings?
-set.seed(32)
-sample_idx <- sample(nrow(df5), 2000)
-terminal_nodes <- predict(m2, data = df5, type = "terminalNodes")$predictions
-terminal_nodes_sample <- terminal_nodes[sample_idx,]
-
-# --------------
+# ---------------------------------------------------
 
 library(Matrix)
-leaf_mat <- Matrix::sparse.model.matrix(~.-1, data = as.data.frame(terminal_nodes_sample))
+leaf_mat <- Matrix::sparse.model.matrix(~.-1, data = as.data.frame(terminal_nodes))
 
 # PCA on this embedding
 pca <- prcomp(leaf_mat, rank. = 2)
 
 # create a dataframe for ggplot
-pca_df <- data.frame(
-  pc1 = pca$x[,1],
-  pc2 = pca$x[,2],
-  group = df5$group[sample_idx]
-)
+pca_df <- data.frame(pc1 = pca$x[,1], pc2 = pca$x[,2], group = df_s$group)
 
-ggplot(pca_df, aes(x = pc1, y = pc2, color = group)) +
-  geom_point(size = 2, alpha=0.5) +
-  scale_color_manual(values = c("#D55E00", "#56B4E9")) +
-  theme_classic() +
-  labs(color = "group")
 
 # correlations of each variable with PC1 and PC2
-cors1 <- apply(df5[sample_idx, setdiff(names(df5), "group")], 2, function(v) cor(v, pca_df$pc1, use="complete.obs"))
-cors2 <- apply(df5[sample_idx, setdiff(names(df5), "group")], 2, function(v) cor(v, pca_df$pc2, use="complete.obs"))
+cors1 <- apply(df_s[, setdiff(names(df_s), "group")], 2, function(v) cor(v, pca_df$pc1, use="everything"))
+cors2 <- apply(df_s[, setdiff(names(df_s), "group")], 2, function(v) cor(v, pca_df$pc2, use="complete.obs"))
 
 
 arrow_df <- data.frame(var = names(cors1), pc1 = cors1, pc2 = cors2)
