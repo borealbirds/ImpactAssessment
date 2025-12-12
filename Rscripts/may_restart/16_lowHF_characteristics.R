@@ -5,6 +5,8 @@
 # ---
 
 library(BAMexploreR)
+library(Matrix)
+library(patchwork)
 library(ranger)
 library(terra)
 library(tidyterra)
@@ -22,9 +24,9 @@ stack_y <- terra::rast(file.path(ia_dir, sprintf("covariates_mosaiced_%d.tif", y
 all_subbasins_subset <- terra::vect(file.path(ia_dir, "hydrobasins_masked_merged_subset.gpkg"))
 all_subbasins_subset <- terra::project(x=all_subbasins_subset, y=stack_y)
 
-# subset to a random sample of subbasins
-set.seed(123)
-subbasin_index <- sample(1:length(all_subbasins_subset), size = 20)
+# subset to a haphazard sample of subbasins
+# see " .png" for subbasin IDs
+subbasin_index <- c(101, 670, 609, 113, 94, 587, 426, 10, 328, 264, 188, 274, 589, 154)
 subbasin_s <- all_subbasins_subset[subbasin_index]
 
 # crop covariate stack to subbasin
@@ -55,15 +57,12 @@ ggplot() +
 # ---------------------------------------------------
 # prepare dataframes from randomly selected subbasins
 
-# create a raster of subbasin IDs to add to each row of cov_df (below)
+# create a raster of subbasin IDs to add to each row of dataframes (below)
 subbasin_id_rast <- terra::rasterize(subbasin_s, cov_s, field = "first_HYBAS_ID")
 cov_s <- c(cov_s, subbasin_id_rast)
 
-# convert stacks from random subbasins to dataframe
-cov_df <- terra::as.data.frame(cov_s)
 
-
-# import low hf layer and project to current stack
+# import low hf layer and project/mask to current stack
 lowhf_mask <- terra::rast(file.path(ia_dir, "hirshpearson", "CanHF_1km_lessthan1.tif"))
 lowhf_mask <- terra::project(x=lowhf_mask, y=cov_s, method = "near")
 cov_lowhf  <- terra::mask(cov_s, lowhf_mask) 
@@ -72,7 +71,7 @@ saveRDS(cov_lowhf_df, file=file.path(getwd(), "data/derived_data/rds_files/lowhf
 cov_lowhf_df <- readRDS(file=file.path(getwd(), "data/derived_data/rds_files/lowhf_covariate_df_random_subbasins_2020.rds"))
 
 
-# import high hf layer and project to current stack
+# import high hf layer and project/mask to current stack
 highhf_mask <- terra::rast(file.path(ia_dir, "hirshpearson", "CanHF_1km_morethan1.tif"))
 highhf_mask <- terra::project(x=highhf_mask, y=cov_s, method = "near")
 cov_highhf  <- terra::mask(cov_s, highhf_mask) 
@@ -149,6 +148,10 @@ for(s in unique(df5$first_HYBAS_ID)) {
   # subset to this basin
   df_s <- dplyr::filter(df5, first_HYBAS_ID == s)
   
+  # get sample size
+  n_high <- sum(df_s$group == "high")
+  n_low  <- sum(df_s$group == "low")
+  
   # are low and high HF pixels environmentally distinct?
   m1 <- ranger::ranger(x = df_s[, setdiff(names(df_s), "group")], 
                     y = df_s$group, 
@@ -167,65 +170,110 @@ for(s in unique(df5$first_HYBAS_ID)) {
                       num.trees = 100)
 
   # get terminal node embeddings
-  
   terminal_nodes <- predict(m2, data = df_s, type = "terminalNodes")$predictions
-  #set.seed(32)
-  #sample_idx <- sample(nrow(df_s), 1000)
-  #terminal_nodes_sample <- terminal_nodes[sample_idx,]
+
+  # PCA on embeddings
+  leaf_mat <- Matrix::sparse.model.matrix(~.-1, data = as.data.frame(terminal_nodes))
+  pca <- prcomp(leaf_mat, rank. = 2)
+  
+  # create a dataframe for ggplot
+  pca_df <- data.frame(pc1 = pca$x[,1], pc2 = pca$x[,2], group = df_s$group)
+  
+  # correlations of each top variables with PC1 and PC2
+  df_s_top <- df_s[, names(top_vars), drop = FALSE]
+  cors1 <- sapply(df_s_top, function(v) cor(v, pca_df$pc1, use="pairwise.complete.obs"))
+  cors2 <- sapply(df_s_top, function(v) cor(v, pca_df$pc2, use="pairwise.complete.obs"))
+  
+  arrow_df2 <- data.frame(var = names(top_vars), pc1 = cors1, pc2 = cors2)
+  
+  # scale arrows to look reasonable on the PCA plot
+  arrow_df2$pc1s <- arrow_df2$pc1 * max(pca_df$pc1)   # scaling factor
+  arrow_df2$pc2s <- arrow_df2$pc2 * max(pca_df$pc2)
 
   # store results
   results[[as.character(s)]] <- list(
     subbasin = s,
+    n_high = n_high,
+    n_low  = n_low,
     model1 = m1,
     model2 = m2,
     top_vars = top_vars,
-    terminal_nodes = terminal_nodes
+    pca_df = pca_df,
+    arrow_df2 = arrow_df2
   )
   
 }
 
+
 saveRDS(results, file.path(getwd(), "data/derived_data/rds_files/rf_models.rds"))
+#results <-readRDS(file.path(getwd(), "data/derived_data/rds_files/rf_models.rds"))
+
+
+# summarise results
+summary_df <- map_df(results, function(res) {
+  
+  # extract variables
+  m1  <- res$model1
+  tvars <- res$top_vars
+  
+  # convert top_vars named vector into tidy form
+  top_tbl <- tibble(
+    top1     = names(tvars)[1],
+    top1_def = predictor_metadata$definition[match(names(tvars)[1], predictor_metadata$predictor)],
+    top1_imp = tvars[1],
+    top2     = names(tvars)[2],
+    top2_def = predictor_metadata$definition[match(names(tvars)[2], predictor_metadata$predictor)],
+    top2_imp = tvars[2],
+    top3     = names(tvars)[3],
+    top3_def = predictor_metadata$definition[match(names(tvars)[3], predictor_metadata$predictor)],
+    top3_imp = tvars[3]
+  )
+  
+  # get the original data for this subbasin
+  df_s <- df5[df5$first_HYBAS_ID == s, ]
+  
+  tibble(
+    subbasin = res$subbasin,
+    n_high   = res$n_high,  
+    n_low    = res$n_low,
+    oob_error = m1$prediction.error
+  ) %>% 
+    bind_cols(top_tbl)
+})
+
+
+saveRDS(summary_df, file.path(getwd(), "data/derived_data/rds_files/rf_summary.rds"))
+write.csv(summary_df, file.path(getwd(), "data/derived_data/rf_summary.csv"))
 
 # ---------------------------------------------------
-
-library(Matrix)
-leaf_mat <- Matrix::sparse.model.matrix(~.-1, data = as.data.frame(terminal_nodes))
-
-# PCA on this embedding
-pca <- prcomp(leaf_mat, rank. = 2)
-
-# create a dataframe for ggplot
-pca_df <- data.frame(pc1 = pca$x[,1], pc2 = pca$x[,2], group = df_s$group)
-
-
-# correlations of each variable with PC1 and PC2
-cors1 <- apply(df_s[, setdiff(names(df_s), "group")], 2, function(v) cor(v, pca_df$pc1, use="everything"))
-cors2 <- apply(df_s[, setdiff(names(df_s), "group")], 2, function(v) cor(v, pca_df$pc2, use="complete.obs"))
-
-
-arrow_df <- data.frame(var = names(cors1), pc1 = cors1, pc2 = cors2)
-arrow_df2 <- arrow_df[arrow_df$var %in% top_vars, ]
-
-# scale arrows to look reasonable on the PCA plot
-arrow_df2$pc1s <- arrow_df2$pc1 * 200000   # scaling factor
-arrow_df2$pc2s <- arrow_df2$pc2 * 200000
-
-ggplot(pca_df, aes(x = pc1, y = pc2, color = group)) +
+# visualize embedding space per subbasin
+plot_per_subbasin <- function(pca_df, arrow_df2, subbasin_id){
   
-  geom_point(size = 2, alpha=0.5) +
-  scale_color_manual(values = c("#D55E00", "#56B4E9")) +
-  labs(color = "group") +
+  ggplot(pca_df, aes(x = pc1, y = pc2, color = group)) +
+    
+    geom_point(size = 2, alpha=0.5) +
+    scale_color_manual(values = c("#D55E00", "#56B4E9")) +
+    labs(color = "group") +
   
   geom_segment(data = arrow_df2,
                aes(x = 0, y = 0, xend = pc1s, yend = pc2s),
                arrow = arrow(length = unit(0.3, "cm")),
                inherit.aes = FALSE,
                color = "black", linewidth = 1) +
-  
-  geom_text(data = arrow_df2,
-            aes(x = pc1s, y = pc2s, label = var),
-            color = "black",
-            hjust = 0.5, vjust = -0.5) +
-  
-  theme_classic() 
+    
+    geom_text(data = arrow_df2,
+              aes(x = pc1s, y = pc2s, label = var),
+              color = "black") +
+    
+    ggtitle(subbasin_id) +
+    
+    theme_classic() +
+    theme(axis.ticks = element_blank(),
+          axis.text  = element_blank())
+}
+
+plots <- lapply(X = results, 
+                FUN = function(result_i) plot_per_subbasin(result_i$pca_df, result_i$arrow_df2, result_i$subbasin))
+
+patchwork::wrap_plots(plots, guides = "collect") 
 

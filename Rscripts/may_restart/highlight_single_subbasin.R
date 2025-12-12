@@ -13,7 +13,8 @@ ggplot() +
   # text labels at centroids
   geom_spatvector_text(
     data = sub_centroids,
-    aes(label = seq_along(all_subbasins_subset)),   
+    aes(label = seq_along(all_subbasins_subset)), 
+    size = 1.5
   ) +
   
   coord_sf(crs = crs(all_subbasins_subset)) +
