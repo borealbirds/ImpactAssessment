@@ -42,12 +42,23 @@ cov_s <-
 bam_boundary <- terra::vect(file.path(root, "Regions", "BAM_BCR_NationalModel_UnBuffered.shp"))
 bam_boundary <- bam_boundary[bam_boundary$subUnit != 23, ]
 
+# get centroids for plotting labels
+sub_centroids <- terra::centroids(all_subbasins_subset[subbasin_index])
+
 # plot (exported at 1000 x 751)
 ggplot() +
   
   # BCR and basin outlines
   geom_spatvector(data = bam_boundary, fill = NA, colour = "grey") +
-  geom_spatvector(data = subbasin_s, fill = NA, color = "#D55E00", linewidth = 0.3) +
+  geom_spatvector(data = subbasin_s, fill = NA, color = "#D55E00", linewidth = 0.5) +
+  
+  # text labels at centroids
+  geom_spatvector_text(
+    data = sub_centroids,
+    aes(label = all_subbasins_subset$first_HYBAS_ID[subbasin_index]), 
+    nudge_x = 20000,  
+    nudge_y = 100000,
+    size = 3) +
   
   coord_sf(crs = crs(subbasin_s)) +
   theme_minimal()
