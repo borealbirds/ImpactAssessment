@@ -101,7 +101,7 @@ train_and_backfill_subbasin_s <- function(
   # train a model for each vegetation feature
   # backfill each feature where human footprint is high
   # for (b in biotic_cols) {
-  for (b in categorical_responses) {
+  for (b in biotic_cols) {
     
     t0 <- proc.time()[3]
     logp("[%s] in process: (%s)", b, if (b %in% categorical_responses) "categorical" else "continuous")
@@ -244,6 +244,8 @@ train_and_backfill_subbasin_s <- function(
       
       
       # out-of-sample prediction
+      # first, filter for covariates that actually contributed to `fit`
+      df_holdout <- df_holdout[, colnames(fit$varprob), drop = FALSE]
       pred_holdout <- predict(fit, newdata = as.matrix(df_holdout)) # log1p scale
       yhat_holdout_mean <- expm1(colMeans(pred_holdout)) # get mean estimate per pixel from the posterior
       
@@ -389,6 +391,7 @@ train_and_backfill_subbasin_s <- function(
         
         # compute metrics from the holdout data
         # first, predict on holdout data (will be re-used for confusion matrix)
+        df_holdout <- df_holdout[, colnames(fit$varprob), drop = FALSE] # drop covariates not used by BART
         pred <- predict(fit, newdata = as.matrix(df_holdout))
         metrics[[length(metrics) + 1L]] <- collect_holdout_metrics_mbart(
           fit       = fit,

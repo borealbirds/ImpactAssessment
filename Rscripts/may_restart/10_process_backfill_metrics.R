@@ -32,6 +32,7 @@ VLCE_1km_cm <- table(factor(VLCE_1km_all$actual,    levels = all_levels),
                     factor(VLCE_1km_all$predicted, levels = all_levels))
 VLCE_1km_cm
 
+
 # -------------------------------------------------------
 # inspect and synthesize model metrics
 

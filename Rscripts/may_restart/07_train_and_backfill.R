@@ -8,7 +8,7 @@
 print("* attaching packages on master *")
 library(BART)
 library(BAMexploreR)
-library(parallel)
+#library(parallel)
 library(terra)
 library(tidyverse)
 
@@ -17,20 +17,26 @@ library(tidyverse)
 test <- TRUE
 cc <- FALSE
 
+# extract arguments from SLURM script
+args <- commandArgs(trailingOnly = TRUE)
+if (length(args) == 0) {
+  stop("no subbasin index supplied")
+}
+subbasin_index <- as.integer(args[1])
 
 #3. set number of tasks for local vs cluster ---------------------
-if(cc){ n_tasks <- 1}
-if(!cc | test){ n_tasks <- 1}
+#if(cc){ n_tasks <- 1}
+#if(!cc | test){ n_tasks <- 1}
 
 
 #4. create and register clusters ---------------------------------
 # creates 32 copies of R running in parallel via 32 tasks, on one of the cluster's sockets (processors). 
 # Belgua has ~965 nodes
-print("* creating clusters *")
-cl <- makePSOCKcluster(n_tasks, type="PSOCK")
+#print("* creating clusters *")
+#cl <- makePSOCKcluster(n_tasks, type="PSOCK")
 
 # print number of tasks and host name for confirmation
-cl
+#cl
 
 
 
@@ -43,16 +49,16 @@ if(cc){root <- "/home/mannfred/scratch/impact_assessment"}
 if(!cc){ia_dir <- file.path(root, "data", "Extras", "sandbox_data", "impactassessment_sandbox")}
 if(cc){ia_dir <- file.path(root)}
 
-tmpcl <- clusterExport(cl, c("root", "ia_dir"))
+#tmpcl <- clusterExport(cl, c("root", "ia_dir"))
 print(ia_dir)
 
 #6. attach packages on clusters ----------------------------------
 # `clusterEvalQ` evaluates a literal expression on each cluster node. 
-print("* Loading packages on workers *")
-tmpcl <- clusterEvalQ(cl, library(BART))
-tmpcl <- clusterEvalQ(cl, library(BAMexploreR))
-tmpcl <- clusterEvalQ(cl, library(terra))
-tmpcl <- clusterEvalQ(cl, library(tidyverse))
+#print("* Loading packages on workers *")
+#tmpcl <- clusterEvalQ(cl, library(BART))
+#tmpcl <- clusterEvalQ(cl, library(BAMexploreR))
+#tmpcl <- clusterEvalQ(cl, library(terra))
+#tmpcl <- clusterEvalQ(cl, library(tidyverse))
 
 
 
@@ -124,45 +130,44 @@ if(cc){source(file.path(root, "Rscripts", "08_train_and_backfill_subbasin_s.R"))
 
 
 #9. export the necessary variables and functions to the cluster -------------------
-print("* exporting objects and functions to cluster *")
-clusterExport(cl, c("neworder", "abiotic_vars", "biotic_vars", 
-                    "train_and_backfill_subbasin_s", "ia_dir", "make_logger", "cc"))
+#print("* exporting objects and functions to cluster *")
+#clusterExport(cl, c("neworder", "abiotic_vars", "biotic_vars", 
+         #           "train_and_backfill_subbasin_s", "ia_dir", "make_logger", "cc"))
 
 
 #10. train models and backfill biotic features for year y -----------------------------
 print("* running backfilling in parallel *")
 
 # run backfilling in parallel by subbasin
-subs <- c(57) # for testing
+#subs <- c(57) # for testing
 # parLapply runs the backfilling for every i in `subs`
-backfill_results <- 
-  parLapplyLB(cl, 
-              X = subs, 
-              fun = function(i, year = 2020) {
+print(paste("* running backfilling for subbasin", subbasin_index, "*")) 
+
+year <- 2020
                 
-                # load spatial objects inside of each worker to avoid "external pointer is not valid"
-                library(terra)
-                # import pre-mosaiced covariate stack for year_y
-                stack_y <- terra::rast(file.path(ia_dir, sprintf("covariates_mosaiced_%d.tif", year)))
+# load spatial objects inside of each worker to avoid "external pointer is not valid"
+# library(terra)
+# import pre-mosaiced covariate stack for year_y
+stack_y <- terra::rast(file.path(ia_dir, sprintf("covariates_mosaiced_%d.tif", year)))
+               
+# define categorical features
+categorical_responses = c("ABoVE_1km", "NLCD_1km","MODISLCC_1km", "MODISLCC_5x5","SCANFI_1km","VLCE_1km")
                 
-                # define categorical features
-                categorical_responses = c("ABoVE_1km", "NLCD_1km","MODISLCC_1km", "MODISLCC_5x5","SCANFI_1km","VLCE_1km")
+# import low hf layer and project to current stack
+lowhf_mask <- terra::rast(file.path(ia_dir, "hirshpearson", "CanHF_1km_lessthan1.tif"))
+lowhf_mask <- terra::project(x=lowhf_mask, y=stack_y, method = "near")
                 
-                # import low hf layer and project to current stack
-                lowhf_mask <- terra::rast(file.path(ia_dir, "hirshpearson", "CanHF_1km_lessthan1.tif"))
-                lowhf_mask <- terra::project(x=lowhf_mask, y=stack_y, method = "near")
+# import high hf layer and project to current stack
+highhf_mask <- terra::rast(file.path(ia_dir, "hirshpearson", "CanHF_1km_morethan1.tif"))
+highhf_mask <- terra::project(x=highhf_mask, y=stack_y, method = "near")
                 
-                # import high hf layer and project to current stack
-                highhf_mask <- terra::rast(file.path(ia_dir, "hirshpearson", "CanHF_1km_morethan1.tif"))
-                highhf_mask <- terra::project(x=highhf_mask, y=stack_y, method = "near")
+# import subbasin boundaries and project to current stack
+all_subbasins_subset <- terra::vect(file.path(ia_dir, "hydrobasins_masked_merged_subset.gpkg"))
+all_subbasins_subset <- terra::project(x=all_subbasins_subset, y=stack_y)
                 
-                # import subbasin boundaries and project to current stack
-                all_subbasins_subset <- terra::vect(file.path(ia_dir, "hydrobasins_masked_merged_subset.gpkg"))
-                all_subbasins_subset <- terra::project(x=all_subbasins_subset, y=stack_y)
-                
-                tryCatch(
+backfill_results <- tryCatch(
                   train_and_backfill_subbasin_s(
-                  subbasin_index = i, 
+                  subbasin_index = subbasin_index, 
                   year           = 2020,
                   stack_y        = stack_y,
                   lowhf_mask     = lowhf_mask,
@@ -178,24 +183,23 @@ backfill_results <-
                 ), # close train_and_backfill_subbasin_s
                 
                 error = function(e) {
-                  message("Error in subbasin ", i, ": ", conditionMessage(e))
+                  message("Error in subbasin ", subbasin_index, ": ", conditionMessage(e))
                   return(list(
-                    subbasin = i,
+                    subbasin = subbasin_index,
                     error = conditionMessage(e)
                   ))
                 } # close error
                 
             ) # close trycatch
-    } # close function in parapply
-)  # close parapply 
+   
 
 #11. stop the cluster----
-print("* stopping cluster :-)*")
-stopCluster(cl)
+#print("* stopping cluster :-)*")
+#stopCluster(cl)
 
 #12. save backfilled raster for this species x year
 print("* saving raster file *")
 print(backfill_results)
 
-if(cc){ q() }
+#if(cc){ q() }
 
