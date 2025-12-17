@@ -175,6 +175,18 @@ train_and_backfill_subbasin_s <- function(
       df_holdout    <- df_train_bart[holdout_idx, ] # get holdout rows before modifying df_train_bart
       df_train_bart <- df_train_bart[-holdout_idx, ]
       
+      # check that y is not binary
+      # this happened in subbasin 8 with SCANFIBalsamFir_5x5
+      if (length(unique(log1p(y[-holdout_idx]))) <= 2) {
+        
+        df_backfill[[b]] <- mean(y[-holdout_idx])
+        out_layers[[paste0(b, "_mean")]] <- rep(mean(y[-holdout_idx]), nrow(df_backfill))
+        out_layers[[paste0(b, "_sd")]]   <- rep(0, nrow(df_backfill))
+        
+        logp("[%s] degenerate (≤2 unique values after log1p)", b)
+        next
+      }
+      
       # train and predict with BART
       fit <- BART::gbart(x.train = as.matrix(df_train_bart), 
                          y.train = log1p(y[-holdout_idx]), # log transform to avoid negative predictions
@@ -391,7 +403,7 @@ train_and_backfill_subbasin_s <- function(
         
         # compute metrics from the holdout data
         # first, predict on holdout data (will be re-used for confusion matrix)
-        df_holdout <- df_holdout[, colnames(fit$varprob), drop = FALSE] # drop covariates not used by BART
+        df_holdout <- df_holdout[, colnames(fit$varprob[[1]]), drop = FALSE] # drop covariates not used by BART
         pred <- predict(fit, newdata = as.matrix(df_holdout))
         metrics[[length(metrics) + 1L]] <- collect_holdout_metrics_mbart(
           fit       = fit,
