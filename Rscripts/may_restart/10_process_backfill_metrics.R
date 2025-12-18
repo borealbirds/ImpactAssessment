@@ -68,26 +68,51 @@ continuous_train_metrics <-
   metrics_merged |> 
   dplyr::filter(!(covariate %in% categorical_responses) & split == "train") |> 
   dplyr::select(1:14)
-saveRDS(continuous_train_metrics, file.path(getwd(), "data/derived_data/rds_files/continuous_train_metrics.rds"))
+#saveRDS(continuous_train_metrics, file.path(getwd(), "data/derived_data/rds_files/model_metrics/continuous_train_metrics.rds"))
 
 continuous_holdout_metrics <-
   metrics_merged |> 
   dplyr::filter(!(covariate %in% categorical_responses) & split == "holdout") |> 
   dplyr::select(1:3,5:6,13:16)
-saveRDS(continuous_holdout_metrics, file.path(getwd(), "data/derived_data/rds_files/continuous_holdout_metrics.rds"))
-
+#saveRDS(file.path(continuous_holdout_metrics, getwd(), "data/derived_data/rds_files/model_metrics/continuous_holdout_metrics.rds"))
 
 categorical_train_metrics <-
   metrics_merged |> 
   dplyr::filter((covariate %in% categorical_responses) & split == "train") |> 
   dplyr::select(1:3,13:15,17:18)
-saveRDS(categorical_train_metrics, file.path(getwd(), "data/derived_data/rds_files/categorical_train_metrics.rds"))
+saveRDS(categorical_train_metrics, file.path(getwd(), "data/derived_data/rds_files/model_metrics/categorical_train_metrics.rds"))
 
 categorical_holdout_metrics <-
   metrics_merged |> 
   dplyr::filter((covariate %in% categorical_responses) & split == "holdout") |> 
   dplyr::select(1:3,13:15,17:18)
-saveRDS(categorical_holdout_metrics, file.path(getwd(), "data/derived_data/rds_files/categorical_holdout_metrics.rds"))
+saveRDS(categorical_holdout_metrics, file.path(getwd(), "data/derived_data/rds_files/model_metrics/categorical_holdout_metrics.rds"))
+
+# -------------------------------------------------------
+# plot model performance by covariate
+continuous_train_metrics <- readRDS(file.path(getwd(), "data/derived_data/rds_files/model_metrics/continuous_train_metrics.rds"))
+continuous_holdout_metrics <- readRDS(file.path(getwd(), "data/derived_data/rds_files/model_metrics/continuous_holdout_metrics.rds"))
+
+continuous_holdout_metrics |> 
+  mutate(covariate = reorder(covariate, mae, FUN = median, na.rm = TRUE, decreasing = FALSE)) |> 
+  ggplot(aes(x = covariate, y = mae, fill = covariate, colour = covariate)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.2) +
+  geom_jitter(width = 0.2, alpha = 0.4, size = 1, shape = 16) +
+  scale_fill_manual(values = rep_len(c("#999999", "#E69F00", "#56B4E9"), length(unique(continuous_holdout_metrics$covariate)))) +
+  scale_colour_manual(values = rep_len(c("#999999", "#E69F00", "#56B4E9"), length(unique(continuous_holdout_metrics$covariate)))) +
+  #coord_flip() +
+  #coord_cartesian(ylim = c(-2, 1)) + 
+  theme_classic() +
+  labs(
+    x = "landscape feature",
+    #y = bquote("coefficient of determination"~(R^2))
+    y = "mean absolute error"
+  ) +
+  theme(axis.text.x = element_text(angle = 70, hjust = 1)) +
+  theme(legend.position = "none")
+  
+
+
 
 # -------------------------------------------------------
 # inspect individual backfill rasters
