@@ -48,7 +48,7 @@ names(confusion_matrices) <- categorical_responses
 saveRDS(confusion_matrices, file.path(getwd(), "data/derived_data/rds_files/confusion_matrices.rds"))
 
 # -------------------------------------------------------
-# inspect and synthesize model metrics
+# inspect and synthesize holdout metrics for categorical features
 
 categorical_responses = c("ABoVE_1km", "NLCD_1km","MODISLCC_1km", "MODISLCC_5x5","SCANFI_1km","VLCE_1km")
 
@@ -91,22 +91,37 @@ saveRDS(categorical_holdout_metrics, file.path(getwd(), "data/derived_data/rds_f
 # -------------------------------------------------------
 # plot model performance by covariate
 continuous_train_metrics <- readRDS(file.path(getwd(), "data/derived_data/rds_files/model_metrics/continuous_train_metrics.rds"))
+
+continuous_train_metrics |> 
+  mutate(covariate = reorder(covariate, r2_median, FUN = median, na.rm = TRUE, decreasing = TRUE)) |> 
+  ggplot(aes(x = covariate, y = r2_median, fill = covariate, colour = covariate)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.2) +
+  geom_jitter(width = 0.2, alpha = 0.4, size = 1, shape = 16) +
+  scale_fill_manual(values = rep_len(c("#999999", "#E69F00", "#56B4E9"), length(unique(continuous_train_metrics$covariate)))) +
+  scale_colour_manual(values = rep_len(c("#999999", "#E69F00", "#56B4E9"), length(unique(continuous_train_metrics$covariate)))) +
+  theme_classic() +
+  labs(
+    x = "landscape feature",
+    y = bquote("Bayesian"~R^2)
+  ) +
+  theme(axis.text.x = element_text(angle = 70, hjust = 1)) +
+  theme(legend.position = "none")
+
+
 continuous_holdout_metrics <- readRDS(file.path(getwd(), "data/derived_data/rds_files/model_metrics/continuous_holdout_metrics.rds"))
 
 continuous_holdout_metrics |> 
-  mutate(covariate = reorder(covariate, mae, FUN = median, na.rm = TRUE, decreasing = FALSE)) |> 
-  ggplot(aes(x = covariate, y = mae, fill = covariate, colour = covariate)) +
+  mutate(covariate = reorder(covariate, r2, FUN = median, na.rm = TRUE, decreasing = TRUE)) |> 
+  ggplot(aes(x = covariate, y = r2, fill = covariate, colour = covariate)) +
   geom_boxplot(outlier.shape = NA, alpha = 0.2) +
   geom_jitter(width = 0.2, alpha = 0.4, size = 1, shape = 16) +
   scale_fill_manual(values = rep_len(c("#999999", "#E69F00", "#56B4E9"), length(unique(continuous_holdout_metrics$covariate)))) +
   scale_colour_manual(values = rep_len(c("#999999", "#E69F00", "#56B4E9"), length(unique(continuous_holdout_metrics$covariate)))) +
-  #coord_flip() +
-  #coord_cartesian(ylim = c(-2, 1)) + 
+  coord_cartesian(ylim = c(-3, 1)) + 
   theme_classic() +
   labs(
     x = "landscape feature",
-    #y = bquote("coefficient of determination"~(R^2))
-    y = "mean absolute error"
+    y = bquote("coefficient of determination"~(R^2))
   ) +
   theme(axis.text.x = element_text(angle = 70, hjust = 1)) +
   theme(legend.position = "none")
