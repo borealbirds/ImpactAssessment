@@ -1,5 +1,5 @@
 # ---
-# title: Impact Assessment: train models per subbasin and backfill industry footprints
+# title: Impact Assessment: process and synthesize model metrics for "inspect_backfill_metrics.R"
 # author: Mannfred Boehm
 # created: December 15, 2025
 # ---
@@ -45,10 +45,11 @@ create_cm <- function(cat){
 confusion_matrices <- lapply(X = categorical_responses, FUN = create_cm)
 names(confusion_matrices) <- categorical_responses
 
-saveRDS(confusion_matrices, file.path(getwd(), "data/derived_data/rds_files/confusion_matrices.rds"))
+#saveRDS(confusion_matrices, file.path(getwd(), "data/derived_data/rds_files/confusion_matrices.rds"))
+confusion_matrices <- readRDS(file.path(getwd(), "data/derived_data/rds_files/confusion_matrices.rds"))
 
 # -------------------------------------------------------
-# inspect and synthesize holdout metrics for categorical features
+# inspect and synthesize holdout metrics 
 
 categorical_responses = c("ABoVE_1km", "NLCD_1km","MODISLCC_1km", "MODISLCC_5x5","SCANFI_1km","VLCE_1km")
 
@@ -57,7 +58,6 @@ import_metrics <- function(i, year){
 }
 
 # every RDS file is a list of dataframes containing subbasin metrics
-# 
 subbasin_indices <- c(1:57)
 metrics <- lapply(X = subbasin_indices, FUN = import_metrics, year = 2020)
 names(metrics) <- paste("subbasin_", subbasin_indices)
@@ -68,13 +68,13 @@ continuous_train_metrics <-
   metrics_merged |> 
   dplyr::filter(!(covariate %in% categorical_responses) & split == "train") |> 
   dplyr::select(1:14)
-#saveRDS(continuous_train_metrics, file.path(getwd(), "data/derived_data/rds_files/model_metrics/continuous_train_metrics.rds"))
+saveRDS(continuous_train_metrics, file.path(getwd(), "data/derived_data/rds_files/model_metrics/continuous_train_metrics.rds"))
 
 continuous_holdout_metrics <-
   metrics_merged |> 
   dplyr::filter(!(covariate %in% categorical_responses) & split == "holdout") |> 
   dplyr::select(1:3,5:6,13:16)
-#saveRDS(file.path(continuous_holdout_metrics, getwd(), "data/derived_data/rds_files/model_metrics/continuous_holdout_metrics.rds"))
+saveRDS(continuous_holdout_metrics, file.path(getwd(), "data/derived_data/rds_files/model_metrics/continuous_holdout_metrics.rds"))
 
 categorical_train_metrics <-
   metrics_merged |> 
@@ -87,48 +87,4 @@ categorical_holdout_metrics <-
   dplyr::filter((covariate %in% categorical_responses) & split == "holdout") |> 
   dplyr::select(1:3,13:15,17:18)
 saveRDS(categorical_holdout_metrics, file.path(getwd(), "data/derived_data/rds_files/model_metrics/categorical_holdout_metrics.rds"))
-
-# -------------------------------------------------------
-# plot model performance by covariate
-continuous_train_metrics <- readRDS(file.path(getwd(), "data/derived_data/rds_files/model_metrics/continuous_train_metrics.rds"))
-
-continuous_train_metrics |> 
-  mutate(covariate = reorder(covariate, r2_median, FUN = median, na.rm = TRUE, decreasing = TRUE)) |> 
-  ggplot(aes(x = covariate, y = r2_median, fill = covariate, colour = covariate)) +
-  geom_boxplot(outlier.shape = NA, alpha = 0.2) +
-  geom_jitter(width = 0.2, alpha = 0.4, size = 1, shape = 16) +
-  scale_fill_manual(values = rep_len(c("#999999", "#E69F00", "#56B4E9"), length(unique(continuous_train_metrics$covariate)))) +
-  scale_colour_manual(values = rep_len(c("#999999", "#E69F00", "#56B4E9"), length(unique(continuous_train_metrics$covariate)))) +
-  theme_classic() +
-  labs(
-    x = "landscape feature",
-    y = bquote("Bayesian"~R^2)
-  ) +
-  theme(axis.text.x = element_text(angle = 70, hjust = 1)) +
-  theme(legend.position = "none")
-
-
-continuous_holdout_metrics <- readRDS(file.path(getwd(), "data/derived_data/rds_files/model_metrics/continuous_holdout_metrics.rds"))
-
-continuous_holdout_metrics |> 
-  mutate(covariate = reorder(covariate, r2, FUN = median, na.rm = TRUE, decreasing = TRUE)) |> 
-  ggplot(aes(x = covariate, y = r2, fill = covariate, colour = covariate)) +
-  geom_boxplot(outlier.shape = NA, alpha = 0.2) +
-  geom_jitter(width = 0.2, alpha = 0.4, size = 1, shape = 16) +
-  scale_fill_manual(values = rep_len(c("#999999", "#E69F00", "#56B4E9"), length(unique(continuous_holdout_metrics$covariate)))) +
-  scale_colour_manual(values = rep_len(c("#999999", "#E69F00", "#56B4E9"), length(unique(continuous_holdout_metrics$covariate)))) +
-  coord_cartesian(ylim = c(-3, 1)) + 
-  theme_classic() +
-  labs(
-    x = "landscape feature",
-    y = bquote("coefficient of determination"~(R^2))
-  ) +
-  theme(axis.text.x = element_text(angle = 70, hjust = 1)) +
-  theme(legend.position = "none")
-  
-
-
-
-# -------------------------------------------------------
-# inspect individual backfill rasters
 
