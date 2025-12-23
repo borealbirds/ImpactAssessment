@@ -354,21 +354,9 @@ train_and_backfill_subbasin_s <- function(
         
         # The mbart2() output is pixel-major:
         # row = pixel, columns = class1..classK_model
-        class_probs_model <- matrix(fit$prob.test.mean, ncol = K_model, byrow = TRUE)
+        class_probs <- matrix(fit$prob.test.mean, ncol = K_model, byrow = TRUE)
+        colnames(class_probs) <- present
         
-        # map MBART class order -> ecological order
-        cols <- match(present, cats_model)
-        
-        # create empty matrix and assign ecological classes to class_probs
-        class_probs <- matrix(0, nrow = npixels, ncol = length(present))
-        for (i in seq_along(present)) {
-          ci <- cols[i]
-          if (!is.na(ci)) {
-            class_probs[, i] <- class_probs_model[, ci]
-          } else {
-            class_probs[, i] <- 0
-          }
-        }
         
         # predicted class index (MAP) in ecological codes
         pred_idx <- max.col(class_probs, ties.method = "first")
@@ -422,20 +410,8 @@ train_and_backfill_subbasin_s <- function(
         cats_model <- fit$cats
         np_holdout <- length(pred$prob.test.mean) / K_model
         
-        prob_holdout_model <- matrix(
-          pred$prob.test.mean,
-          ncol = K_model,
-          byrow = TRUE
-        )
-        
-        cols <- match(present, cats_model)
-        prob_ecol <- matrix(0, nrow = np_holdout, ncol = length(present))
-        for (i in seq_along(present)) {
-          ci <- cols[i]
-          if (!is.na(ci)) {
-            prob_ecol[, i] <- prob_holdout_model[, ci]
-          }
-        }
+        prob_ecol <- matrix(pred$prob.test.mean, ncol = K_model, byrow = TRUE)
+        colnames(prob_ecol) <- present
         
         yhat_holdout_class <- present[max.col(prob_ecol, ties.method = "first")]
         actual_holdout_class <- present[y_int[holdout_idx]]

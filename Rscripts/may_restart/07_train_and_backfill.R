@@ -14,14 +14,15 @@ library(tidyverse)
 
 
 #2. define local or cluster --------------------------------------
-test <- TRUE
-cc <- FALSE
+test <- FALSE
+cc <- TRUE
 
 # extract arguments from SLURM script
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) == 0) {
   stop("no subbasin index supplied")
 }
+
 subbasin_index <- as.integer(args[1])
 
 #3. set number of tasks for local vs cluster ---------------------
@@ -82,8 +83,8 @@ soil_covs <- tibble::tibble(predictor = c("cec_0-5cm_mean_1000", "cec_100-200cm_
                     predictor_class = rep("Soil Properties", 12))
 
 # convert some abiotic variables to biotic variables
-actually_biotic_what <- c("StandardDormancy_1km", "StandardGreenup_1km", "Peatland_5x5", "Peatland_1km")
-actually_biotic_df <- tibble::tibble(predictor = actually_biotic_what, predictor_class = c("Annual Climate", "Annual Climate", "Wetland", "Wetland"))
+actually_biotic_what <- c("Peatland_5x5", "Peatland_1km")
+actually_biotic_df <- tibble::tibble(predictor = actually_biotic_what, predictor_class = c("Wetland", "Wetland"))
 
 # define abiotic variables (V5 abiotic + CAfire + soil properties)
 abiotic_vars <-

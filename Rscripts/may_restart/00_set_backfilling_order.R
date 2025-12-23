@@ -45,8 +45,6 @@ neworder <-
     "RAPTCC_5x5",
     "LFcrownclosure_1km", 
     "LFcrownclosure_5x5", 
-    "StandardDormancy_1km", 
-    "StandardGreenup_1km",
     "VLCE_1km", 
     "MODISLCC_1km", 
     "MODISLCC_5x5", 
