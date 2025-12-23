@@ -4,6 +4,9 @@
 # created: December 19, 2025
 # ---
 
+library(terra)
+library(tidyverse)
+
 root <- "G:/Shared drives/BAM_NationalModels5"
 ia_dir <- file.path(root, "data", "Extras", "sandbox_data", "impactassessment_sandbox")
 
@@ -65,9 +68,9 @@ test1 <- categorical_holdout_metrics |>
 
 # inspect accuracy per subbasin for a given covariate
 test2 <- categorical_holdout_metrics |>
-  filter(covariate == "VLCE_1km")
-group_by(subbasin) |>
-  summarise(
+  dplyr::filter(covariate == "VLCE_1km")
+  dplyr::group_by(subbasin) |>
+  dplyr::summarise(
     mean_accuracy = mean(accuracy, na.rm = TRUE),
     sd_accuracy   = sd(accuracy, na.rm = TRUE),
     n             = n(),
@@ -91,8 +94,8 @@ all_subbasins_subset <- terra::project(x=all_subbasins_subset, y=stack_y)
 
 # VLCE: get lowHF pixels per subbasin
 train_ok1   <- terra::ifel(lowhf_mask == 1 & !is.na(stack_y$VLCE_1km), 1, NA)
-samplesize1 <- terra::extract(train_ok,  all_subbasins_subset[1:57], fun = sum, na.rm = TRUE)
-samplesize1 <- dplyr::rename(samplesize, subbasin = ID)
+samplesize1 <- terra::extract(train_ok1,  all_subbasins_subset[1:57], fun = sum, na.rm = TRUE)
+samplesize1 <- dplyr::rename(samplesize1, subbasin = ID)
 
 # VLCE: get accuracy per subbasin 
 accuracy_vlce <- dplyr::filter(categorical_holdout_metrics, covariate == "VLCE_1km") 
@@ -105,8 +108,6 @@ ggplot(data = vlce_df, mapping = aes(x = accuracy, y = CanHF_1km)) +
 
 # no effect of sample size on accuracy
 summary(lm(accuracy ~ CanHF_1km, data = vlce_df))
-
-
 
 # SCANFI: get lowHF pixels per subbasin
 train_ok2   <- terra::ifel(lowhf_mask == 1 & !is.na(stack_y$SCANFI_1km), 1, NA)

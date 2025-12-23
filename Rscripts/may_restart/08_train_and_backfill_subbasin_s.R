@@ -284,7 +284,8 @@ train_and_backfill_subbasin_s <- function(
       if (!length(y_codes)) { logp("[%s] skip: empty y_codes", b); next } 
       
       # land cover classes that are *actually* present in the training subset
-      present <- sort(unique(y_codes))
+      present <- sort(unique(y_codes), na.last = NA)
+      present <- present[order(as.numeric(present))]
       K <- length(present) 
       if (K == 0) { logp("[%s] skip: no classes present", b); next }
       
