@@ -8,7 +8,6 @@
 print("* attaching packages on master *")
 library(BART)
 library(BAMexploreR)
-#library(parallel)
 library(terra)
 library(tidyverse)
 
@@ -17,7 +16,7 @@ library(tidyverse)
 test <- FALSE
 cc <- TRUE
 
-# extract arguments from SLURM script
+# if working on cluster, extract arguments from SLURM script
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) == 0) {
   stop("no subbasin index supplied")
@@ -25,23 +24,7 @@ if (length(args) == 0) {
 
 subbasin_index <- as.integer(args[1])
 
-#3. set number of tasks for local vs cluster ---------------------
-#if(cc){ n_tasks <- 1}
-#if(!cc | test){ n_tasks <- 1}
-
-
-#4. create and register clusters ---------------------------------
-# creates 32 copies of R running in parallel via 32 tasks, on one of the cluster's sockets (processors). 
-# Belgua has ~965 nodes
-#print("* creating clusters *")
-#cl <- makePSOCKcluster(n_tasks, type="PSOCK")
-
-# print number of tasks and host name for confirmation
-#cl
-
-
-
-#5. set root path ------------------------------------------------
+#3. set root path ------------------------------------------------
 print("* setting root file path *")
 
 if(!cc){root <- "G:/Shared drives/BAM_NationalModels5"}
@@ -50,20 +33,9 @@ if(cc){root <- "/home/mannfred/scratch/impact_assessment"}
 if(!cc){ia_dir <- file.path(root, "data", "Extras", "sandbox_data", "impactassessment_sandbox")}
 if(cc){ia_dir <- file.path(root)}
 
-#tmpcl <- clusterExport(cl, c("root", "ia_dir"))
 print(ia_dir)
 
-#6. attach packages on clusters ----------------------------------
-# `clusterEvalQ` evaluates a literal expression on each cluster node. 
-#print("* Loading packages on workers *")
-#tmpcl <- clusterEvalQ(cl, library(BART))
-#tmpcl <- clusterEvalQ(cl, library(BAMexploreR))
-#tmpcl <- clusterEvalQ(cl, library(terra))
-#tmpcl <- clusterEvalQ(cl, library(tidyverse))
-
-
-
-#7. define model covariates --------------------------------------
+#4. define model covariates --------------------------------------
 # define predictor and response variables
 # store predictor metadata as a reference
 predictor_metadata <-
@@ -109,7 +81,7 @@ if(exists("biotic_vars")){
 }else{print("* biotic_vars not constructed *")}
 
 
-#8. import helper functions ----------------------------------------
+#5. import helper functions ----------------------------------------
  
 # logfile function to track progress
 make_logger <- function(logfile) { # create a new log file
@@ -125,30 +97,17 @@ make_logger <- function(logfile) { # create a new log file
 } # close file generating function
 
 # training and backfilling function (subbasin level)
-if(!cc){source(file.path(getwd(), "Rscripts", "may_restart", "08_train_and_backfill_subbasin_s.R"))}
-if(cc){source(file.path(root, "Rscripts", "08_train_and_backfill_subbasin_s.R"))}
+if(!cc){source(file.path(getwd(), "Rscripts", "may_restart", "08A_train_and_backfill_subbasin_s.R"))}
+if(cc){source(file.path(root, "Rscripts", "08A_train_and_backfill_subbasin_s.R"))}
 
 
-
-#9. export the necessary variables and functions to the cluster -------------------
-#print("* exporting objects and functions to cluster *")
-#clusterExport(cl, c("neworder", "abiotic_vars", "biotic_vars", 
-         #           "train_and_backfill_subbasin_s", "ia_dir", "make_logger", "cc"))
-
-
-#10. train models and backfill biotic features for year y -----------------------------
-print("* running backfilling in parallel *")
-
-# run backfilling in parallel by subbasin
-#subs <- c(57) # for testing
-# parLapply runs the backfilling for every i in `subs`
+#6. train models and backfill biotic features for year y -----------------------------
 print(paste("* running backfilling for subbasin", subbasin_index, "*")) 
 
-year <- 2020
-                
 # load spatial objects inside of each worker to avoid "external pointer is not valid"
 # library(terra)
 # import pre-mosaiced covariate stack for year_y
+year <- 2020
 stack_y <- terra::rast(file.path(ia_dir, sprintf("covariates_mosaiced_%d.tif", year)))
                
 # define categorical features
@@ -169,7 +128,7 @@ all_subbasins_subset <- terra::project(x=all_subbasins_subset, y=stack_y)
 backfill_results <- tryCatch(
                   train_and_backfill_subbasin_s(
                   subbasin_index = subbasin_index, 
-                  year           = 2020,
+                  year           = year,
                   stack_y        = stack_y,
                   lowhf_mask     = lowhf_mask,
                   highhf_mask    = highhf_mask,

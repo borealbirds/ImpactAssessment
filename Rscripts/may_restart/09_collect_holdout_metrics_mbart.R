@@ -12,7 +12,7 @@ collect_holdout_metrics_mbart <- function(fit, pred, y_holdout,
     byrow = TRUE
   )
   
-  # remap MBART class order → ecological class order
+  # remap MBART class order -> ecological class order
   K_present <- length(present)
   cols <- match(present, cats_model)
   
