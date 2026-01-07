@@ -8,7 +8,6 @@ collect_metrics_mbart <- function(fit, X_train, y,
   X_train <- X_train[, colnames(fit$varprob[[1]]), drop = FALSE] # drop covariates not used by BART
   pred <- predict(fit, newdata = X_train)   # no type="prob"
   K_model    <- pred$K
-  cats_model <- fit$cats
   
   # pixel-major -> reshape into matrix (np × K_model)
   np <- length(pred$prob.test.mean) / K_model
@@ -18,29 +17,17 @@ collect_metrics_mbart <- function(fit, X_train, y,
     byrow = TRUE
   )
   
-  # remap MBART class order → ecological class order
-  K_present <- length(present)
-  cols <- match(present, cats_model)
+  # mbart columns already correspond to present[1:K′]
+  prob_ecol <- prob_mean_model
+  colnames(prob_ecol) <- present
   
-  prob_ecol <- matrix(0, nrow = np, ncol = K_present)
-  for (i in seq_along(present)) {
-    ci <- cols[i]
-    if (!is.na(ci)) {
-      prob_ecol[, i] <- prob_mean_model[, ci]
-    } else {
-      prob_ecol[, i] <- 0
-    }
-  }
   
   # predicted classes in ecological order
   pred_idx <- max.col(prob_ecol, ties.method = "first")
   pred_class <- present[pred_idx]
   
-  # true ecological classes
-  true_class <- present[y]
-  
   # accuracy
-  accuracy <- mean(pred_class == true_class, na.rm = TRUE)
+  accuracy <- mean(pred_class == y, na.rm = TRUE)
   
   # entropy
   eps <- 1e-12

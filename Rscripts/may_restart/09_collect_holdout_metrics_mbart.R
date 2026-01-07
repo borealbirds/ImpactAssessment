@@ -2,7 +2,6 @@ collect_holdout_metrics_mbart <- function(fit, pred, y_holdout,
                                           covariate, subbasin, year, top_var, present) {
   
   K_model    <- pred$K
-  cats_model <- fit$cats
   
   # pixel-major -> reshape into matrix (np × K_model)
   np <- length(pred$prob.test.mean) / K_model
@@ -12,29 +11,16 @@ collect_holdout_metrics_mbart <- function(fit, pred, y_holdout,
     byrow = TRUE
   )
   
-  # remap MBART class order -> ecological class order
-  K_present <- length(present)
-  cols <- match(present, cats_model)
-  
-  prob_ecol <- matrix(0, nrow = np, ncol = K_present)
-  for (i in seq_along(present)) {
-    ci <- cols[i]
-    if (!is.na(ci)) {
-      prob_ecol[, i] <- prob_mean_model[, ci]
-    } else {
-      prob_ecol[, i] <- 0
-    }
-  }
+  # mbart columns already correspond to present[1:K′]
+  prob_ecol <- prob_mean_model
+  colnames(prob_ecol) <- present
   
   # predicted classes in ecological order
   pred_idx <- max.col(prob_ecol, ties.method = "first")
   pred_class <- present[pred_idx]
   
-  # true ecological classes
-  true_class <- present[y_holdout]
-  
   # accuracy
-  accuracy <- mean(pred_class == true_class, na.rm = TRUE)
+  accuracy <- mean(pred_class == y_holdout, na.rm = TRUE)
   
   # entropy
   eps <- 1e-12

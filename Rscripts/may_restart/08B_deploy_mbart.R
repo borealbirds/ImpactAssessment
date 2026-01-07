@@ -136,7 +136,7 @@ deploy_mbart <- function(
     if (K >= 2){
       metrics[[length(metrics) + 1L]] <- collect_metrics_mbart(
         fit,
-        y         = y_int[-holdout_idx],
+        y         = present[y_int[-holdout_idx]],
         X_train   = df_train_bart,
         covariate = b,
         subbasin  = subbasin_index,
@@ -152,7 +152,7 @@ deploy_mbart <- function(
     metrics[[length(metrics) + 1L]] <- collect_holdout_metrics_mbart(
       fit       = fit,
       pred      = pred,
-      y_holdout = y_int[holdout_idx],
+      y_holdout = present[y_int[holdout_idx]],
       covariate = b,
       subbasin  = subbasin_index,
       year      = year,
