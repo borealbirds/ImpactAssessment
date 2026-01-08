@@ -22,6 +22,7 @@ if (length(args) == 0) {
   stop("no subbasin index supplied")
 }
 
+# subbasin_index <- c(3,5,7,36)
 subbasin_index <- as.integer(args[1])
 
 #3. set root path ------------------------------------------------
@@ -102,7 +103,6 @@ if(cc){source(file.path(root, "Rscripts", "08A_train_and_backfill_subbasin_s.R")
 
 
 #6. train models and backfill biotic features for year y -----------------------------
-print(paste("* running backfilling for subbasin", subbasin_index, "*")) 
 
 # load spatial objects inside of each worker to avoid "external pointer is not valid"
 # library(terra)

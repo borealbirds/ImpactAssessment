@@ -47,7 +47,11 @@ deploy_gbart <- function(
     out_layers[[paste0(b, "_sd")]]   <- rep(0, nrow(df_backfill))
     
     logp("[%s] degenerate (≤2 unique values after log1p)", b)
-    next
+    return(list(
+      df_backfill = df_backfill,
+      metrics     = metrics,
+      out_layers  = out_layers
+    ))
   }
   
   # train and predict with BART

@@ -95,8 +95,8 @@ deploy_mbart <- function(
                         type = "pbart",
                         k = 3,
                         ntree = 40L,
-                        ndpost = 500L, #500
-                        nskip = 150L, #150
+                        ndpost = 100L, #500
+                        nskip = 50L, #150
                         keepevery = 10L,
                         printevery = 350,
                         sparse = TRUE)
@@ -108,7 +108,7 @@ deploy_mbart <- function(
     # row = pixel, columns = class1..classK_model
     K_model    <- fit$K
     cats_model <- fit$cats
-    prob_ecol <- matrix(pred$prob.test.mean, ncol = K_model, byrow = TRUE)
+    prob_ecol <- matrix(fit$prob.test.mean, ncol = K_model, byrow = TRUE)
     colnames(prob_ecol) <- present[fit$cats]
     
     

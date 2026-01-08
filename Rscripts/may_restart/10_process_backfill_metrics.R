@@ -18,7 +18,7 @@ import_matrix <- function(i, year){
 }
 
 # merge confusion tables across subbasins
-subbasin_indices <- c(1)
+subbasin_indices <- c(36)
 confusion_tables <- lapply(X = subbasin_indices, FUN = import_matrix, year = 2020)
 names(confusion_tables) <- paste("subbasin_", subbasin_indices)
 confusion_tables_merged <- do.call(rbind, unlist(confusion_tables, recursive = FALSE))
