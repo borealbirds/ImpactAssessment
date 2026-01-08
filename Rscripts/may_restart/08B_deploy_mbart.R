@@ -95,38 +95,38 @@ deploy_mbart <- function(
                         type = "pbart",
                         k = 3,
                         ntree = 40L,
-                        ndpost = 500L,
-                        nskip = 150L,
+                        ndpost = 500L, #500
+                        nskip = 150L, #150
                         keepevery = 10L,
                         printevery = 350,
                         sparse = TRUE)
     
     logp("mbart fit to [%s]", b)
     
-    K_model    <- fit$K
-    cats_model <- fit$cats
-    npixels    <- length(fit$prob.test.mean) / K_model
-    
+    # prob_ecol is a matrix with class probabilities per backfill pixel 
     # The mbart2() output is pixel-major:
     # row = pixel, columns = class1..classK_model
-    class_probs <- matrix(fit$prob.test.mean, ncol = K_model, byrow = TRUE)
-    colnames(class_probs) <- present
+    K_model    <- fit$K
+    cats_model <- fit$cats
+    prob_ecol <- matrix(pred$prob.test.mean, ncol = K_model, byrow = TRUE)
+    colnames(prob_ecol) <- present[fit$cats]
     
     
-    # predicted class index (MAP) in ecological codes
-    pred_idx <- max.col(class_probs, ties.method = "first")
-    b_mode   <- present[pred_idx]
+    # predicted class index in ecological codes
+    # i.e. for every pixel get the most likely landcover class
+    pred_idx <- max.col(prob_ecol, ties.method = "first")
+    b_mode   <- present[fit$cats][pred_idx]
     
     # uncertainty measures
     eps <- 1e-12
-    b_entropy <- -rowSums(class_probs * log(pmax(class_probs, eps)))
-    b_maxprob <- apply(class_probs, 1, max)
+    b_entropy <- -rowSums(prob_ecol * log(pmax(prob_ecol, eps)))
+    b_maxprob <- apply(prob_ecol, 1, max)
     
     # variable importance
     varprob_mean <- colMeans(do.call(rbind, fit$varprob))
     top_var <- names(sort(varprob_mean, decreasing = TRUE))[1]
     
-    # store for rasterization
+    # store most likely class for rasterization
     df_backfill[[b]]                         <- b_mode
     out_layers[[b]]                          <- b_mode
     out_layers[[paste0(b, "_maxprob")]]      <- b_maxprob
@@ -152,7 +152,7 @@ deploy_mbart <- function(
     metrics[[length(metrics) + 1L]] <- collect_holdout_metrics_mbart(
       fit       = fit,
       pred      = pred,
-      y_holdout = present[y_int[holdout_idx]],
+      actual_holdout_class = present[y_int[holdout_idx]],
       covariate = b,
       subbasin  = subbasin_index,
       year      = year,
@@ -161,12 +161,8 @@ deploy_mbart <- function(
     )
     
     # use predictions for confusion matrix
-    K_model    <- pred$K
-    cats_model <- fit$cats
-    np_holdout <- length(pred$prob.test.mean) / K_model
-    
     prob_ecol <- matrix(pred$prob.test.mean, ncol = K_model, byrow = TRUE)
-    colnames(prob_ecol) <- present
+    colnames(prob_ecol) <- present[fit$cats]
     
     yhat_holdout_class <- present[max.col(prob_ecol, ties.method = "first")]
     actual_holdout_class <- present[y_int[holdout_idx]]

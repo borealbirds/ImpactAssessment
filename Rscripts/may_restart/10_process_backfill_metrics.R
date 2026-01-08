@@ -18,7 +18,7 @@ import_matrix <- function(i, year){
 }
 
 # merge confusion tables across subbasins
-subbasin_indices <- c(1,3)
+subbasin_indices <- c(1)
 confusion_tables <- lapply(X = subbasin_indices, FUN = import_matrix, year = 2020)
 names(confusion_tables) <- paste("subbasin_", subbasin_indices)
 confusion_tables_merged <- do.call(rbind, unlist(confusion_tables, recursive = FALSE))
@@ -58,7 +58,7 @@ import_metrics <- function(i, year){
 }
 
 # every RDS file is a list of dataframes containing subbasin metrics
-subbasin_indices <- c(1:57)
+subbasin_indices <- c(30:35)
 metrics <- lapply(X = subbasin_indices, FUN = import_metrics, year = 2020)
 names(metrics) <- paste("subbasin_", subbasin_indices)
 

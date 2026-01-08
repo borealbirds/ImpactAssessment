@@ -9,23 +9,15 @@ collect_metrics_mbart <- function(fit, X_train, y,
   pred <- predict(fit, newdata = X_train)   # no type="prob"
   K_model    <- pred$K
   
-  # pixel-major -> reshape into matrix (np × K_model)
-  np <- length(pred$prob.test.mean) / K_model
-  prob_mean_model <- matrix(
-    pred$prob.test.mean,
-    ncol = K_model,
-    byrow = TRUE
-  )
+  # get matrix with most likely classes per holdout pixel (rows)
+  # `pred` was generated using `fit`, 
+  # so it's limited to the classes in `fit$cats`
+  prob_ecol <- matrix(pred$prob.test.mean, ncol = K_model, byrow = TRUE)
+  colnames(prob_ecol) <- present[fit$cats]
   
-  # mbart columns already correspond to present[1:K′]
-  prob_ecol <- prob_mean_model
-  colnames(prob_ecol) <- present
-  
-  
-  # predicted classes in ecological order
-  pred_idx <- max.col(prob_ecol, ties.method = "first")
-  pred_class <- present[pred_idx]
-  
+  # predictions
+  pred_class <- present[max.col(prob_ecol, ties.method = "first")]
+
   # accuracy
   accuracy <- mean(pred_class == y, na.rm = TRUE)
   
@@ -38,7 +30,7 @@ collect_metrics_mbart <- function(fit, X_train, y,
     covariate    = covariate,
     subbasin     = subbasin,
     year         = year,
-    n_holdout    = length(y),
+    n_obs    = length(y),
     accuracy     = accuracy,
     mean_entropy = mean(entropy),
     top_var      = top_var,
