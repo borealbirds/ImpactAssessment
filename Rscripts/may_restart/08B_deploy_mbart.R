@@ -76,6 +76,36 @@ deploy_mbart <- function(
     # for K > 2, training labels mapped to 1..K'
     y_int <- unname(fwd_map[y_codes])  
     
+    # check that there is >1 high HF pixel to backfill (subbasins 423,304,247,246,221,160)
+    # if nrow(df_backfill_bart) == 1 then take the mean from the training pixels
+    if (nrow(df_backfill_bart) == 1) {
+      
+      # empirical class probabilities from training data
+      tab <- table(y_int)
+      probs <- tab / sum(tab)
+      
+      # mode and uncertainty
+      mode_int <- as.integer(names(which.max(tab)))
+      b_mode   <- inv_map[as.character(mode_int)]
+      b_maxprob <- max(probs)
+      b_entropy <- -sum(probs * log(pmax(probs, 1e-12)))
+      
+      # populate outputs
+      df_backfill[[b]] <- b_mode
+      out_layers[[b]] <- b_mode
+      out_layers[[paste0(b, "_maxprob")]] <- b_maxprob
+      out_layers[[paste0(b, "_entropy")]] <- b_entropy
+      
+      logp("[%s] single backfill pixel: skipped mbart()", b)
+      
+      return(list(
+        df_backfill = df_backfill,
+        metrics     = metrics,
+        confusion   = confusion,
+        out_layers  = out_layers
+      ))
+    }
+    
     # reproducible per (year, subbasin, covariate)
     set.seed(abs(as.integer(sprintf("%d%03d", subbasin_index, which(biotic_cols==b)))))
     
@@ -95,8 +125,8 @@ deploy_mbart <- function(
                         type = "pbart",
                         k = 3,
                         ntree = 40L,
-                        ndpost = 100L, #500
-                        nskip = 50L, #150
+                        ndpost = 500L, #500
+                        nskip = 150L, #150
                         keepevery = 10L,
                         printevery = 350,
                         sparse = TRUE)

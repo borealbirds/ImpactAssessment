@@ -4,16 +4,21 @@
 # created: September 28, 2025
 # ---
 
-library(furrr)
+library(BAMexploreR)
+library(parallel)
 library(terra)
 library(tidyverse)
 
 
-# set root path
-root <- "G:/Shared drives/BAM_NationalModels5"
-ia_dir <- file.path(root, "data", "Extras", "sandbox_data", "impactassessment_sandbox")
+# set paths
+root <- "/home/mannfred/projects/def-ecknight/NationalModels"
+ia_dir <- "/home/mannfred/scratch/impact_assessment"
 
-
+bootstrap_dir     <- file.path(root, "output/06_bootstraps")
+bart_backfill_dir <- file.path(ia_dir, "bart_models/2020")
+importance_path   <- file.path(ia_dir, "Rscripts/bam_predictor_importance_v5.rds")
+metrics_path      <- file.path(ia_dir, "Rscripts/continuous_holdout_metrics.rds")
+industry_dir      <- file.path(ia_dir, "Rscripts/hirshpearson")
 
 # import data ------------------------------------------------------
 
@@ -25,6 +30,12 @@ all_subbasins_subset <- vect(file.path(ia_dir, "hydrobasins_masked_merged_subset
 
 # import industry footprint pixels
 combined_poly_path <- file.path(ia_dir, "combined_industry_footprint.gpkg")
+
+# import model performance metrics for continuous covariates
+continuous_holdout_metrics <- readRDS("/home/mannfred/scratch/impact_assessment/Rscripts/continuous_holdout_metrics.rds")
+
+
+# data prep  ------------------------------------------------------
 
 # create a reference table for which subbasins are in which BCRs 
 # (some subbasins will be in multiple BCRs, and that's OK)

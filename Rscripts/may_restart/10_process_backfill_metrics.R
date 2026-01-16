@@ -18,7 +18,7 @@ import_matrix <- function(i, year){
 }
 
 # merge confusion tables across subbasins
-subbasin_indices <- c(36)
+subbasin_indices <- c(1:40)
 confusion_tables <- lapply(X = subbasin_indices, FUN = import_matrix, year = 2020)
 names(confusion_tables) <- paste("subbasin_", subbasin_indices)
 confusion_tables_merged <- do.call(rbind, unlist(confusion_tables, recursive = FALSE))
@@ -58,7 +58,7 @@ import_metrics <- function(i, year){
 }
 
 # every RDS file is a list of dataframes containing subbasin metrics
-subbasin_indices <- c(30:35)
+subbasin_indices <- c(1:40)
 metrics <- lapply(X = subbasin_indices, FUN = import_metrics, year = 2020)
 names(metrics) <- paste("subbasin_", subbasin_indices)
 
@@ -88,3 +88,46 @@ categorical_holdout_metrics <-
   dplyr::select(1:3,13:15,17:18)
 saveRDS(categorical_holdout_metrics, file.path(getwd(), "data/derived_data/rds_files/model_metrics/categorical_holdout_metrics.rds"))
 
+
+
+
+# -------------------------------------------------------
+# inspect continuous holdout metrics
+
+# how many models have R^2 above some threshold?
+continuous_holdout_metrics |> 
+  summarise(
+    n_total = n(),
+    n_above = sum(r2 >= 0.7),
+    prop_above = mean(r2 >= 0.7)
+  )
+
+# how many models have a rmse/mae <= 1.5?
+continuous_holdout_metrics |> 
+  filter(r2 >= 0.7) |> 
+  summarise(
+    n_total = n(),
+    mean_ratio = mean(rmse/mae),
+    sd_ratio = sd(rmse/mae)
+    )
+
+# visualize distribution of rmse/mae
+test <- 
+  filter(continuous_holdout_metrics, r2 >= 0.7) |> 
+  mutate(ratio = rmse/mae)
+
+ggplot(test, aes(x = ratio)) + 
+  geom_histogram(binwidth = 0.05, fill="#69b3a2", color="#69b3a2", alpha=1) +
+  theme_classic()
+
+
+# -------------------------------------------------------
+# inspect categorical holdout metrics
+
+
+categorical_holdout_metrics |> 
+  group_by(covariate) |> 
+  summarise(
+    mean_accuracy = mean(accuracy),
+    sd_accuracy = sd(accuracy)
+  )

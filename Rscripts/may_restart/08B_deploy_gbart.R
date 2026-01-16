@@ -48,6 +48,28 @@ deploy_gbart <- function(
     
     logp("[%s] degenerate (≤2 unique values after log1p)", b)
     return(list(
+    df_backfill = df_backfill,
+    metrics     = metrics,
+    out_layers  = out_layers
+  ))
+  }
+  
+  # check that there is >1 high HF pixel to backfill (subbasins 423,304,247,246,221,160)
+  # if nrow(df_backfill_bart) == 1 then take the mean from the training pixels
+  if (nrow(df_backfill_bart) == 1) {
+    
+    mu <- mean(log1p(y[-holdout_idx]))
+    sd_y <- sd(log1p(y[-holdout_idx]))
+    
+    b_mean <- expm1(mu)
+    b_sd   <- expm1(sd_y)
+    
+    df_backfill[[b]] <- b_mean
+    out_layers[[paste0(b, "_mean")]] <- b_mean
+    out_layers[[paste0(b, "_sd")]]   <- b_sd
+    
+    logp("[%s] single backfill pixel: skipped gbart()", b)
+    return(list(
       df_backfill = df_backfill,
       metrics     = metrics,
       out_layers  = out_layers
