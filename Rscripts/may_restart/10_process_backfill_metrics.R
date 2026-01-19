@@ -18,7 +18,7 @@ import_matrix <- function(i, year){
 }
 
 # merge confusion tables across subbasins
-subbasin_indices <- c(1:40)
+subbasin_indices <- c(1:674)
 confusion_tables <- lapply(X = subbasin_indices, FUN = import_matrix, year = 2020)
 names(confusion_tables) <- paste("subbasin_", subbasin_indices)
 confusion_tables_merged <- do.call(rbind, unlist(confusion_tables, recursive = FALSE))
@@ -46,7 +46,12 @@ confusion_matrices <- lapply(X = categorical_responses, FUN = create_cm)
 names(confusion_matrices) <- categorical_responses
 
 #saveRDS(confusion_matrices, file.path(getwd(), "data/derived_data/rds_files/confusion_matrices.rds"))
-confusion_matrices <- readRDS(file.path(getwd(), "data/derived_data/rds_files/confusion_matrices.rds"))
+#confusion_matrices <- readRDS(file.path(getwd(), "data/derived_data/rds_files/confusion_matrices.rds"))
+
+# write each confusion matrix as a CSV
+for (nm in names(confusion_matrices)) {
+  write.csv(confusion_matrices[[nm]], file.path(getwd(), "data/derived_data/rds_files/", paste0(nm, ".csv")), row.names = TRUE)
+}
 
 # -------------------------------------------------------
 # inspect and synthesize holdout metrics 
@@ -58,7 +63,7 @@ import_metrics <- function(i, year){
 }
 
 # every RDS file is a list of dataframes containing subbasin metrics
-subbasin_indices <- c(1:40)
+subbasin_indices <- c(1:674)
 metrics <- lapply(X = subbasin_indices, FUN = import_metrics, year = 2020)
 names(metrics) <- paste("subbasin_", subbasin_indices)
 
