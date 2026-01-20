@@ -14,12 +14,6 @@ library(tidyverse)
 root <- "/home/mannfred/projects/def-ecknight/NationalModels"
 ia_dir <- "/home/mannfred/scratch/impact_assessment"
 
-bootstrap_dir     <- file.path(root, "output/06_bootstraps")
-bart_backfill_dir <- file.path(ia_dir, "bart_models/2020")
-importance_path   <- file.path(ia_dir, "bam_predictor_importance_v5.rds")
-metrics_path      <- file.path(ia_dir, "continuous_holdout_metrics.rds")
-industry_dir      <- file.path(ia_dir, "Rscripts/hirshpearson")
-
 
 # import data ------------------------------------------------------
 
@@ -29,14 +23,11 @@ bam_boundary <- terra::vect(file.path(root, "Regions", "BAM_BCR_NationalModel_Un
 # import merged + subsetted subbasins
 all_subbasins_subset <- terra::vect(file.path(ia_dir, "hydrobasins_masked_merged_subset.gpkg"))
 
-# import model performance metrics for continuous covariates
-continuous_holdout_metrics <- readRDS("/home/mannfred/scratch/impact_assessment/Rscripts/continuous_holdout_metrics.rds")
 
-
-# helper functions  ------------------------------------------------------
-
+# ------------------------------------------------------
 # create a reference table for which subbasins are in which BCRs 
-# (some subbasins will be in multiple BCRs, and that's OK)
+# some subbasins will be in multiple BCRs, and that's OK
+
 bcr_subbasins_ref <- {
   
     # logical matrix: rows=subbasins, cols=BCRs
@@ -52,12 +43,14 @@ bcr_subbasins_ref <- {
     )
 }
 
-
+# ------------------------------------------------------
+# define helper function:
 # mosaic (backfilled) subbasin stacks into a single BCR-wide stack
+
 mosaic_backfilled_stacks <- function(sub_ids) {
   
   paths <- file.path(
-    bart_backfill_dir,
+    file.path(ia_dir, "bart_models/2020"),
     paste0("subbasin_", sub_ids),
     paste0("subbasin_", sub_ids, "_backfill.tif")
   )
@@ -89,21 +82,26 @@ mosaic_backfilled_stacks <- function(sub_ids) {
 # keep track of which covariates were 
 # 1) requested by a bird model and 2)dropped when R^2 < 0.70
 # later we’ll record ranked importance of dropped covariates
-importance_tbl <- readRDS(importance_path)
-metrics_tbl    <- readRDS(metrics_path)
+bam_predictor_importance_v5 <- readRDS(file.path(ia_dir, "bam_predictor_importance_v5.rds"))
 
-good_backfill_vars <- metrics_tbl |>
+# import model performance metrics for continuous covariates
+continuous_holdout_metrics <- readRDS(file.path(ia_dir, "continuous_holdout_metrics.rds"))
+
+# find covariates with R^2 >= 0.7
+good_backfill_vars <- 
+  continuous_holdout_metrics |>
   filter(r2 >= 0.7) |>
   pull(covariate) |>
   unique()
 
+# define categorical covariates
+categorical_responses = c("ABoVE_1km", "NLCD_1km","MODISLCC_1km", "MODISLCC_5x5","SCANFI_1km","VLCE_1km")
+
 # import human footprint rasters ------------------------------------------------------
 
-industry_rasters <- list.files(industry_dir, pattern = "\\.tif$", full.names = TRUE)
-
-industry_names <- tools::file_path_sans_ext(basename(industry_rasters))
-industry_stack <- setNames(lapply(industry_rasters, terra::rast),
-                           industry_names)
+industry_rasters <- list.files(file.path(ia_dir, "Rscripts/hirshpearson"), pattern = "\\.tif$", full.names = TRUE)
+industry_names <- sub(".tif", "", basename(industry_rasters))
+industry_stack <- setNames(lapply(industry_rasters, terra::rast), industry_names)
 
 # define disturbance variables, which we'll set to zero when re-predicting
 disturbance_vars <-
@@ -116,48 +114,42 @@ disturbance_vars <-
 # define density prediction function ------------------------------------------------------
 predict_species_bcr <- function(species, year) {
   
-  spp_dir <- file.path(bootstrap_dir, species)
-  if (!dir.exists(spp_dir)) return(NULL)
+  # find all models for all BCRs for spp_i 
+  rdata_files <- list.files(file.path(root, "output/06_bootstraps/", species), 
+                            pattern = "can.*\\.Rdata$", 
+                            full.names = TRUE)
   
-  rdata_files <- list.files(spp_dir, pattern = "can.*\\.Rdata$", full.names = TRUE)
-  
-  do.call(bind_rows, lapply(rdata_files, function(rdata_path) {
+  # this sub-function will work through all BCRs for a given species x year
+  do.call(dplyr::bind_rows, lapply(rdata_files, function(rdata_path) {
     
-    load(rdata_path)   # loads b.list
-    mdl_list <- b.list
-    bcr_code <- attr(mdl_list[[1]], "bcr")
-    
+    load(rdata_path) # loads b.list for some spp x bcr
+    bcr_code <- attr(b.list[[1]], "bcr") # get current bcr
     message(species, " ", bcr_code)
     
     # find subbasins in current BCR
-    sub_ids <- bcr_subbasins_ref |>
-      filter(bcr_code == !!bcr_code) |>
-      pull(HYBAS_ID) |>
+    sub_ids <- 
+      bcr_subbasins_ref |>
+      dplyr::filter(bcr_code == !!bcr_code) |>
+      dplyr::pull(HYBAS_ID) |>
       unique()
     
-    if (length(sub_ids) == 0) return(NULL)
+    # get observed environmental stack for current BCR x year
+    stack_obs <- terra::rast(file.path(root, "gis/stacks", paste0(bcr_code, "_", year, ".tif")))
     
-    # get covariate stack for present BCR x year
-    obs_path <- file.path(root, "gis/stacks", paste0(bcr_code, "_", year, ".tif"))
-    if (!file.exists(obs_path)) return(NULL)
-    stack_obs <- terra::rast(obs_path)
-    
-    # get mosaiced watershed stacks
+    # get mosaiced watershed stacks for current BCR x year
     stack_bf <- mosaic_backfilled_stacks(sub_ids)
-    if (is.null(stack_bf)) return(NULL)
     
-    # get covariates from bootstrap models
-    # NOTE: this is only considering boostrap 1. EXPAND TO ALL BOOTS
-    varnames <- mdl_list[[1]]$var.names
+    # get all covariates used by bootstrap models for this spp x BCR
+    varnames <- unique(unlist(lapply(b.list, `[[`, "var.names")))
     
     # get predictor names from observed landscape
     X_obs <- stack_obs[[intersect(varnames, names(stack_obs))]]
     
     # get backfilled predictor names with R^2 > 0.7
     cont_vars <- intersect(good_backfill_vars, varnames)
-    cat_vars  <- setdiff(varnames, cont_vars)
+    cat_vars  <- categorical_responses
     
-    # populate bf_sets with mean and 95% CI of each continuous covariate
+    # create bf_sets to hold mean and 95% CI of each continuous covariate
     bf_sets <- list(mean = X_obs, low  = X_obs, high = X_obs)
     
     for (v in cont_vars) {
@@ -168,7 +160,8 @@ predict_species_bcr <- function(species, year) {
         1.96 * stack_bf[[paste0(v, "_sd")]]
     }
     
-    # IS THERE A PURPOSE OF SETting A LOW AND HIGH HERE???
+    # no uncertainty is propagated for cat_vars, here we are simply 
+    # creating the same slots as cont_vars for downstream cohesion
     for (v in cat_vars) {
       if (v %in% names(stack_bf)) {
         bf_sets$mean[[v]] <- stack_bf[[v]]
@@ -177,24 +170,15 @@ predict_species_bcr <- function(species, year) {
       }
     }
     
-    # define helper for running predict()
-    pred_one <- function(m, X) {
-      nt <- m$n.trees
-      terra::predict(X, m, n.trees = nt, type = "response")
-    }
-    
-
     # run predictions for 32 bootstraps in `b.list`
     # observed landscape
-    obs_preds <- lapply(mdl_list, pred_one, X = X_obs)
+    obs_preds <- lapply(b.list, predict(X, m, n.trees = m$n.trees, type = "response"), X = X_obs)
     
     # run predictions for 32 bootstraps x 3 landscape layers (mean, low, high)
     # backfilled landscape
-    bf_preds <- lapply(bf_sets, function(X) lapply(mdl_list, pred_one, X = X))
+    bf_preds <- lapply(bf_sets, function(X) lapply(b.list, predict(X, m, n.trees = m$n.trees, type = "response"), X = X))
     
-  
-    # count birds from prediction surfaces
-    # WHY ALL_SUBBASINS_SUBSET???
+    # count birds from prediction surfaces intersecting our watersheds
     agg <- function(preds) {
       sapply(preds, function(r)
         terra::extract(r * 100, all_subbasins_subset,
