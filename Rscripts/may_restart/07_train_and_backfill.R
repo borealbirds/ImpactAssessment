@@ -1,0 +1,165 @@
+# ---
+# title: Impact Assessment: train models per subbasin and backfill industry footprints
+# author: Mannfred Boehm
+# created: August 7, 2025
+# ---
+
+#1. attach packages ----------------------------------------------
+print("* attaching packages on master *")
+library(BART)
+library(BAMexploreR)
+library(terra)
+library(tidyverse)
+
+
+#2. define local or cluster --------------------------------------
+test <- FALSE
+cc <- TRUE
+
+# if working on cluster, extract arguments from SLURM script
+args <- commandArgs(trailingOnly = TRUE)
+if (length(args) == 0) {
+  stop("no subbasin index supplied")
+}
+
+# subbasin_index <- c(3,5,7,36)
+subbasin_index <- as.integer(args[1])
+
+#3. set root path ------------------------------------------------
+print("* setting root file path *")
+
+if(!cc){root <- "G:/Shared drives/BAM_NationalModels5"}
+if(cc){root <- "/home/mannfred/scratch/impact_assessment"}
+
+if(!cc){ia_dir <- file.path(root, "data", "Extras", "sandbox_data", "impactassessment_sandbox")}
+if(cc){ia_dir <- file.path(root)}
+
+print(ia_dir)
+
+#4. define model covariates --------------------------------------
+# define predictor and response variables
+# store predictor metadata as a reference
+predictor_metadata <-
+  dplyr::tibble(BAMexploreR::predictor_metadata) |>
+  dplyr::filter(version == "v5") |>
+  dplyr::select(predictor, definition, predictor_class) |>
+  dplyr::mutate(dplyr::across('predictor', stringr::str_replace, 'Year', 'year')) |>
+  dplyr::mutate(dplyr::across('predictor', stringr::str_replace, 'Method','method'))
+
+# define soil covariate names
+soil_covs <- tibble::tibble(predictor = c("cec_0-5cm_mean_1000", "cec_100-200cm_mean_1000",
+                                  "cec_15-30cm_mean_1000", "cec_30-60cm_mean_1000",  
+                                  "cec_5-15cm_mean_1000", "cec_60-100cm_mean_1000", 
+                                  "soc_0-5cm_mean_1000",  "soc_100-200cm_mean_1000",
+                                  "soc_15-30cm_mean_1000", "soc_30-60cm_mean_1000",  
+                                  "soc_5-15cm_mean_1000", "soc_60-100cm_mean_1000"),
+                    predictor_class = rep("Soil Properties", 12))
+
+# convert some abiotic variables to biotic variables
+actually_biotic_what <- c("Peatland_5x5", "Peatland_1km")
+actually_biotic_df <- tibble::tibble(predictor = actually_biotic_what, predictor_class = c("Wetland", "Wetland"))
+
+# define abiotic variables (V5 abiotic + CAfire + soil properties)
+abiotic_vars <-
+  predictor_metadata |> 
+  dplyr::filter(predictor_class %in% c("Annual Climate", "Climate Normals", "Topography", "Wetland", "Disturbance")) |> 
+  tibble::add_row(predictor = "CAfire", predictor_class ="Time Since Disturbance") |> 
+  dplyr::filter(!(predictor %in% actually_biotic_what)) |> 
+  dplyr::bind_rows(soil_covs)
+
+# define biotic variables
+biotic_vars <-
+  predictor_metadata |> 
+  dplyr::filter(!(predictor_class %in% c(abiotic_vars$predictor_class, "Time", "Method"))) |> 
+  dplyr::bind_rows(actually_biotic_df)
+
+# re-order biotic variables 
+neworder <- readRDS(file = file.path(ia_dir, "biotic_variable_hierarchy.rds"))
+biotic_vars <- biotic_vars[match(neworder, biotic_vars$predictor), ]
+
+if(exists("biotic_vars")){
+  print("* biotic_vars successfully constructed *")
+}else{print("* biotic_vars not constructed *")}
+
+
+#5. import helper functions ----------------------------------------
+ 
+# logfile function to track progress
+make_logger <- function(logfile) { # create a new log file
+  dir.create(dirname(logfile), recursive = TRUE, showWarnings = FALSE)
+  function(fmt, ...) { # write a new line
+    line <- sprintf("[%s pid=%d host=%s] %s\n",
+                    format(Sys.time(), "%F %T"),
+                    Sys.getpid(),
+                    Sys.info()[["nodename"]],
+                    sprintf(fmt, ...))
+    cat(line, file = logfile, append = TRUE)
+  } # close new line writing function
+} # close file generating function
+
+# training and backfilling function (subbasin level)
+if(!cc){source(file.path(getwd(), "Rscripts", "may_restart", "08A_train_and_backfill_subbasin_s.R"))}
+if(cc){source(file.path(root, "Rscripts", "08A_train_and_backfill_subbasin_s.R"))}
+
+
+#6. train models and backfill biotic features for year y -----------------------------
+
+# load spatial objects inside of each worker to avoid "external pointer is not valid"
+# library(terra)
+# import pre-mosaiced covariate stack for year_y
+year <- 2020
+stack_y <- terra::rast(file.path(ia_dir, sprintf("covariates_mosaiced_%d.tif", year)))
+               
+# define categorical features
+categorical_responses = c("ABoVE_1km", "NLCD_1km","MODISLCC_1km", "MODISLCC_5x5","SCANFI_1km","VLCE_1km")
+                
+# import low hf layer and project to current stack
+lowhf_mask <- terra::rast(file.path(ia_dir, "hirshpearson", "CanHF_1km_lessthan1.tif"))
+lowhf_mask <- terra::project(x=lowhf_mask, y=stack_y, method = "near")
+                
+# import high hf layer and project to current stack
+highhf_mask <- terra::rast(file.path(ia_dir, "hirshpearson", "CanHF_1km_morethan1.tif"))
+highhf_mask <- terra::project(x=highhf_mask, y=stack_y, method = "near")
+                
+# import subbasin boundaries and project to current stack
+all_subbasins_subset <- terra::vect(file.path(ia_dir, "hydrobasins_masked_merged_subset.gpkg"))
+all_subbasins_subset <- terra::project(x=all_subbasins_subset, y=stack_y)
+                
+backfill_results <- tryCatch(
+                  train_and_backfill_subbasin_s(
+                  subbasin_index = subbasin_index, 
+                  year           = year,
+                  stack_y        = stack_y,
+                  lowhf_mask     = lowhf_mask,
+                  highhf_mask    = highhf_mask,
+                  abiotic_vars   = abiotic_vars, 
+                  biotic_vars    = biotic_vars,
+                  ia_dir         = ia_dir,
+                  quiet          = FALSE,
+                  neworder       = neworder,
+                  categorical_responses = categorical_responses,
+                  all_subbasins_subset  = all_subbasins_subset,
+                  cc = cc
+                ), # close train_and_backfill_subbasin_s
+                
+                error = function(e) {
+                  message("Error in subbasin ", subbasin_index, ": ", conditionMessage(e))
+                  return(list(
+                    subbasin = subbasin_index,
+                    error = conditionMessage(e)
+                  ))
+                } # close error
+                
+            ) # close trycatch
+   
+
+#11. stop the cluster----
+#print("* stopping cluster :-)*")
+#stopCluster(cl)
+
+#12. save backfilled raster for this species x year
+print("* saving raster file *")
+print(backfill_results)
+
+#if(cc){ q() }
+
