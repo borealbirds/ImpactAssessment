@@ -19,7 +19,7 @@ all_subbasins_subset <- vect(file.path(ia_dir, "hydrobasins_masked_merged_subset
 bcrs_needed <- BAMexploreR::bam_get_bcr(version = "v5", ext = all_subbasins_subset)
   
 # define temporal scope
-years <- seq(from = 1990, to = 2020, by = 5)
+years <- seq(from = 1990, to = 2015, by = 5)
 # years <- seq(from = 2020, to = 2020, by = 5)
 
 # -----------------------------------------------------

@@ -53,6 +53,16 @@ for (nm in names(confusion_matrices)) {
   write.csv(confusion_matrices[[nm]], file.path(getwd(), "data/derived_data/rds_files/", paste0(nm, ".csv")), row.names = TRUE)
 }
 
+# create companion matrices that give row-normalized prediction accuracy
+accuracy_matrices <- lapply(confusion_matrices, function(cm) {
+  sweep(cm, 1, rowSums(cm), "/") *100
+})
+
+# write each accuracy matrix as a CSV
+for (nm in names(accuracy_matrices)) {
+  write.csv(accuracy_matrices[[nm]], file.path(getwd(), "data/derived_data/rds_files/", paste0(nm, ".csv")), row.names = TRUE)
+}
+
 # -------------------------------------------------------
 # inspect and synthesize holdout metrics 
 
