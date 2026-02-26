@@ -128,11 +128,16 @@ continuous_holdout_metrics |>
 
 # visualize distribution of rmse/mae
 test <- 
-  filter(continuous_holdout_metrics, r2 >= 0.7) |> 
+  filter(continuous_holdout_metrics) |> 
   mutate(ratio = rmse/mae)
 
 ggplot(test, aes(x = ratio)) + 
   geom_histogram(binwidth = 0.05, fill="#69b3a2", color="#69b3a2", alpha=1) +
+  geom_vline(aes(xintercept = mean(ratio, na.rm = TRUE))) +
+  scale_y_continuous(expand = c(0, 0)) +
+  scale_x_continuous(expand = c(0, 0)) +
+  xlim(c(0.7,11)) +
+  labs(x = "RMSE/MAE") + 
   theme_classic()
 
 

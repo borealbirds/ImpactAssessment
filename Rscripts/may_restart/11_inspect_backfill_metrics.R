@@ -36,8 +36,8 @@ continuous_holdout_metrics <- readRDS(file.path(getwd(), "data/derived_data/rds_
 continuous_holdout_metrics |> 
   mutate(covariate = reorder(covariate, r2, FUN = median, na.rm = TRUE, decreasing = TRUE)) |> 
   ggplot(aes(x = covariate, y = r2, fill = covariate, colour = covariate)) +
-  geom_boxplot(outlier.shape = NA, alpha = 0.2) +
-  geom_jitter(width = 0.2, alpha = 0.4, size = 1, shape = 16) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.2, lwd=0.3) +
+  geom_jitter(width = 0.2, alpha = 0.2, size = 1, shape = 16) +
   scale_fill_manual(values = rep_len(c("#999999", "#E69F00", "#56B4E9"), length(unique(continuous_holdout_metrics$covariate)))) +
   scale_colour_manual(values = rep_len(c("#999999", "#E69F00", "#56B4E9"), length(unique(continuous_holdout_metrics$covariate)))) +
   coord_cartesian(ylim = c(-3, 1)) + 
