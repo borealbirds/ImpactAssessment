@@ -80,12 +80,10 @@ sbatch 12_repredict_birds.sh
 ## Key Packages
 
 - `BART`: `gbart()` (Gaussian) and `mbart()` (multinomial) — core backfilling models
-- `BAMexploreR`: BAM-internal package; provides `predictor_metadata`, `bam_get_bcr()`, and V5 BRT models
+- `BAMexploreR`: installed from https://github.com/borealbirds/BAMexploreR. provides `predictor_metadata`, `bam_get_bcr()`
 - `terra`: All raster/vector spatial operations (CRS: EPSG:5072, Canada Albers)
 - `tidyverse`: Data manipulation throughout
 
 ## Data Notes
 
 Large spatial files (`.tif`, `.rds`, `.gpkg`, `.shp`) are gitignored. Versioned outputs are the CSV accuracy/confusion matrices in `data/derived_data/rds_files/`.
-
-The `BAMexploreR` package must be available from the BAM internal package repository — it is not on CRAN.
