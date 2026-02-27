@@ -12,15 +12,22 @@ This is a boreal bird impact assessment pipeline. The goal is to estimate the co
 
 ## Execution Contexts
 
-Scripts toggle between local (Google Drive) and Compute Canada cluster using a `cc` flag:
+Scripts support three execution contexts controlled by `cc` and `local` flags:
 
 ```r
-cc <- TRUE  # cluster
-if (!cc) { root <- "G:/Shared drives/BAM_NationalModels5" }
-if (cc)  { root <- "/home/mannfred/scratch/impact_assessment" }
-ia_dir <- file.path(root, "data", "Extras", "sandbox_data", "impactassessment_sandbox")  # local
-ia_dir <- root  # cluster
+cc    <- TRUE   # TRUE = Compute Canada cluster
+local <- FALSE  # TRUE = local RProject machine
+
+if (cc)            { ia_dir <- "/home/mannfred/scratch/impact_assessment" }
+if (!cc && local)  { ia_dir <- getwd() }
+if (!cc && !local) { ia_dir <- file.path("G:/Shared drives/BAM_NationalModels5", "data", "Extras", "sandbox_data", "impactassessment_sandbox") }
 ```
+
+The cluster and local RProject share the same subdirectory layout (see **Data Directory Structure** below). The Google Drive path is legacy and retains the old flat layout.
+
+**Colleague's NationalModels directory** (`nm_root`): scripts 12A–12C and 13 also reference
+`/home/mannfred/projects/def-ecknight/NationalModels` for BRT bootstrap models and BCR
+covariate stacks. This path is cluster-only and must not be changed.
 
 Most prep scripts (01–06) run locally. Compute-heavy scripts (07, 12A) run on the cluster via SLURM array jobs.
 
@@ -73,7 +80,7 @@ sbatch 12_repredict_birds.sh
 
 **Coordinate scaling**: Within each subbasin, lat/lon are centered and scaled before being added as predictors to improve BART performance.
 
-**Output per subbasin**: `bart_models/{year}/subbasin_{i}/subbasin_{i}_backfill.tif` (mean and SD layers for each covariate), `_metrics.rds`, `_confusion.rds`.
+**Output per subbasin**: `data/derived_data/bart_models/{year}/subbasin_{i}/subbasin_{i}_backfill.tif` (mean and SD layers for each covariate), `_metrics.rds`, `_confusion.rds`.
 
 **Re-prediction**: `12A` mosaics backfilled subbasin rasters back to BCR-level stacks, then overlays them on the observed covariate stack to produce an "observed" prediction and a "backfilled" (counterfactual) prediction for each species × BCR.
 
@@ -84,6 +91,48 @@ sbatch 12_repredict_birds.sh
 - `terra`: All raster/vector spatial operations (CRS: EPSG:5072, Canada Albers)
 - `tidyverse`: Data manipulation throughout
 
-## Data Notes
+## Data Directory Structure
 
-Large spatial files (`.tif`, `.rds`, `.gpkg`, `.shp`) are gitignored. Versioned outputs are the CSV accuracy/confusion matrices in `data/derived_data/rds_files/`.
+```
+data/
+├── raw_data/
+│   ├── biotic_variable_hierarchy.rds
+│   ├── covariates_mosaiced/
+│   │   └── covariates_mosaiced_{year}.tif
+│   ├── hirshpearson/
+│   │   ├── CanHF_1km_lessthan1.tif
+│   │   ├── CanHF_1km_morethan1.tif
+│   │   └── {footprint_type}.tif      # built, crop, forestry_harvest, mines, etc.
+│   ├── hydrobasins_masked_merged_subset.gpkg
+│   └── Regions/
+│       └── BAM_BCR_NationalModel_Unbuffered.shp
+└── derived_data/
+    ├── bart_models/
+    │   └── {year}/
+    │       └── subbasin_{i}/
+    │           ├── subbasin_{i}_backfill.tif
+    │           ├── subbasin_{i}_metrics.rds
+    │           └── subbasin_{i}_confusion.rds
+    ├── density_tables/
+    │   └── {species}_{year}.rds
+    ├── predictions/
+    │   └── {species}/{bcr_code}/{year}/
+    │       ├── observed_mean.tif / observed_sd.tif
+    │       └── backfilled_{scenario}_mean.tif / _sd.tif
+    └── rds_files/
+        ├── model_metrics/{year}/
+        │   ├── continuous_train_metrics.rds
+        │   ├── continuous_holdout_metrics.rds
+        │   ├── categorical_train_metrics.rds
+        │   └── categorical_holdout_metrics.rds
+        ├── accuracy_matrices/{year}/{covariate}.csv
+        ├── confusion_matrices/{year}/{covariate}.csv
+        ├── bam_predictor_importance_v5.rds
+        ├── continuous_holdout_metrics.rds
+        └── continuous_holdout_metrics_w_importance.rds
+```
+
+Large spatial files (`.tif`, `.gpkg`, `.shp`) and most `.rds` files are gitignored. Versioned outputs are the CSV accuracy/confusion matrices in `data/derived_data/rds_files/`.
+
+## Instructions from Masa
+Always ignore the directory /Rscripts/misc when thinking. It's not immediately relevant to the project.
