@@ -10,23 +10,31 @@ library(terra)
 library(tidyverse)
 
 # set paths ------------------------------------------------------
-root <- "/home/mannfred/projects/def-ecknight/NationalModels"
-ia_dir <- "/home/mannfred/scratch/impact_assessment"
+
+# colleague's NationalModels directory — paths here must not change
+nm_root <- "/home/mannfred/projects/def-ecknight/NationalModels"
+
+cc    <- TRUE    # TRUE = Compute Canada cluster
+local <- FALSE   # TRUE = local RProject machine
+
+if (cc)            { ia_dir <- "/home/mannfred/scratch/impact_assessment" }
+if (!cc && local)  { ia_dir <- getwd() }
+if (!cc && !local) { ia_dir <- file.path("G:/Shared drives/BAM_NationalModels5", "data", "Extras", "sandbox_data", "impactassessment_sandbox") }
 
 
 # import data ------------------------------------------------------
 
 # import BCR boundaries
-bam_boundary <- terra::vect(file.path(ia_dir, "Regions", "BAM_BCR_NationalModel_Unbuffered.shp")) 
+bam_boundary <- terra::vect(file.path(ia_dir, "data", "raw_data", "Regions", "BAM_BCR_NationalModel_Unbuffered.shp"))
 
 # import merged + subsetted subbasins
-all_subbasins_subset <- terra::vect(file.path(ia_dir, "hydrobasins_masked_merged_subset.gpkg"))
+all_subbasins_subset <- terra::vect(file.path(ia_dir, "data", "raw_data", "hydrobasins_masked_merged_subset.gpkg"))
 
 # import predictor importance from V5 models
-bam_predictor_importance_v5 <- readRDS(file.path(ia_dir, "bam_predictor_importance_v5.rds"))
+bam_predictor_importance_v5 <- readRDS(file.path(ia_dir, "data", "derived_data", "rds_files", "bam_predictor_importance_v5.rds"))
 
 # import model performance metrics for continuous covariates
-continuous_holdout_metrics <- readRDS(file.path(ia_dir, "continuous_holdout_metrics.rds"))
+continuous_holdout_metrics <- readRDS(file.path(ia_dir, "data", "derived_data", "rds_files", "continuous_holdout_metrics.rds"))
 
 # ------------------------------------------------------
 # create a reference table for which subbasins are in which BCRs 
@@ -86,4 +94,4 @@ covariate_backfill_importance <-
     by = c("bcr", "covariate")
   )
 
-saveRDS(covariate_backfill_importance, file.path(ia_dir, "continuous_holdout_metrics_w_importance.rds"))
+saveRDS(covariate_backfill_importance, file.path(ia_dir, "data", "derived_data", "rds_files", "continuous_holdout_metrics_w_importance.rds"))

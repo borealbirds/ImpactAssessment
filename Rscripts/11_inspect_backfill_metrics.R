@@ -7,8 +7,12 @@
 library(terra)
 library(tidyverse)
 
-root <- "G:/Shared drives/BAM_NationalModels5"
-ia_dir <- file.path(root, "data", "Extras", "sandbox_data", "impactassessment_sandbox")
+cc    <- FALSE   # TRUE = Compute Canada cluster
+local <- TRUE    # TRUE = local RProject machine
+
+if (cc)            { ia_dir <- "/home/mannfred/scratch/impact_assessment" }
+if (!cc && local)  { ia_dir <- getwd() }
+if (!cc && !local) { ia_dir <- file.path("G:/Shared drives/BAM_NationalModels5", "data", "Extras", "sandbox_data", "impactassessment_sandbox") }
 
 # -------------------------------------------------------
 # continuous features: plot model performance by covariate
@@ -82,14 +86,14 @@ test2 <- categorical_holdout_metrics |>
 
 # import covariate stacks
 year <- 2020
-stack_y <- terra::rast(file.path(ia_dir, sprintf("covariates_mosaiced_%d.tif", year)))
+stack_y <- terra::rast(file.path(ia_dir, "data", "raw_data", "covariates_mosaiced", sprintf("covariates_mosaiced_%d.tif", year)))
 
 # import training set
-lowhf_mask <- terra::rast(file.path(ia_dir, "hirshpearson", "CanHF_1km_lessthan1.tif"))
+lowhf_mask <- terra::rast(file.path(ia_dir, "data", "raw_data", "hirshpearson", "CanHF_1km_lessthan1.tif"))
 lowhf_mask <- terra::project(x=lowhf_mask, y=stack_y, method = "near")
 
 # import subbasin boundaries and project to current stack
-all_subbasins_subset <- terra::vect(file.path(ia_dir, "hydrobasins_masked_merged_subset.gpkg"))
+all_subbasins_subset <- terra::vect(file.path(ia_dir, "data", "raw_data", "hydrobasins_masked_merged_subset.gpkg"))
 all_subbasins_subset <- terra::project(x=all_subbasins_subset, y=stack_y)
 
 # VLCE: get lowHF pixels per subbasin

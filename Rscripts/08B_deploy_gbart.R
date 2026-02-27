@@ -12,19 +12,12 @@ deploy_gbart <- function(
     out_layers,
     logp,
     cc,
-    root
+    ia_dir
 ) {
-  
-  # source BART metrics summary functions
-  if(!cc){
-    source(file.path(getwd(), "Rscripts", "may_restart", "09_collect_metrics_gbart.R"))
-    source(file.path(getwd(), "Rscripts", "may_restart", "09_collect_holdout_metrics_gbart.R"))
-  }
 
-  if(cc){
-    source(file.path(root, "Rscripts",  "09_collect_metrics_gbart.R"))
-    source(file.path(root, "Rscripts",  "09_collect_holdout_metrics_gbart.R"))
-  }
+  # source BART metrics summary functions
+  source(file.path(ia_dir, "Rscripts", "09_collect_metrics_gbart.R"))
+  source(file.path(ia_dir, "Rscripts", "09_collect_holdout_metrics_gbart.R"))
   
   # define continuous response, and subset pixels to non-NAs for a given `b`
   # we use `df_train` instead of `df_train_bart` because the latter is purposely missing `b`

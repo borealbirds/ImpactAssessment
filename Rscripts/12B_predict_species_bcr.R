@@ -5,7 +5,7 @@ predict_species_bcr <- function(species, year, all_subbasins_subset) {
   message(Sys.time(), " | preparing for species=", species, " year=", year)
   
   # find all models (BCRs) for the current `species`
-  rdata_files <- list.files(file.path(root, "output/06_bootstraps", species), pattern = "can14.*\\.Rdata$", full.names = TRUE)
+  rdata_files <- list.files(file.path(nm_root,"output/06_bootstraps", species), pattern = "can14.*\\.Rdata$", full.names = TRUE)
   message(Sys.time(), " | ", species, " | found ", length(rdata_files), " BCR models")
   
   # this sub-function will work through all model-lists (one per BCR) for a given species
@@ -43,7 +43,7 @@ predict_species_bcr <- function(species, year, all_subbasins_subset) {
     }
     
     # get observed environmental stack for current BCR
-    stack_obs <- terra::rast(file.path(root, "gis/stacks", paste0(bcr_code, "_", year, ".tif")))
+    stack_obs <- terra::rast(file.path(nm_root,"gis/stacks", paste0(bcr_code, "_", year, ".tif")))
     message(Sys.time(), " | done loading observed stack")    
     
     # get mosaiced watershed stacks for current BCR
@@ -137,7 +137,7 @@ predict_species_bcr <- function(species, year, all_subbasins_subset) {
     
     # save mean and SD of prediction surfaces ------------------------------------------------------
     
-    pred_dir <- file.path(ia_dir, "predictions", species, bcr_code, year)
+    pred_dir <- file.path(ia_dir, "data", "derived_data", "predictions", species, bcr_code, year)
     dir.create(pred_dir, recursive = TRUE, showWarnings = FALSE)
     
     # compute mean + sd incrementally without stacking (too memory intense)

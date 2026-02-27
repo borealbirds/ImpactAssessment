@@ -7,14 +7,18 @@
 library(terra)
 library(tidyverse)
 
-root <- "G:/Shared drives/BAM_NationalModels5"
-ia_dir <- file.path(root, "data", "Extras", "sandbox_data", "impactassessment_sandbox")
+cc    <- FALSE   # TRUE = Compute Canada cluster
+local <- TRUE    # TRUE = local RProject machine
+
+if (cc)            { ia_dir <- "/home/mannfred/scratch/impact_assessment" }
+if (!cc && local)  { ia_dir <- getwd() }
+if (!cc && !local) { ia_dir <- file.path("G:/Shared drives/BAM_NationalModels5", "data", "Extras", "sandbox_data", "impactassessment_sandbox") }
 
 # -------------------------------------------------------
 # inspect and synthesize confusion matrices
 
 import_matrix <- function(i, year){
-  readRDS(file.path(ia_dir, "bart_models", year, sprintf("subbasin_%d/subbasin_%d_confusion.rds", i, i)))
+  readRDS(file.path(ia_dir, "data", "derived_data", "bart_models", year, sprintf("subbasin_%d/subbasin_%d_confusion.rds", i, i)))
 }
 
 # merge confusion tables across subbasins
@@ -69,7 +73,7 @@ for (nm in names(accuracy_matrices)) {
 categorical_responses = c("ABoVE_1km", "NLCD_1km","MODISLCC_1km", "MODISLCC_5x5","SCANFI_1km","VLCE_1km")
 
 import_metrics <- function(i, year){
-  readRDS(file.path(ia_dir, "bart_models", year, sprintf("subbasin_%d/subbasin_%d_metrics.rds", i, i)))
+  readRDS(file.path(ia_dir, "data", "derived_data", "bart_models", year, sprintf("subbasin_%d/subbasin_%d_metrics.rds", i, i)))
 }
 
 # every RDS file is a list of dataframes containing subbasin metrics

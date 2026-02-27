@@ -13,19 +13,12 @@ deploy_mbart <- function(
     out_layers,
     logp,
     cc,
-    root
+    ia_dir
 ) {
-  
+
   # source BART metrics summary functions
-  if(!cc){
-    source(file.path(getwd(), "Rscripts", "may_restart", "09_collect_metrics_mbart.R"))
-    source(file.path(getwd(), "Rscripts", "may_restart", "09_collect_holdout_metrics_mbart.R"))
-  }
-  
-  if(cc){
-    source(file.path(root, "Rscripts",  "09_collect_metrics_mbart.R"))
-    source(file.path(root, "Rscripts",  "09_collect_holdout_metrics_mbart.R"))
-  }
+  source(file.path(ia_dir, "Rscripts", "09_collect_metrics_mbart.R"))
+  source(file.path(ia_dir, "Rscripts", "09_collect_holdout_metrics_mbart.R"))
   
   # BART::mbart needs the landcover classes as a consecutive sequence of integers 1..K' 
   # but actual classes could be any arbitrary non-consecutive sequence of integers 1..K

@@ -4,14 +4,14 @@
 .exists_ok <- function(f) file.exists(f) && tryCatch({ terra::nlyr(terra::rast(f)) >= 1 }, error = function(e) FALSE)
 
 .done_bcr <- function(species, year, bcr_code) {
-  outdir <- file.path(ia_dir, "density_predictions", species, as.character(year))
+  outdir <- file.path(ia_dir, "data", "derived_data", "density_predictions", species, as.character(year))
   obs_fn <- file.path(outdir, sprintf("%s_%s_%s_observed.tif",   species, bcr_code, year))
   bf_fn  <- file.path(outdir, sprintf("%s_%s_%s_backfilled.tif", species, bcr_code, year))
   .exists_ok(obs_fn) && .exists_ok(bf_fn)
 }
 
 .model_exists <- function(species, bcr_code) {
-  file.exists(file.path(root, "output", "06_bootstraps", species, sprintf("%s_%s.Rdata", species, bcr_code)))
+  file.exists(file.path(nm_root, "output", "06_bootstraps", species, sprintf("%s_%s.Rdata", species, bcr_code)))
 }
 
 # ---- build the TODO grid (species × BCR) ----

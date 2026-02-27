@@ -15,16 +15,8 @@ train_and_backfill_subbasin_s <- function(
 ) {
   
   # source BART metrics summary functions
-  if(!cc){
-
-    source(file.path(getwd(), "Rscripts", "may_restart", "08B_deploy_gbart.R"))
-    source(file.path(getwd(), "Rscripts", "may_restart", "08B_deploy_mbart.R"))
-  }
-  
-  if(cc){
-    source(file.path(root, "Rscripts",  "08B_deploy_gbart.R"))
-    source(file.path(root, "Rscripts",  "08B_deploy_mbart.R"))
-  }
+  source(file.path(ia_dir, "Rscripts", "08B_deploy_gbart.R"))
+  source(file.path(ia_dir, "Rscripts", "08B_deploy_mbart.R"))
   
   # for logging progress
   logfile <- file.path(ia_dir, "logs", sprintf("Y%d_S%d.log", year, subbasin_index))
@@ -173,7 +165,7 @@ train_and_backfill_subbasin_s <- function(
         out_layers      = out_layers,
         logp            = logp,
         cc              = cc,
-        root            = root
+        ia_dir          = ia_dir
       )
       
       df_backfill <- res$df_backfill
@@ -197,7 +189,7 @@ train_and_backfill_subbasin_s <- function(
         out_layers      = out_layers,
         logp            = logp,
         cc              = cc,
-        root            = root
+        ia_dir          = ia_dir
       )
       
       df_backfill <- res$df_backfill
@@ -237,7 +229,7 @@ train_and_backfill_subbasin_s <- function(
   names(result_raster) <- created
   
   # write
-  out_dir <- file.path(ia_dir, "bart_models", year, sprintf("subbasin_%s", subbasin_index))
+  out_dir <- file.path(ia_dir, "data", "derived_data", "bart_models", year, sprintf("subbasin_%s", subbasin_index))
   dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
   terra::writeRaster(
     result_raster,

@@ -13,17 +13,25 @@ suppressPackageStartupMessages({
 
 
 # set paths ------------------------------------------------------
-root <- "/home/mannfred/projects/def-ecknight/NationalModels"
-ia_dir <- "/home/mannfred/scratch/impact_assessment"
+
+# colleague's NationalModels directory — paths here must not change
+nm_root <- "/home/mannfred/projects/def-ecknight/NationalModels"
+
+cc    <- TRUE    # TRUE = Compute Canada cluster
+local <- FALSE   # TRUE = local RProject machine
+
+if (cc)            { ia_dir <- "/home/mannfred/scratch/impact_assessment" }
+if (!cc && local)  { ia_dir <- getwd() }
+if (!cc && !local) { ia_dir <- file.path("G:/Shared drives/BAM_NationalModels5", "data", "Extras", "sandbox_data", "impactassessment_sandbox") }
 
 
 # import data ------------------------------------------------------
 
 # import BCR boundaries
-bam_boundary <- terra::vect(file.path(ia_dir, "Regions", "BAM_BCR_NationalModel_Unbuffered.shp")) 
+bam_boundary <- terra::vect(file.path(ia_dir, "data", "raw_data", "Regions", "BAM_BCR_NationalModel_Unbuffered.shp"))
 
 # import merged + subsetted subbasins
-all_subbasins_subset <- terra::vect(file.path(ia_dir, "hydrobasins_masked_merged_subset.gpkg"))
+all_subbasins_subset <- terra::vect(file.path(ia_dir, "data", "raw_data", "hydrobasins_masked_merged_subset.gpkg"))
 
 # ------------------------------------------------------
 # create a reference table for which subbasins are in which BCRs 
@@ -52,7 +60,7 @@ bcr_subbasins_ref <- {
 mosaic_backfilled_stacks <- function(sub_ids, year) {
   
   paths <- file.path(
-    file.path(ia_dir, "bart_models/", year),
+    file.path(ia_dir, "data", "derived_data", "bart_models", year),
     paste0("subbasin_", sub_ids),
     paste0("subbasin_", sub_ids, "_backfill.tif")
   )
@@ -130,7 +138,7 @@ biotic_continuous_vars <-
 
 # import human footprint rasters ------------------------------------------------------
 
-industry_rasters <- list.files(file.path(ia_dir, "Rscripts/hirshpearson"), pattern = "\\.tif$", full.names = TRUE)
+industry_rasters <- list.files(file.path(ia_dir, "data", "raw_data", "hirshpearson"), pattern = "\\.tif$", full.names = TRUE)
 industry_names <- sub(".tif", "", basename(industry_rasters))
 industry_stack <- setNames(lapply(industry_rasters, terra::rast), industry_names)
 
@@ -151,7 +159,7 @@ source(file.path(ia_dir, "Rscripts", "12B_predict_species_bcr.R"))
 # run one species on one core ------------------------------------------------------
 
 species_vec <- c("CAWA")
-# species_vec <- sort(list.dirs(file.path(root, "output/06_bootstraps"), full.names = FALSE, recursive = FALSE))[4]
+# species_vec <- sort(list.dirs(file.path(nm_root, "output/06_bootstraps"), full.names = FALSE, recursive = FALSE))[4]
 year <- 2020
 
 # get species index from SLURM
@@ -160,7 +168,7 @@ species <- species_vec[task_id]
 message("running species: ", species)
 
 res <- predict_species_bcr(species, year = year, all_subbasins_subset = all_subbasins_subset)
-dir.create(file.path(ia_dir, "density_tables"), showWarnings = FALSE)
-saveRDS(res, file = file.path(ia_dir, "density_tables", paste0(species, "_", year, ".rds")))
+dir.create(file.path(ia_dir, "data", "derived_data", "density_tables"), showWarnings = FALSE)
+saveRDS(res, file = file.path(ia_dir, "data", "derived_data", "density_tables", paste0(species, "_", year, ".rds")))
 message(Sys.time(), " nice.")
 

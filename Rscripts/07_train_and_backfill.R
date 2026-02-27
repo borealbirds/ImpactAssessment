@@ -13,26 +13,25 @@ library(tidyverse)
 
 
 #2. define local or cluster --------------------------------------
-test <- FALSE
-cc <- TRUE
+test  <- FALSE
+cc    <- TRUE   # TRUE = Compute Canada cluster
+local <- FALSE  # TRUE = local RProject machine (overrides Google Drive path)
 
 # if working on cluster, extract arguments from SLURM script
 args <- commandArgs(trailingOnly = TRUE)
-if (length(args) == 0) {
+if (cc && length(args) == 0) {
   stop("no subbasin index supplied")
 }
 
 # subbasin_index <- c(3,5,7,36)
-subbasin_index <- as.integer(args[1])
+subbasin_index <- if (cc) as.integer(args[1]) else 1L
 
 #3. set root path ------------------------------------------------
 print("* setting root file path *")
 
-if(!cc){root <- "G:/Shared drives/BAM_NationalModels5"}
-if(cc){root <- "/home/mannfred/scratch/impact_assessment"}
-
-if(!cc){ia_dir <- file.path(root, "data", "Extras", "sandbox_data", "impactassessment_sandbox")}
-if(cc){ia_dir <- file.path(root)}
+if (cc)            { ia_dir <- "/home/mannfred/scratch/impact_assessment" }
+if (!cc && local)  { ia_dir <- getwd() }
+if (!cc && !local) { ia_dir <- file.path("G:/Shared drives/BAM_NationalModels5", "data", "Extras", "sandbox_data", "impactassessment_sandbox") }
 
 print(ia_dir)
 
@@ -74,7 +73,7 @@ biotic_vars <-
   dplyr::bind_rows(actually_biotic_df)
 
 # re-order biotic variables 
-neworder <- readRDS(file = file.path(ia_dir, "biotic_variable_hierarchy.rds"))
+neworder <- readRDS(file = file.path(ia_dir, "data", "raw_data", "biotic_variable_hierarchy.rds"))
 biotic_vars <- biotic_vars[match(neworder, biotic_vars$predictor), ]
 
 if(exists("biotic_vars")){
@@ -98,8 +97,7 @@ make_logger <- function(logfile) { # create a new log file
 } # close file generating function
 
 # training and backfilling function (subbasin level)
-if(!cc){source(file.path(getwd(), "Rscripts", "may_restart", "08A_train_and_backfill_subbasin_s.R"))}
-if(cc){source(file.path(root, "Rscripts", "08A_train_and_backfill_subbasin_s.R"))}
+source(file.path(ia_dir, "Rscripts", "08A_train_and_backfill_subbasin_s.R"))
 
 
 #6. train models and backfill biotic features for year y -----------------------------
@@ -108,21 +106,21 @@ if(cc){source(file.path(root, "Rscripts", "08A_train_and_backfill_subbasin_s.R")
 # library(terra)
 # import pre-mosaiced covariate stack for year_y
 year <- 2015
-stack_y <- terra::rast(file.path(ia_dir, sprintf("covariates_mosaiced_%d.tif", year)))
-               
+stack_y <- terra::rast(file.path(ia_dir, "data", "raw_data", "covariates_mosaiced", sprintf("covariates_mosaiced_%d.tif", year)))
+
 # define categorical features
 categorical_responses = c("ABoVE_1km", "NLCD_1km","MODISLCC_1km", "MODISLCC_5x5","SCANFI_1km","VLCE_1km")
-                
+
 # import low hf layer and project to current stack
-lowhf_mask <- terra::rast(file.path(ia_dir, "hirshpearson", "CanHF_1km_lessthan1.tif"))
+lowhf_mask <- terra::rast(file.path(ia_dir, "data", "raw_data", "hirshpearson", "CanHF_1km_lessthan1.tif"))
 lowhf_mask <- terra::project(x=lowhf_mask, y=stack_y, method = "near")
-                
+
 # import high hf layer and project to current stack
-highhf_mask <- terra::rast(file.path(ia_dir, "hirshpearson", "CanHF_1km_morethan1.tif"))
+highhf_mask <- terra::rast(file.path(ia_dir, "data", "raw_data", "hirshpearson", "CanHF_1km_morethan1.tif"))
 highhf_mask <- terra::project(x=highhf_mask, y=stack_y, method = "near")
-                
+
 # import subbasin boundaries and project to current stack
-all_subbasins_subset <- terra::vect(file.path(ia_dir, "hydrobasins_masked_merged_subset.gpkg"))
+all_subbasins_subset <- terra::vect(file.path(ia_dir, "data", "raw_data", "hydrobasins_masked_merged_subset.gpkg"))
 all_subbasins_subset <- terra::project(x=all_subbasins_subset, y=stack_y)
                 
 backfill_results <- tryCatch(
