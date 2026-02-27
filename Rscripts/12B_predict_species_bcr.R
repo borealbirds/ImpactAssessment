@@ -57,18 +57,21 @@ predict_species_bcr <- function(species, year, all_subbasins_subset) {
     footprint_layer <- stack_bf[[grep("_mean$", names(stack_bf))[1]]]
     message(Sys.time(), " | done loading backfilled stack")
     
-    # split BART outputs
-    mu_stack <- stack_bf[[grep(pattern = "_mean$", x = names(stack_bf))]]
-    names(mu_stack) <- sub("_mean$", "", names(mu_stack)) # remove "_mean" suffix
-    
-    sd_stack <- stack_bf[[grep(pattern = "_sd$", x = names(stack_bf))]]
-    names(sd_stack) <- sub("_sd$", "", names(sd_stack)) # remove "_sd" suffix
-    
-    # construct uncertainty scenarios
+    # split BART outputs (mean + empirical posterior quantiles)
+    mu_stack <- stack_bf[[grep("_mean$", names(stack_bf))]]
+    names(mu_stack)   <- sub("_mean$", "", names(mu_stack))
+
+    q025_stack <- stack_bf[[grep("_q025$", names(stack_bf))]]
+    names(q025_stack) <- sub("_q025$", "", names(q025_stack))
+
+    q975_stack <- stack_bf[[grep("_q975$", names(stack_bf))]]
+    names(q975_stack) <- sub("_q975$", "", names(q975_stack))
+
+    # construct counterfactual scenarios using empirical posterior quantiles
     X_bf_sets <- list(
-      mean = make_counterfactual_stack(stack_obs, mu_stack, sd_stack,  0),
-      low  = make_counterfactual_stack(stack_obs, mu_stack, sd_stack, -1.96),
-      high = make_counterfactual_stack(stack_obs, mu_stack, sd_stack,  1.96)
+      mean = make_counterfactual_stack(stack_obs, mu_stack),
+      low  = make_counterfactual_stack(stack_obs, q025_stack),
+      high = make_counterfactual_stack(stack_obs, q975_stack)
     )
     
     # create containers to store predictions
@@ -93,7 +96,8 @@ predict_species_bcr <- function(species, year, all_subbasins_subset) {
       biotic_cont_vars <- intersect(cont_vars, biotic_continuous_vars)
       
       missing_bf <- biotic_cont_vars[!(paste0(biotic_cont_vars, "_mean") %in% names(stack_bf) &
-                                         paste0(biotic_cont_vars, "_sd")   %in% names(stack_bf))]
+                                         paste0(biotic_cont_vars, "_q025") %in% names(stack_bf) &
+                                         paste0(biotic_cont_vars, "_q975") %in% names(stack_bf))]
       
       if (length(missing_bf) > 0) {
         message(Sys.time(), " | ", species, " ", bcr_code, " | bootstrap=", i, " | missing backfilled cont vars: ", paste(missing_bf, collapse = ", "))

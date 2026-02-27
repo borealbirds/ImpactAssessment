@@ -35,9 +35,11 @@ deploy_gbart <- function(
   # this happened in subbasin 8 with SCANFIBalsamFir_5x5
   if (length(unique(log1p(y[-holdout_idx]))) <= 2) {
     
-    df_backfill[[b]] <- mean(y[-holdout_idx])
-    out_layers[[paste0(b, "_mean")]] <- rep(mean(y[-holdout_idx]), nrow(df_backfill))
-    out_layers[[paste0(b, "_sd")]]   <- rep(0, nrow(df_backfill))
+    b_mean_deg <- mean(y[-holdout_idx])
+    df_backfill[[b]] <- b_mean_deg
+    out_layers[[paste0(b, "_mean")]] <- rep(b_mean_deg, nrow(df_backfill))
+    out_layers[[paste0(b, "_q025")]] <- rep(b_mean_deg, nrow(df_backfill))
+    out_layers[[paste0(b, "_q975")]] <- rep(b_mean_deg, nrow(df_backfill))
     
     logp("[%s] degenerate (≤2 unique values after log1p)", b)
     return(list(
@@ -51,15 +53,15 @@ deploy_gbart <- function(
   # if nrow(df_backfill_bart) == 1 then take the mean from the training pixels
   if (nrow(df_backfill_bart) == 1) {
     
-    mu <- mean(log1p(y[-holdout_idx]))
-    sd_y <- sd(log1p(y[-holdout_idx]))
-    
-    b_mean <- expm1(mu)
-    b_sd   <- expm1(sd_y)
-    
+    y_tr   <- y[-holdout_idx]
+    b_mean <- mean(y_tr)
+    b_q025 <- as.numeric(quantile(y_tr, probs = 0.025))
+    b_q975 <- as.numeric(quantile(y_tr, probs = 0.975))
+
     df_backfill[[b]] <- b_mean
     out_layers[[paste0(b, "_mean")]] <- b_mean
-    out_layers[[paste0(b, "_sd")]]   <- b_sd
+    out_layers[[paste0(b, "_q025")]] <- b_q025
+    out_layers[[paste0(b, "_q975")]] <- b_q975
     
     logp("[%s] single backfill pixel: skipped gbart()", b)
     return(list(
@@ -86,39 +88,24 @@ deploy_gbart <- function(
   
   # --------------------------------------
   # post-modelling PART 1
-  # estimate posterior mean and sd
-  # yhat.test are the predicted values of b at high HF locations (rows = posterior draws, columns = pixels)
-  mu_test <- fit$yhat.test.mean # posterior mean (log1p scale)
-  sigma2_test <- apply(fit$yhat.test, 2, var)  # posterior variance (log1p scale)
-  
-  b_mean <- expm1(mu_test) # E[Y] approximation for b at high HF locations
-  b_sd   <- sqrt(expm1(sigma2_test) * exp(2*mu_test + sigma2_test))  # log-normal SD
-  
+  # estimate posterior mean and empirical 2.5/97.5th percentiles on the original scale.
+  # yhat.test: posterior draws [ndpost x n_px]; rows = draws, columns = pixels.
+  # Back-transforming all draws before summarising avoids the log-normal normality
+  # assumption that the previous expm1(mu) +/- log-normal SD approach required.
+  post_orig <- expm1(fit$yhat.test)                           # back-transform all draws [ndpost x n_px]
+  b_mean    <- colMeans(post_orig)                            # empirical posterior mean
+  b_q025    <- apply(post_orig, 2, quantile, probs = 0.025)  # empirical 2.5th percentile
+  b_q975    <- apply(post_orig, 2, quantile, probs = 0.975)  # empirical 97.5th percentile
+
   # replace backfilled b in backfilling dataset for using in next iteration (following `neworder`), and for outputs
-  df_backfill[[b]] <- b_mean 
-  out_layers[[paste0(b, "_mean")]] <- b_mean # add values of b to a list
-  out_layers[[paste0(b, "_sd")]]   <- b_sd
+  df_backfill[[b]] <- b_mean
+  out_layers[[paste0(b, "_mean")]] <- b_mean
+  out_layers[[paste0(b, "_q025")]] <- b_q025
+  out_layers[[paste0(b, "_q975")]] <- b_q975
   
   # --------------------------------------
   # post-modelling PART 2
-  # posterior predictive check: get posterior predictions for training data
-  # yhat.train are the predicted values of b at low HF locations (values are from the fitted model, not the training dataset)
-  mu_train <- fit$yhat.train.mean
-  sigma2_train <- apply(fit$yhat.train, 2, var)
-  
-  ppc_mean <- expm1(mu_train)
-  ppc_sd   <- sqrt(mean(expm1(sigma2_train) * exp(2*mu_train + sigma2_train)))
-  
-  # p is the probability the test statistic in a replicated data set exceeds that in the original data
-  # calculate Bayesian p-value (proportion of times observed statistic > predicted)
-  # Bayesian p-values for mean and SD
-  p_value_mean <- mean(apply(expm1(fit$yhat.train), 1, function(draw) mean(draw) > mean(y[-holdout_idx])))
-  p_value_sd   <- mean(apply(expm1(fit$yhat.train), 1, function(draw) sd(draw) > sd(y[-holdout_idx])))
-  
-  
-  # --------------------------------------
-  # post-modelling PART 3
-  # extract variable with highest importance 
+  # extract variable with highest importance
   top_var <- NA_character_
   if ("varprob" %in% names(fit)) {
     top_var <- names(sort(colMeans(fit$varprob), decreasing=TRUE))[1]

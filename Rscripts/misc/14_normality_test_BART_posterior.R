@@ -21,17 +21,6 @@
 # output:  data/derived_data/rds_files/normality_test_results.rds
 # ---
 
-# --- suggested SLURM header ---------------------------------------------------
-# #!/bin/bash
-# #SBATCH --job-name=normtest_gbart
-# #SBATCH --time=06:00:00
-# #SBATCH --mem=64G
-# #SBATCH --cpus-per-task=16
-# #SBATCH --output=logs/normtest_%j.log
-# module load r/4.4.0
-# Rscript Rscripts/normality_test_gbart_posterior.R
-# ------------------------------------------------------------------------------
-
 suppressPackageStartupMessages({
   library(BART)
   library(BAMexploreR)

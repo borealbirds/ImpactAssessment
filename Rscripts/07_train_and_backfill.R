@@ -105,7 +105,7 @@ source(file.path(ia_dir, "Rscripts", "08A_train_and_backfill_subbasin_s.R"))
 # load spatial objects inside of each worker to avoid "external pointer is not valid"
 # library(terra)
 # import pre-mosaiced covariate stack for year_y
-year <- 2015
+year <- 2020
 stack_y <- terra::rast(file.path(ia_dir, "data", "raw_data", "covariates_mosaiced", sprintf("covariates_mosaiced_%d.tif", year)))
 
 # define categorical features

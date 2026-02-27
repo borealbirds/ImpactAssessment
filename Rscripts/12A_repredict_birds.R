@@ -91,13 +91,14 @@ mosaic_backfilled_stacks <- function(sub_ids, year) {
   out
 }
 
-make_counterfactual_stack <- function(stack_obs, mu_stack, sd_stack, z) {
+make_counterfactual_stack <- function(stack_obs, replacement_stack) {
 
     out <- stack_obs
 
-    # overwrite continuous biotic covariates
-    for (v in names(mu_stack)) {
-      out[[v]] <- mu_stack[[v]] + z * sd_stack[[v]]
+    # overwrite continuous biotic covariates with the provided replacement values
+    # (mean, q025, or q975 layer depending on the scenario)
+    for (v in names(replacement_stack)) {
+      out[[v]] <- replacement_stack[[v]]
     }
 
     out
