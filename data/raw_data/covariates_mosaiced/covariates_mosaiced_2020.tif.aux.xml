@@ -1,141 +1,9 @@
 <PAMDataset>
   <PAMRasterBand band="1">
-    <Description>ERAMAP_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="2">
-    <Description>ERAMAT_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="3">
-    <Description>ERAPPTsm_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="4">
-    <Description>ERAPPTwt_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="5">
-    <Description>ERATavesm_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="6">
-    <Description>ERATavewt_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="7">
-    <Description>ERAPPTsmt_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="8">
-    <Description>ERATavesmt_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="9">
-    <Description>AHM_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="10">
-    <Description>bFFP_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="11">
-    <Description>CMD_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="12">
-    <Description>DD0_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="13">
-    <Description>DD18_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="14">
-    <Description>DD5_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="15">
-    <Description>eFFP_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="16">
-    <Description>EMT_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="17">
-    <Description>EXT_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="18">
-    <Description>FFP_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="19">
-    <Description>MAP_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="20">
-    <Description>MAT_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="21">
-    <Description>MCMT_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="22">
-    <Description>MSP_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="23">
-    <Description>MWMT_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="24">
-    <Description>NFFD_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="25">
-    <Description>PAS_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="26">
-    <Description>PPTsm_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="27">
-    <Description>PPTwt_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="28">
-    <Description>RH_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="29">
-    <Description>SHM_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="30">
-    <Description>Tavesm_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="31">
-    <Description>Tavewt_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="32">
-    <Description>TD_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="33">
-    <Description>CanHF_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="34">
-    <Description>CanHF_5x5</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="35">
-    <Description>CCNL_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="36">
-    <Description>canroad_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="37">
-    <Description>canroad_5x5</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="38">
-    <Description>mTPI_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="39">
-    <Description>roughness_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="40">
-    <Description>WetOccur_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="41">
-    <Description>WetOccur_5x5</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="42">
-    <Description>WetRecur_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="43">
-    <Description>WetSeason_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="44">
-    <Description>year</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="45">
     <Description>method</Description>
     <CategoryNames>
       <Category></Category>
-      <Category>PC</Category>
+      <Category>1</Category>
       <Category></Category>
       <Category></Category>
       <Category></Category>
@@ -392,333 +260,72 @@
       <Category></Category>
     </CategoryNames>
   </PAMRasterBand>
-  <PAMRasterBand band="46">
-    <Description>Peatland_5x5</Description>
+  <PAMRasterBand band="2">
+    <Description>year</Description>
   </PAMRasterBand>
-  <PAMRasterBand band="47">
-    <Description>SCANFIclosure_5x5</Description>
+  <PAMRasterBand band="3">
+    <Description>AHM_1km</Description>
   </PAMRasterBand>
-  <PAMRasterBand band="48">
-    <Description>SCANFIbiomass_5x5</Description>
+  <PAMRasterBand band="4">
+    <Description>CCNL_1km</Description>
   </PAMRasterBand>
-  <PAMRasterBand band="49">
-    <Description>SCANFIheight_5x5</Description>
+  <PAMRasterBand band="5">
+    <Description>CanHF_5x5</Description>
   </PAMRasterBand>
-  <PAMRasterBand band="50">
-    <Description>SCANFIheightcv_5x5</Description>
+  <PAMRasterBand band="6">
+    <Description>DD18_1km</Description>
   </PAMRasterBand>
-  <PAMRasterBand band="51">
-    <Description>SCANFIprcC_5x5</Description>
+  <PAMRasterBand band="7">
+    <Description>EMT_1km</Description>
   </PAMRasterBand>
-  <PAMRasterBand band="52">
-    <Description>SCANFIprcD_5x5</Description>
+  <PAMRasterBand band="8">
+    <Description>ERAMAP_1km</Description>
   </PAMRasterBand>
-  <PAMRasterBand band="53">
-    <Description>SCANFIBalsamFir_5x5</Description>
+  <PAMRasterBand band="9">
+    <Description>ERAMAT_1km</Description>
   </PAMRasterBand>
-  <PAMRasterBand band="54">
-    <Description>SCANFIBlackSpruce_5x5</Description>
+  <PAMRasterBand band="10">
+    <Description>ERAPPTsm_1km</Description>
   </PAMRasterBand>
-  <PAMRasterBand band="55">
-    <Description>SCANFIDouglasFir_5x5</Description>
+  <PAMRasterBand band="11">
+    <Description>ERAPPTsmt_1km</Description>
   </PAMRasterBand>
-  <PAMRasterBand band="56">
-    <Description>SCANFIJackPine_5x5</Description>
+  <PAMRasterBand band="12">
+    <Description>ERAPPTwt_1km</Description>
   </PAMRasterBand>
-  <PAMRasterBand band="57">
-    <Description>SCANFILodgepolePine_5x5</Description>
+  <PAMRasterBand band="13">
+    <Description>ERATavesm_1km</Description>
   </PAMRasterBand>
-  <PAMRasterBand band="58">
-    <Description>SCANFIPonderosaPine_5x5</Description>
+  <PAMRasterBand band="14">
+    <Description>ERATavesmt_1km</Description>
   </PAMRasterBand>
-  <PAMRasterBand band="59">
-    <Description>SCANFITamarack_5x5</Description>
+  <PAMRasterBand band="15">
+    <Description>ERATavewt_1km</Description>
   </PAMRasterBand>
-  <PAMRasterBand band="60">
-    <Description>SCANFIWhiteRedPine_5x5</Description>
+  <PAMRasterBand band="16">
+    <Description>LakeEdge_1km</Description>
   </PAMRasterBand>
-  <PAMRasterBand band="61">
-    <Description>SCANFI_1km</Description>
-    <CategoryNames>
-      <Category></Category>
-      <Category>bryoid</Category>
-      <Category>herb</Category>
-      <Category>rock</Category>
-      <Category>shrub</Category>
-      <Category>broadleaf</Category>
-      <Category>conifer</Category>
-      <Category>mixed</Category>
-      <Category>water</Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-    </CategoryNames>
-  </PAMRasterBand>
-  <PAMRasterBand band="62">
+  <PAMRasterBand band="17">
     <Description>MODISLCC_1km</Description>
     <CategoryNames>
       <Category></Category>
-      <Category>eg needle</Category>
-      <Category>eg broadleaf</Category>
-      <Category>dec needle</Category>
-      <Category>dec broadleaf</Category>
-      <Category>mixed forest</Category>
-      <Category></Category>
-      <Category>open shrub</Category>
-      <Category>woody savanna</Category>
-      <Category>savanna</Category>
-      <Category>grassland</Category>
-      <Category>wetland</Category>
-      <Category>cropland</Category>
-      <Category>urban</Category>
-      <Category>cropland/natural</Category>
-      <Category>snow/ice</Category>
-      <Category>barren</Category>
-      <Category>water</Category>
+      <Category>1</Category>
+      <Category>2</Category>
+      <Category>3</Category>
+      <Category>4</Category>
+      <Category>5</Category>
+      <Category>6</Category>
+      <Category>7</Category>
+      <Category>8</Category>
+      <Category>9</Category>
+      <Category>10</Category>
+      <Category>11</Category>
+      <Category>12</Category>
+      <Category>13</Category>
+      <Category>14</Category>
+      <Category>15</Category>
+      <Category>16</Category>
+      <Category>17</Category>
       <Category></Category>
       <Category></Category>
       <Category></Category>
@@ -959,339 +566,27 @@
       <Category></Category>
     </CategoryNames>
   </PAMRasterBand>
-  <PAMRasterBand band="63">
-    <Description>VLCE_1km</Description>
-    <CategoryNames>
-      <Category>no change</Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category>water</Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category>rock</Category>
-      <Category>barren</Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category>bryoid</Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category>shrub</Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category>wetland</Category>
-      <Category>wetland-tree</Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category>herb</Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category>conifer</Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category>broadleaf</Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category>mixed forest</Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-      <Category></Category>
-    </CategoryNames>
-  </PAMRasterBand>
-  <PAMRasterBand band="64">
-    <Description>Peatland_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="65">
-    <Description>SCANFIclosure_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="66">
-    <Description>SCANFIbiomass_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="67">
-    <Description>SCANFIheight_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="68">
-    <Description>SCANFIheightcv_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="69">
-    <Description>SCANFIprcC_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="70">
-    <Description>SCANFIprcD_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="71">
-    <Description>SCANFIBalsamFir_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="72">
-    <Description>SCANFIBlackSpruce_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="73">
-    <Description>SCANFIDouglasFir_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="74">
-    <Description>SCANFIJackPine_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="75">
-    <Description>SCANFILodgepolePine_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="76">
-    <Description>SCANFIPonderosaPine_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="77">
-    <Description>SCANFITamarack_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="78">
-    <Description>SCANFIWhiteRedPine_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="79">
-    <Description>StandardDormancy_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="80">
-    <Description>StandardGreenup_1km</Description>
-  </PAMRasterBand>
-  <PAMRasterBand band="81">
+  <PAMRasterBand band="18">
     <Description>MODISLCC_5x5</Description>
     <CategoryNames>
       <Category></Category>
-      <Category>eg needle</Category>
-      <Category>eg broadleaf</Category>
-      <Category>dec needle</Category>
-      <Category>dec broadleaf</Category>
-      <Category>mixed forest</Category>
-      <Category></Category>
-      <Category>open shrub</Category>
-      <Category>woody savanna</Category>
-      <Category>savanna</Category>
-      <Category>grassland</Category>
-      <Category>wetland</Category>
-      <Category>cropland</Category>
-      <Category>urban</Category>
-      <Category>cropland/natural</Category>
-      <Category>snow/ice</Category>
-      <Category>barren</Category>
-      <Category>water</Category>
+      <Category>1</Category>
+      <Category>2</Category>
+      <Category>3</Category>
+      <Category>4</Category>
+      <Category>5</Category>
+      <Category>6</Category>
+      <Category>7</Category>
+      <Category>8</Category>
+      <Category>9</Category>
+      <Category>10</Category>
+      <Category>11</Category>
+      <Category>12</Category>
+      <Category>13</Category>
+      <Category>14</Category>
+      <Category>15</Category>
+      <Category>16</Category>
+      <Category>17</Category>
       <Category></Category>
       <Category></Category>
       <Category></Category>
@@ -1531,5 +826,731 @@
       <Category></Category>
       <Category></Category>
     </CategoryNames>
+  </PAMRasterBand>
+  <PAMRasterBand band="19">
+    <Description>NFFD_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="20">
+    <Description>PAS_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="21">
+    <Description>Peatland_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="22">
+    <Description>RH_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="23">
+    <Description>SCANFIBalsamFir_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="24">
+    <Description>SCANFIBalsamFir_5x5</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="25">
+    <Description>SCANFIBlackSpruce_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="26">
+    <Description>SCANFIDouglasFir_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="27">
+    <Description>SCANFIDouglasFir_5x5</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="28">
+    <Description>SCANFIJackPine_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="29">
+    <Description>SCANFIJackPine_5x5</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="30">
+    <Description>SCANFILodgepolePine_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="31">
+    <Description>SCANFILodgepolePine_5x5</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="32">
+    <Description>SCANFIPonderosaPine_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="33">
+    <Description>SCANFIPonderosaPine_5x5</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="34">
+    <Description>SCANFITamarack_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="35">
+    <Description>SCANFITamarack_5x5</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="36">
+    <Description>SCANFIWhiteRedPine_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="37">
+    <Description>SCANFIWhiteRedPine_5x5</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="38">
+    <Description>SCANFI_1km</Description>
+    <CategoryNames>
+      <Category></Category>
+      <Category>1</Category>
+      <Category>2</Category>
+      <Category>3</Category>
+      <Category>4</Category>
+      <Category>5</Category>
+      <Category>6</Category>
+      <Category>7</Category>
+      <Category>8</Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+    </CategoryNames>
+  </PAMRasterBand>
+  <PAMRasterBand band="39">
+    <Description>SCANFIheight_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="40">
+    <Description>SCANFIheight_5x5</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="41">
+    <Description>SCANFIheightcv_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="42">
+    <Description>SCANFIheightcv_5x5</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="43">
+    <Description>SCANFIprcC_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="44">
+    <Description>SCANFIprcC_5x5</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="45">
+    <Description>SCANFIprcD_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="46">
+    <Description>SCANFIprcD_5x5</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="47">
+    <Description>StandardDormancy_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="48">
+    <Description>StandardGreenup_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="49">
+    <Description>SurfaceWater_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="50">
+    <Description>VLCE_1km</Description>
+    <CategoryNames>
+      <Category>0</Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category>20</Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category>31</Category>
+      <Category>32</Category>
+      <Category>33</Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category>40</Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category>50</Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category>80</Category>
+      <Category>81</Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category>100</Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category>210</Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category>220</Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category>230</Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+    </CategoryNames>
+  </PAMRasterBand>
+  <PAMRasterBand band="51">
+    <Description>WetOccur_5x5</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="52">
+    <Description>WetRecur_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="53">
+    <Description>WetSeason_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="54">
+    <Description>canroad_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="55">
+    <Description>canroad_5x5</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="56">
+    <Description>eFFP_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="57">
+    <Description>mTPI_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="58">
+    <Description>roughness_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="59">
+    <Description>CanHF_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="60">
+    <Description>PPTsm_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="61">
+    <Description>PPTwt_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="62">
+    <Description>SCANFIclosure_5x5</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="63">
+    <Description>SCANFIBlackSpruce_5x5</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="64">
+    <Description>SCANFIclosure_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="65">
+    <Description>TD_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="66">
+    <Description>WetOccur_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="67">
+    <Description>CMD_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="68">
+    <Description>EXT_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="69">
+    <Description>MSP_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="70">
+    <Description>MCMT_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="71">
+    <Description>bFFP_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="72">
+    <Description>SCANFIbiomass_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="73">
+    <Description>FFP_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="74">
+    <Description>SHM_1km</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="75">
+    <Description>SCANFIbiomass_5x5</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="76">
+    <Description>CAfire</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="77">
+    <Description>cec_0-5cm_mean_1000</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="78">
+    <Description>cec_100-200cm_mean_1000</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="79">
+    <Description>cec_15-30cm_mean_1000</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="80">
+    <Description>cec_30-60cm_mean_1000</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="81">
+    <Description>cec_5-15cm_mean_1000</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="82">
+    <Description>cec_60-100cm_mean_1000</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="83">
+    <Description>soc_0-5cm_mean_1000</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="84">
+    <Description>soc_100-200cm_mean_1000</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="85">
+    <Description>soc_15-30cm_mean_1000</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="86">
+    <Description>soc_30-60cm_mean_1000</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="87">
+    <Description>soc_5-15cm_mean_1000</Description>
+  </PAMRasterBand>
+  <PAMRasterBand band="88">
+    <Description>soc_60-100cm_mean_1000</Description>
   </PAMRasterBand>
 </PAMDataset>

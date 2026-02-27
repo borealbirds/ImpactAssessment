@@ -113,6 +113,35 @@ deploy_mbart <- function(
     holdout_idx <- sample(seq_len(length(y_int)), size = round(0.10 * length(y_int)))
     df_holdout    <- df_train_bart[holdout_idx, ] # get holdout rows before modifying df_train_bart
     df_train_bart <- df_train_bart[-holdout_idx, ]
+
+    # if only one class remains after holdout split, skip mbart
+    y_train_int <- y_int[-holdout_idx]
+
+    if (length(unique(y_train_int)) < 2) {
+
+       # empirical class probabilities from full training data (before split)
+       tab <- table(y_int)
+       probs <- tab / sum(tab)
+
+       mode_int <- as.integer(names(which.max(tab)))
+       b_mode   <- inv_map[as.character(mode_int)]
+       b_maxprob <- max(probs)
+       b_entropy <- -sum(probs * log(pmax(probs, 1e-12)))
+
+       df_backfill[[b]] <- b_mode
+       out_layers[[b]] <- b_mode
+       out_layers[[paste0(b, "_maxprob")]] <- rep(b_maxprob, nrow(df_backfill_bart))
+       out_layers[[paste0(b, "_entropy")]] <- rep(b_entropy, nrow(df_backfill_bart))
+
+       logp("[%s] degenerate after holdout split: single class", b)
+
+       return(list(
+       df_backfill = df_backfill,
+       metrics     = metrics,
+       confusion   = confusion,
+       out_layers  = out_layers
+       ))
+    }
     
     # multinomial bart keeps every 10th posterior sample (gbart keeps every sample)
     # so mbart will take at least 10 times longer

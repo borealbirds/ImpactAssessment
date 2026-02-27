@@ -8,7 +8,6 @@ reading/
 # RDS files (likely to be big)
 *.rds
 
-
 # History files
 .Rhistory
 .Rapp.history
@@ -49,6 +48,10 @@ vignettes/*.pdf
 
 # pkgdown site
 docs/
+
+# shapefiles
+*.gpkg
+*.shp
 
 # translation temp files
 po/*~

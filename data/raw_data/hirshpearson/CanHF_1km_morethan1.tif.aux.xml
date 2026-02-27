@@ -1,25 +1,25 @@
 <PAMDataset>
   <PAMRasterBand band="1">
-    <Description>category</Description>
+    <Description>CanHF_1km</Description>
     <CategoryNames>
       <Category></Category>
-      <Category>eg needle</Category>
-      <Category>eg broadleaf</Category>
-      <Category>dec needle</Category>
-      <Category>dec broadleaf</Category>
-      <Category>mixed forest</Category>
+      <Category>1</Category>
       <Category></Category>
-      <Category>open shrub</Category>
-      <Category>woody savanna</Category>
-      <Category>savanna</Category>
-      <Category>grassland</Category>
-      <Category>wetland</Category>
-      <Category>cropland</Category>
-      <Category>urban</Category>
-      <Category>cropland/natural</Category>
-      <Category>snow/ice</Category>
-      <Category>barren</Category>
-      <Category>water</Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
       <Category></Category>
       <Category></Category>
       <Category></Category>
