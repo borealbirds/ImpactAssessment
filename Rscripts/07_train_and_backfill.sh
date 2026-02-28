@@ -16,3 +16,9 @@ module load r/4.4.0
 
 export NODELIST=$(echo $(srun hostname))
 Rscript --vanilla 07_train_and_backfill.R ${SLURM_ARRAY_TASK_ID}
+
+# these settings worked for the vast majority of subbasins
+# I ran:
+# grep -L "writing .* layers to .*/subbasin_[0-9]\+" Y2020_*.log | \
+# xargs -r grep -L "^done$"
+# to identify subbasins that were OOM killed or timed out and re-ran with 07_train_and_backfill_larger.sh
