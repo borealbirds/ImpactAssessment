@@ -50,6 +50,9 @@ predict_species_bcr <- function(species, year, all_subbasins_subset) {
     stack_bf <- mosaic_backfilled_stacks(sub_ids, year)
     if (!is.null(stack_bf)) {
       stack_bf <- terra::resample(stack_bf, stack_obs, method = "near")
+      bam_bcr_codes <- gsub("_", "", paste(bam_boundary$country, bam_boundary$subUnit, sep = "_"))
+      bcr_poly <- bam_boundary[bam_bcr_codes == bcr_code, ]
+      stack_bf <- terra::mask(stack_bf, bcr_poly)
     } else {
       message(Sys.time(), " | no backfilled stack — skipping BCR")
       return(NULL)
