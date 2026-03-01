@@ -40,7 +40,7 @@ all_subbasins_subset <- terra::vect(file.path(ia_dir, "data", "raw_data", "hydro
 bcr_subbasins_ref <- {
   
     # logical matrix: rows=subbasins, cols=BCRs
-    hits <- terra::relate(centroids(all_subbasins_subset), bam_boundary, relation = "intersects")
+    hits <- terra::relate(all_subbasins_subset, bam_boundary, relation = "intersects")
     
     # row/col indexes of TRUE
     ij <- which(hits, arr.ind = TRUE)
