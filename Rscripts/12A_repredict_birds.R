@@ -70,21 +70,17 @@ mosaic_backfilled_stacks <- function(sub_ids, year) {
   if (length(paths) == 0) return(NULL)
   
   stacks <- lapply(paths, terra::rast)
-  
-  ref <- stacks[[1]]
-  stacks <- lapply(stacks, \(r)
-                   if (!terra::compareGeom(r, ref, stopOnError = FALSE))
-                     terra::resample(r, ref, method = "near") else r
-  )
-  
+
   vars <- sort(unique(unlist(lapply(stacks, names))))
   out <- terra::rast(lapply(vars, function(v) {
   # get only stacks that actually have this variable
   available <- lapply(stacks, function(r) if (v %in% names(r)) r[[v]] else NULL)
   available <- Filter(Negate(is.null), available)
-  
+
   if (length(available) == 0) return(NULL)  # skip variable entirely
-  Reduce(terra::cover, available)
+  # terra::merge unions extents across subbasins; terra::cover required identical extents
+  # and silently discarded subbasins that fell outside the first subbasin's bounding box
+  Reduce(terra::merge, available)
   }))
   
   out <- out[[!sapply(out, is.null)]]
