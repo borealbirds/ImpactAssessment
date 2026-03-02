@@ -126,17 +126,17 @@ predict_species_bcr <- function(species, year, all_subbasins_subset) {
       }
       
       zeroed <- intersect(names(X_bf_sets$mean), dist_i)
-      message(Sys.time(), " | zeroed out disturbance vars: ", paste(zeroed, collapse = ", "))
-      
+      message(Sys.time(), " | ", species, " ", bcr_code, " bootstrap=", i, " | zeroed out disturbance vars: ", paste(zeroed, collapse = ", "))
+
       # predict bird density on observed landscape
       obs_preds[[i]] <- terra::predict(X_obs_i, model, type = "response", n.trees = model$n.trees)
-      message(Sys.time(), " | finished predict() on observed landscape")
-      
+      message(Sys.time(), " | ", species, " ", bcr_code, " bootstrap=", i, " | finished predict() on observed landscape")
+
       # predict bird density on backfilled landscape
       for (k in names(X_bf_sets)) {
         bf_preds[[k]][[i]] <- terra::predict(X_bf_sets[[k]], model, type = "response", n.trees = model$n.trees)
       }
-      message(Sys.time(), " | finished predict() on backfilled landscape")
+      message(Sys.time(), " | ", species, " ", bcr_code, " bootstrap=", i, " | finished predict() on backfilled landscape")
       
       terra::tmpFiles(remove = TRUE)
       
