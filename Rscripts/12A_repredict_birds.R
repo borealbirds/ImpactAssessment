@@ -71,20 +71,22 @@ mosaic_backfilled_stacks <- function(sub_ids, year) {
   
   stacks <- lapply(paths, terra::rast)
 
-  vars <- sort(unique(unlist(lapply(stacks, names))))
-  out <- terra::rast(lapply(vars, function(v) {
-  # get only stacks that actually have this variable
-  available <- lapply(stacks, function(r) if (v %in% names(r)) r[[v]] else NULL)
-  available <- Filter(Negate(is.null), available)
+  # union of all subbasin extents — used to normalise per-variable rasters before stacking
+  full_ext <- Reduce(terra::union, lapply(stacks, terra::ext))
 
-  if (length(available) == 0) return(NULL)  # skip variable entirely
-  # terra::merge unions extents across subbasins; terra::cover required identical extents
-  # and silently discarded subbasins that fell outside the first subbasin's bounding box
-  Reduce(terra::merge, available)
-  }))
-  
-  out <- out[[!sapply(out, is.null)]]
-  names(out) <- vars[!sapply(out, is.null)]
+  vars <- sort(unique(unlist(lapply(stacks, names))))
+  var_list <- lapply(vars, function(v) {
+    available <- lapply(stacks, function(r) if (v %in% names(r)) r[[v]] else NULL)
+    available <- Filter(Negate(is.null), available)
+    if (length(available) == 0) return(NULL)
+    # terra::merge unions extents across subbasins; extend to full_ext so all
+    # layers share an identical extent before being combined with terra::rast()
+    terra::extend(Reduce(terra::merge, available), full_ext)
+  })
+
+  keep <- !sapply(var_list, is.null)
+  out  <- terra::rast(var_list[keep])
+  names(out) <- vars[keep]
   out
 }
 
