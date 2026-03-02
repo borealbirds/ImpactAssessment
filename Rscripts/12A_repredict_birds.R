@@ -35,7 +35,8 @@ all_subbasins_subset <- terra::vect(file.path(ia_dir, "data", "raw_data", "hydro
 
 # ------------------------------------------------------
 # create a reference table for which subbasins are in which BCRs 
-# some subbasins will be in multiple BCRs, and that's OK
+# some subbasins will be in multiple BCRs, and that's OK because 
+# we will ultimately crop to the BCR boundary to run the `gbm` model
 
 bcr_subbasins_ref <- {
   
