@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(git push:*)",
-      "Bash(Rscript:*)"
+      "Bash(Rscript:*)",
+      "Bash(ls:*)"
     ]
   }
 }
