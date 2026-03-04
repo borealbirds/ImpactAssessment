@@ -120,12 +120,13 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
       # observed landscape for b.list[[i]]
       X_obs_i <- stack_obs[[intersect(model_vars, names(stack_obs))]]
       
-      # overwrite categorical biotic covariates (from stack_bf)
+      # overwrite categorical biotic covariates at sector pixels only
+      # (stack_bf has backfilled values at all high-HF pixels; sector_mask restricts to sector)
       for (v in cat_vars) {
-        X_bf_sets$mean[[v]] <- stack_bf[[v]]
-        X_bf_sets$low [[v]] <- stack_bf[[v]]
-        X_bf_sets$high[[v]] <- stack_bf[[v]]
-      }  
+        X_bf_sets$mean[[v]] <- terra::ifel(sector_mask, stack_bf[[v]], stack_obs[[v]])
+        X_bf_sets$low [[v]] <- terra::ifel(sector_mask, stack_bf[[v]], stack_obs[[v]])
+        X_bf_sets$high[[v]] <- terra::ifel(sector_mask, stack_bf[[v]], stack_obs[[v]])
+      }
       
       # set disturbance vars to zero
       dist_i <- intersect(disturbance_vars$predictor, model_vars)

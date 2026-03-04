@@ -1,0 +1,207 @@
+Counterfactual Prediction of Bird Population Densities Under Isolated Sector Restoration
+==========================================================================================
+
+Overview
+--------
+We estimated the isolated effect of each industrial sector on bird population size by
+constructing a sector-specific counterfactual: a simulated landscape identical to the
+observed landscape except that biotic (vegetation) covariates at pixels belonging to a
+given sector were replaced with model-predicted values representative of natural,
+undisturbed conditions. Bird densities were re-predicted on this counterfactual landscape
+using existing species distribution models, and the difference in predicted population size
+between the observed and counterfactual landscapes was attributed to that sector.
+
+Human Footprint Data and Sector Classification
+-----------------------------------------------
+Industrial footprint was characterised using continuous sector-specific human footprint
+scores (Hirsh-Pearson layers; [citation]), available for 12 sectors: built, crop,
+dam and associated reservoir, forestry harvest, mines, navigable water, night lights,
+oil and gas, pasture, population density, rail, and roads. Each raster layer records,
+at 1 km resolution, the degree of human influence attributable to that sector at each
+pixel. An aggregate human footprint layer (CanHF) was used to classify pixels as
+high-footprint (CanHF >= 1) or low-footprint (CanHF < 1); the latter threshold was
+treated as representing intact, pre-industrial conditions for the purposes of this study.
+
+All sector rasters and the aggregate CanHF layers were reprojected to the Canada Albers
+equal-area projection (EPSG:5072) and resampled to 1 km x 1 km resolution to match the
+covariate and bird density prediction grids.
+
+Spatial Framework
+-----------------
+The study area encompasses the boreal and hemi-boreal regions of Canada covered by
+National Models V5 [citation]. Spatial analyses were conducted at three nested scales:
+Bird Conservation Region (BCR), Level 6 HydroBASINS subbasin, and individual sector
+footprint (connected-pixel cluster; see below). Bird density models were fitted and
+applied at the BCR level. Biotic covariate backfilling was performed at the subbasin
+level using 674 Level 6 HydroBASINS subbasins [citation] that contained at least one
+high-footprint pixel; data-sparse subbasins (below the 25th percentile of low-footprint
+pixel count) were merged with spatially adjacent subbasins within the same BCR prior to
+modelling. All spatial data were in the Canada Albers equal-area projection (EPSG:5072)
+at 1 km resolution.
+
+Stage 1 — Biotic Covariate Backfilling
+----------------------------------------
+For each subbasin, Bayesian Additive Regression Trees (BART; [citation]) were used to
+predict what biotic (vegetation) conditions would have prevailed at high-footprint pixels
+in the absence of human disturbance, by learning the relationship between abiotic and
+biotic covariates at low-footprint pixels and extrapolating to high-footprint pixels.
+
+Covariates were drawn from the National Models V5 covariate stack ([citation]; year 2020).
+Abiotic predictors included climate normals, annual climate variables, topography, and
+soil characteristics — variables considered insensitive to industrial disturbance.
+Biotic covariates included 47 continuous variables (peatland cover, SCANFI forest
+structural attributes including canopy closure, biomass, height, height CV, and species
+composition; LandFire, ONRL, and ETH biomass and height products; RAPT canopy cover)
+and 6 categorical land-cover variables (VLCE_1km, MODISLCC_1km, MODISLCC_5x5,
+ABoVE_1km, SCANFI_1km, NLCD_1km).
+
+Continuous biotic covariates were backfilled in a fixed hierarchical order (defined
+a priori; see supplementary material), such that each covariate's BART model could use
+all previously backfilled covariates as additional predictors. This cascading design
+reflects the ecological dependency structure among vegetation attributes. Categorical
+land-cover covariates were backfilled after all continuous covariates and were excluded
+from the predictor set for continuous covariates to avoid non-numeric inputs.
+
+For each subbasin and each biotic covariate b, the BART model was fitted as follows:
+
+  - Training data: all low-footprint pixels within the subbasin with non-missing values
+    for covariate b (CanHF < 1).
+  - Predictors: abiotic covariates, all continuous biotic covariates preceding b in the
+    hierarchy (replacing observed values with BART-backfilled values for subsequent
+    iterations), and pixel centroid coordinates (latitude/longitude), centred and scaled
+    to the subbasin mean and standard deviation to improve model performance.
+  - A random 10% holdout was withheld from model fitting for out-of-sample evaluation.
+  - Continuous covariates: Gaussian BART (gbart; BART R package [citation]) with a
+    log(x+1) response transformation to ensure non-negative predictions. Model settings:
+    50 trees (ntree = 50), 700 posterior draws (ndpost = 700), 300 burn-in samples
+    (nskip = 300), shrinkage parameter k = 3, sparse variable selection prior
+    (sparse = TRUE), and a prior on the residual SD anchored at the empirical SD of the
+    log-transformed training response.
+  - Categorical covariates: multinomial BART (mbart; BART R package [citation]).
+  - Prediction at high-footprint pixels: all ndpost = 700 posterior draws were
+    back-transformed (expm1) before summarising, yielding an empirical posterior mean and
+    2.5th and 97.5th percentile predictions for each pixel. These three summaries
+    (hereafter: mean, low, and high backfill scenarios) were retained to propagate
+    uncertainty from the backfilling step into subsequent bird density predictions.
+
+Outputs for each subbasin were saved as multi-layer rasters with one mean, q025, and q975
+layer per continuous biotic covariate, and one layer per categorical covariate. Subbasins
+with a constant or near-constant biotic covariate (<=2 unique values after log1p
+transformation) were assigned the training-set mean for that covariate.
+
+Stage 2 — Sector-Specific Counterfactual Covariate Stack Construction
+-----------------------------------------------------------------------
+For each industrial sector S, a sector mask was defined as the set of 1 km pixels
+satisfying:
+
+  sector_S_score > 0  AND  CanHF >= 1
+
+where sector_S_score is the Hirsh-Pearson footprint score for sector S. This identifies
+pixels with any measurable influence from sector S that are also classified as overall
+high-footprint. Only these pixels received backfilled biotic covariate values in the
+counterfactual; all other pixels — including high-footprint pixels belonging to other
+sectors but not sector S — retained their observed covariate values. This construction
+isolates the effect of sector S by holding all other industrial disturbance constant.
+
+For each BCR, the counterfactual covariate stack was assembled as follows:
+
+  1. Begin with the observed BCR-level covariate stack (National Models V5 [citation]).
+  2. For each biotic covariate v, replace the observed value at sector S pixels with the
+     BART-backfilled value:
+       counterfactual[v, pixel p] = backfilled[v, p]  if p is in sector mask
+                                  = observed[v, p]    otherwise
+  3. Set all disturbance-class covariates (time-since-disturbance, fire history) to zero
+     at all pixels, reflecting a no-disturbance counterfactual landscape.
+  4. Repeat steps 2-3 separately for the mean, low (q025), and high (q975) backfill
+     scenarios, producing three counterfactual covariate stacks per sector.
+
+Subbasin-level backfill rasters were mosaiced to the BCR extent before step 2, with
+pixels from adjacent subbasins merged using terra::merge() and all layers extended to a
+common spatial extent (terra::extend()) to ensure a consistent raster footprint across
+all subbasins within the BCR.
+
+Stage 3 — Bird Density Re-prediction
+--------------------------------------
+Bird densities were predicted using the Boosted Regression Tree (BRT) models from
+National Models V5 [citation]. For each species, a set of 32 bootstrap BRT models was
+available per BCR, each fitted to a bootstrap replicate of the point-count survey data.
+This ensemble characterises model uncertainty arising from sampling variability in the
+bird survey data.
+
+For each bootstrap model b (b = 1...32), bird density was predicted at every pixel in
+the BCR under:
+  (i)  the observed covariate stack (yielding observed density surface obs_b), and
+  (ii) each of the three sector-specific counterfactual covariate stacks (yielding
+       counterfactual density surfaces bf_b,mean, bf_b,low, and bf_b,high).
+
+Predictions were made at the native 1 km resolution of the covariate stack. Density
+values (birds km^-2) were multiplied by 100 to convert from the model's native unit
+(birds per 100 km^-2; [citation]) prior to population summation.
+
+Across the 32 bootstraps and three backfill scenarios (96 density surfaces per
+prediction type), an incremental online algorithm (Welford's method) was used to compute
+the mean and standard deviation of predicted density at each pixel without stacking all
+surfaces simultaneously, reducing peak memory requirements.
+
+Stage 4 — Population Aggregation and Impact Estimation
+-------------------------------------------------------
+Within each Level 6 subbasin, three population quantities were computed by summing
+density x pixel area across relevant pixel sets (all pixels are 1 km^2):
+
+  obs_total     : total observed bird population across the entire subbasin
+  obs_on_S      : observed population at sector S pixels only
+  bf_on_S       : counterfactual population at sector S pixels only (mean backfill scenario)
+
+The counterfactual total subbasin population was:
+  counterfactual_total = obs_total - obs_on_S + bf_on_S
+
+Population quantities were summarised as means and standard deviations across the
+32 x 3 = 96 prediction surfaces. Uncertainty in the SD reflects bootstrap variability
+in the bird density models and uncertainty in the BART backfilling step (via the
+low/high backfill scenarios).
+
+The isolated impact of sector S on bird population size was expressed as a percentage
+at four spatial scales:
+
+  (1) BCR scale:
+        pct_BCR = (bf_on_S - obs_on_S) / obs_total_BCR * 100
+      where obs_total_BCR is the total observed population summed across all subbasins
+      within the BCR.
+
+  (2) Subbasin scale:
+        pct_sub = (bf_on_S,sub - obs_on_S,sub) / obs_total_sub * 100
+      computed separately for each subbasin, where obs_total_sub is the total observed
+      population within that subbasin.
+
+  (3) National scale:
+        pct_national = sum_BCR(bf_on_S - obs_on_S) / sum_BCR(obs_total_BCR) * 100
+      i.e. numerators summed across all BCRs and divided by the national observed total.
+
+  (4) Footprint scale: individual spatially contiguous clusters of sector S pixels
+      (connected components under 8-connectivity, i.e. pixels sharing at least one
+      corner) were treated as discrete footprints and indexed 1...n within each BCR.
+      For each footprint f:
+        pct_f = (bf_on_f - obs_on_f) / obs_on_f * 100
+      where the denominator is the observed population within footprint f itself.
+
+Uncertainty Propagation
+-----------------------
+Standard deviations on population quantities were propagated using standard first-order
+error propagation (delta method). For a ratio r = a / b:
+
+  SD(r) = |r| * sqrt( (SD_a / a)^2 + (SD_b / b)^2 )
+
+where SD_a and SD_b are the propagated standard deviations on the numerator and
+denominator populations respectively. For the national-scale aggregation, BCRs were
+treated as independent, so variances were summed across BCRs before taking the square
+root.
+
+Software
+--------
+All analyses were conducted in R [citation] using the terra package [citation] for
+spatial operations, the BART package [citation] for Bayesian Additive Regression Trees,
+and the gbm package [citation] for Boosted Regression Trees. Computationally intensive
+steps (BART backfilling and bird density re-prediction) were executed as SLURM array
+jobs on the Digital Research Alliance of Canada (formerly Compute Canada) cluster
+infrastructure [citation], with one job per subbasin (backfilling) or one job per
+species (re-prediction).

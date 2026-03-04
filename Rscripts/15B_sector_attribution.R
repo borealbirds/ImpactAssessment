@@ -44,7 +44,7 @@ hirsh_dir   <- file.path(ia_dir, "data/raw_data/hirshpearson")
 obs_root    <- file.path(ia_dir, "data/derived_data/predictions")
 bf_root     <- file.path(ia_dir, "data/derived_data/predictions_sectors")
 basin_path  <- file.path(ia_dir, "data/raw_data/hydrobasins_masked_merged_subset.gpkg")
-out_dir     <- file.path(ia_dir, "data/derived_data/rds_files")
+out_dir     <- file.path(ia_dir, "data/derived_data/sector_effects")
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
 canHF_path  <- file.path(hirsh_dir, "CanHF_1km_morethan1.tif")
@@ -60,9 +60,10 @@ message("Sectors (", length(sector_names), "): ", paste(sector_names, collapse =
 
 hydrobasins <- vect(basin_path)
 
-# ---- Discover valid sector x species x BCR x year combinations --------------
+# discover valid sector x species x BCR x year combinations --------------
 # A combination is valid if backfilled_mean_mean.tif exists and the matching
 # observed_mean.tif exists in the shared predictions/ directory.
+# `combos` is a dataframe where rows are unique sector x species x BCR x year tuples
 
 combos <- do.call(rbind, Filter(Negate(is.null), lapply(sector_names, function(sec) {
   sec_dir <- file.path(bf_root, sec)
@@ -85,11 +86,11 @@ combos <- do.call(rbind, Filter(Negate(is.null), lapply(sector_names, function(s
 })))
 
 if (is.null(combos) || nrow(combos) == 0) stop("No valid sector x species x BCR x year combinations found.")
-message("Found ", nrow(combos), " combinations")
+message("found ", nrow(combos), "unique sector x species x BCR x year tuples")
 
-# ---- Main processing loop ---------------------------------------------------
-# Outer loop: sector x BCR x year  (project sector mask once per BCR grid)
-# Inner loop: species
+# main processing loop ---------------------------------------------------
+# outer loop: sector x BCR x year  (project sector mask once per BCR grid)
+# inner loop: species
 
 bcr_year_sector_combos <- unique(combos[, c("sector", "bcr", "year")])
 
@@ -181,7 +182,7 @@ for (i in seq_len(nrow(bcr_year_sector_combos))) {
 
     sub_tbl <- merge(obs_total_sub, impact_sub, by = names(subbasin_r))
     sub_tbl$pct_sub <- sub_tbl$impact_sub / sub_tbl$obs_total_sub * 100
-    sub_tbl$pct_sub[!is.finite(sub_tbl$pct_sub)] <- NA
+    sub_tbl$pct_sub[!is.finite(sub_tbl$pct_sub) | sub_tbl$obs_total_sub < 1e-6] <- NA
 
     subbasin_rows[[result_idx]] <- data.frame(
       species      = sp,
@@ -207,7 +208,7 @@ for (i in seq_len(nrow(bcr_year_sector_combos))) {
     fp_tbl <- merge(obs_patch, bf_patch,     by = names(patches_r))
     fp_tbl <- merge(fp_tbl,    impact_patch, by = names(patches_r))
     fp_tbl$pct_footprint <- fp_tbl$impact_patch / fp_tbl$obs_on_patch * 100
-    fp_tbl$pct_footprint[!is.finite(fp_tbl$pct_footprint)] <- NA
+    fp_tbl$pct_footprint[!is.finite(fp_tbl$pct_footprint) | fp_tbl$obs_on_patch < 1e-6] <- NA
 
     footprint_rows[[result_idx]] <- data.frame(
       species       = sp,
@@ -254,7 +255,7 @@ write.csv(national_df,        file.path(out_dir, "sector_national.csv"),  row.na
 write.csv(bind_rows(subbasin_rows),  file.path(out_dir, "sector_subbasin.csv"),  row.names = FALSE)
 write.csv(bind_rows(footprint_rows), file.path(out_dir, "sector_footprint.csv"), row.names = FALSE)
 
-message("Done. Wrote 4 tables to ", out_dir)
+message("writing 4 tables to ", out_dir)
 message("  sector_bcr.csv       : ", nrow(bcr_df), " rows")
 message("  sector_national.csv  : ", nrow(national_df), " rows")
 message("  sector_subbasin.csv  : ", nrow(bind_rows(subbasin_rows)), " rows")
