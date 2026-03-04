@@ -1,30 +1,26 @@
 # ---
-# title: Quantitative attribution of industrial sector effects on bird populations
+# title: Isolated sector attribution of bird population impacts
 # author: Mannfred Boehm
 # ---
-# For each species x BCR x year, partitions the total population change
-# (observed vs counterfactual backfilled prediction) across industrial sectors
-# using each sector's Hirsh-Pearson footprint score as a proportional weight.
-# Pixels where a sector's score is < 1 are treated as unimpacted by that sector.
+# For each sector, 12A/12B was re-run with biotic covariates backfilled only at
+# that sector's pixels (sector > 0 AND CanHF >= 1). The resulting backfilled
+# raster differs from the observed raster ONLY at those pixels, giving an
+# isolated sector counterfactual.
 #
-# Attribution method:
-#   At each pixel, the weight for sector S is score_S / sum(score_S') where
-#   the sum runs only over sectors with score >= 1. Pixels where no sector
-#   reaches the threshold receive zero attribution to all sectors.
+# This script reads the per-sector prediction rasters and computes % impact at
+# four spatial scales:
 #
-# Three spatial scales:
-#   pixel    - mean and SD of attributed % change across active-HF pixels
-#              (unweighted; measures typical pixel-level impact)
-#   subbasin - mean and SD of population-weighted attributed % change across
-#              subbasins within the BCR (each subbasin contributes one value)
-#   BCR      - single population-weighted attributed % change across the full BCR
+#   BCR      - (sum(bf - obs) * area) / (sum(obs) * area) * 100  over BCR
+#   national - same numerator summed across BCRs / national obs total
+#   subbasin - per-subbasin version of BCR formula
+#   footprint- per-connected-component (8-connectivity) of sector pixels
+#              denominator = observed population within that footprint
 #
-# Backfill scenario used: "mean" (backfilled_mean_mean.tif)
+# Uncertainty (SD) is propagated via standard error propagation.
+# Only the "mean" backfill scenario is used (backfilled_mean_mean.tif).
 #
-# Output: data/derived_data/rds_files/sector_attribution.csv
-#   rows    = species x BCR x year
-#   columns = species, bcr, year, {sector}_{pixel_mean, pixel_sd,
-#             subbasin_mean, subbasin_sd, bcr_impact}
+# Outputs (data/derived_data/rds_files/):
+#   sector_bcr.csv, sector_national.csv, sector_subbasin.csv, sector_footprint.csv
 # ---
 
 suppressPackageStartupMessages({
@@ -44,160 +40,222 @@ if (!cc && !local) { ia_dir <- file.path("G:/Shared drives/BAM_NationalModels5",
 
 # ---- Paths ------------------------------------------------------------------
 
-hirsh_dir  <- file.path(ia_dir, "data/raw_data/hirshpearson")
-pred_dir   <- file.path(ia_dir, "data/derived_data/predictions")
-basin_path <- file.path(ia_dir, "data/raw_data/hydrobasins_masked_merged_subset.gpkg")
-out_path   <- file.path(ia_dir, "data/derived_data/rds_files/sector_attribution.csv")
+hirsh_dir   <- file.path(ia_dir, "data/raw_data/hirshpearson")
+obs_root    <- file.path(ia_dir, "data/derived_data/predictions")
+bf_root     <- file.path(ia_dir, "data/derived_data/predictions_sectors")
+basin_path  <- file.path(ia_dir, "data/raw_data/hydrobasins_masked_merged_subset.gpkg")
+out_dir     <- file.path(ia_dir, "data/derived_data/rds_files")
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
-# ---- Load sector rasters ----------------------------------------------------
-# Exclude the aggregate CanHF masks; keep only the individual sector layers
+canHF_path  <- file.path(hirsh_dir, "CanHF_1km_morethan1.tif")
 
-sector_files <- list.files(hirsh_dir, pattern = "\\.tif$", full.names = TRUE)
-sector_files <- sector_files[!grepl("^CanHF", basename(sector_files))]
-sector_names <- tools::file_path_sans_ext(basename(sector_files))
+# ---- Load sector names -------------------------------------------------------
 
-sectors_raw        <- rast(sector_files)
-names(sectors_raw) <- sector_names
-
+sector_files <- list.files(hirsh_dir, pattern = "\\.tif$", full.names = FALSE)
+sector_files <- sector_files[!grepl("^CanHF", sector_files)]
+sector_names <- tools::file_path_sans_ext(sector_files)
 message("Sectors (", length(sector_names), "): ", paste(sector_names, collapse = ", "))
 
-# ---- Load hydrobasins -------------------------------------------------------
+# ---- Load hydrobasins --------------------------------------------------------
 
 hydrobasins <- vect(basin_path)
 
-# ---- Discover all valid species x BCR x year combinations ------------------
-# A combination is valid if both observed_mean.tif and backfilled_mean_mean.tif exist.
+# ---- Discover valid sector x species x BCR x year combinations --------------
+# A combination is valid if backfilled_mean_mean.tif exists and the matching
+# observed_mean.tif exists in the shared predictions/ directory.
 
-combos <- do.call(rbind, Filter(Negate(is.null), lapply(
-  list.dirs(pred_dir, full.names = FALSE, recursive = FALSE), function(sp) {
-    do.call(rbind, Filter(Negate(is.null), lapply(
-      list.dirs(file.path(pred_dir, sp), full.names = FALSE, recursive = FALSE), function(bcr) {
-        do.call(rbind, Filter(Negate(is.null), lapply(
-          list.dirs(file.path(pred_dir, sp, bcr), full.names = FALSE, recursive = FALSE), function(yr) {
-            obs_f <- file.path(pred_dir, sp, bcr, yr, "observed_mean.tif")
-            bf_f  <- file.path(pred_dir, sp, bcr, yr, "backfilled_mean_mean.tif")
-            if (file.exists(obs_f) && file.exists(bf_f)) {
-              data.frame(species = sp, bcr = bcr, year = yr, stringsAsFactors = FALSE)
-            }
-          })))
-      })))
-  })))
+combos <- do.call(rbind, Filter(Negate(is.null), lapply(sector_names, function(sec) {
+  sec_dir <- file.path(bf_root, sec)
+  if (!dir.exists(sec_dir)) return(NULL)
+  do.call(rbind, Filter(Negate(is.null), lapply(
+    list.dirs(sec_dir, full.names = FALSE, recursive = FALSE), function(sp) {
+      do.call(rbind, Filter(Negate(is.null), lapply(
+        list.dirs(file.path(sec_dir, sp), full.names = FALSE, recursive = FALSE), function(bcr) {
+          do.call(rbind, Filter(Negate(is.null), lapply(
+            list.dirs(file.path(sec_dir, sp, bcr), full.names = FALSE, recursive = FALSE), function(yr) {
+              bf_f  <- file.path(bf_root,  sec, sp, bcr, yr, "backfilled_mean_mean.tif")
+              obs_f <- file.path(obs_root, sp,  bcr, yr,     "observed_mean.tif")
+              if (file.exists(bf_f) && file.exists(obs_f)) {
+                data.frame(sector = sec, species = sp, bcr = bcr, year = yr,
+                           stringsAsFactors = FALSE)
+              }
+            })))
+        })))
+    })))
+})))
 
-if (is.null(combos) || nrow(combos) == 0) stop("No valid species x BCR x year combinations found.")
-message("Found ", nrow(combos), " species x BCR x year combinations")
+if (is.null(combos) || nrow(combos) == 0) stop("No valid sector x species x BCR x year combinations found.")
+message("Found ", nrow(combos), " combinations")
 
 # ---- Main processing loop ---------------------------------------------------
-# Outer loop over BCR x year so sector weights are precomputed once per grid.
-# Inner loop applies the shared weights to each species' density rasters.
+# Outer loop: sector x BCR x year  (project sector mask once per BCR grid)
+# Inner loop: species
 
-bcr_year_combos <- unique(combos[, c("bcr", "year")])
-results         <- vector("list", nrow(combos))
-result_idx      <- 1
+bcr_year_sector_combos <- unique(combos[, c("sector", "bcr", "year")])
 
-for (i in seq_len(nrow(bcr_year_combos))) {
+bcr_rows      <- vector("list", nrow(combos))
+subbasin_rows <- vector("list", nrow(combos))
+footprint_rows <- vector("list", nrow(combos))
+result_idx    <- 1
 
-  cur_bcr  <- bcr_year_combos$bcr[i]
-  cur_year <- bcr_year_combos$year[i]
-  sp_list  <- combos$species[combos$bcr == cur_bcr & combos$year == cur_year]
+for (i in seq_len(nrow(bcr_year_sector_combos))) {
 
-  message("BCR=", cur_bcr, " year=", cur_year, " (", length(sp_list), " species)")
+  cur_sector <- bcr_year_sector_combos$sector[i]
+  cur_bcr    <- bcr_year_sector_combos$bcr[i]
+  cur_year   <- bcr_year_sector_combos$year[i]
+  sp_list    <- combos$species[combos$sector == cur_sector &
+                               combos$bcr    == cur_bcr    &
+                               combos$year   == cur_year]
 
-  # Spatial template: the prediction grid for this BCR x year (same for all species)
-  template_r <- rast(file.path(pred_dir, sp_list[1], cur_bcr, cur_year, "observed_mean.tif"))
+  message("sector=", cur_sector, " BCR=", cur_bcr, " year=", cur_year,
+          " (", length(sp_list), " species)")
 
-  # ---- Precompute sector weights (shared across all species in this BCR x year) ----
+  # use first species as spatial template (observed grid is identical across species)
+  template_r <- rast(file.path(obs_root, sp_list[1], cur_bcr, cur_year, "observed_mean.tif"))
+  area_r     <- cellSize(template_r, unit = "km")
 
-  message("  Projecting sector rasters to BCR grid...")
-  sectors_proj   <- project(sectors_raw, template_r, method = "bilinear")
+  # sector mask on BCR grid
+  sector_r  <- project(rast(file.path(hirsh_dir, paste0(cur_sector, ".tif"))),
+                       template_r, method = "bilinear")
+  canHF_r   <- project(rast(canHF_path), template_r, method = "near")
+  sector_mask <- ifel((sector_r > 0) & (canHF_r >= 1), 1, NA)
 
-  # Zero out sector scores below the significance threshold
-  sectors_thresh <- ifel(sectors_proj >= 1, sectors_proj, 0)
-
-  # Total active footprint score per pixel across all sectors
-  total_score <- sum(sectors_thresh)
-
-  # Proportional weights: score_S / total (0 where no sector is active)
-  weight_stack <- ifel(total_score > 0,
-                       sectors_thresh / total_score,
-                       sectors_thresh * 0)  # sectors_thresh * 0 preserves NA structure
-
-  # Pixel area in m^2 for population-weighted aggregation
-  area_r <- cellSize(template_r, unit = "m")
-
-  # Mask for pixels where at least one sector is active (score >= 1)
-  hf_mask <- ifel(total_score > 0, 1, NA)
-
-  # Rasterize subbasin IDs onto the BCR prediction grid (crop first for speed)
-  message("  Rasterizing subbasins...")
+  # subbasin IDs rasterized onto BCR grid
   basins_clip <- crop(hydrobasins, ext(template_r))
-  subbasin_r  <- rasterize(basins_clip, template_r, field = "HYBAS_ID")
+  subbasin_r  <- rasterize(basins_clip, template_r, field = "first_HYBAS_ID")
 
-  # ---- Inner loop: species --------------------------------------------------
+  # connected-component patches for footprint scale
+  patches_r <- patches(sector_mask, directions = 8, zeroAsNA = TRUE)
 
   for (sp in sp_list) {
-    message("    ", sp)
 
-    obs_r <- rast(file.path(pred_dir, sp, cur_bcr, cur_year, "observed_mean.tif"))
-    bf_r  <- rast(file.path(pred_dir, sp, cur_bcr, cur_year, "backfilled_mean_mean.tif"))
+    message("  ", sp)
 
-    # Mask non-positive backfill values to avoid division errors
-    bf_r <- ifel(bf_r <= 0, NA, bf_r)
+    obs_mean <- rast(file.path(obs_root, sp, cur_bcr, cur_year, "observed_mean.tif"))
+    obs_sd   <- rast(file.path(obs_root, sp, cur_bcr, cur_year, "observed_sd.tif"))
+    bf_mean  <- rast(file.path(bf_root,  cur_sector, sp, cur_bcr, cur_year, "backfilled_mean_mean.tif"))
+    bf_sd    <- rast(file.path(bf_root,  cur_sector, sp, cur_bcr, cur_year, "backfilled_mean_sd.tif"))
 
-    # Total pixel-level % change: (observed - backfilled) / backfilled * 100
-    # Negative values indicate industry has reduced the population below baseline.
-    delta_r <- obs_r - bf_r
-    pct_r   <- (delta_r / bf_r) * 100
+    delta    <- bf_mean - obs_mean   # non-zero only at sector pixels
 
-    # Attributed % change per sector per pixel (12-layer raster)
-    attr_stack <- pct_r * weight_stack
+    # ---- BCR scale -----------------------------------------------------------
 
-    # ---- Pixel-level: mean and SD over active-HF pixels --------------------
-    # Restricted to pixels where at least one sector is active.
-    attr_hf   <- mask(attr_stack, hf_mask)
-    pix_stats <- global(attr_hf, fun = c("mean", "sd"), na.rm = TRUE)
-    # pix_stats: data.frame [n_sectors x 2], rows named by sector, cols "mean" and "sd"
+    obs_total_mean <- as.numeric(global(obs_mean * area_r, "sum", na.rm = TRUE))
+    obs_total_sd   <- as.numeric(sqrt(global(obs_sd^2 * area_r^2, "sum", na.rm = TRUE)))
+    obs_on_S_mean  <- as.numeric(global(mask(obs_mean, sector_mask) * area_r, "sum", na.rm = TRUE))
+    obs_on_S_sd    <- as.numeric(sqrt(global(mask(obs_sd, sector_mask)^2 * area_r^2, "sum", na.rm = TRUE)))
+    bf_on_S_mean   <- as.numeric(global(mask(bf_mean,  sector_mask) * area_r, "sum", na.rm = TRUE))
+    bf_on_S_sd     <- as.numeric(sqrt(global(mask(bf_sd, sector_mask)^2 * area_r^2, "sum", na.rm = TRUE)))
 
-    # ---- BCR-level: single population-weighted aggregate -------------------
-    # sum(delta * w_S * area) / sum(bf * area) * 100  for each sector S
-    num_bcr   <- global(delta_r * weight_stack * area_r, fun = "sum", na.rm = TRUE)$sum
-    denom_bcr <- as.numeric(global(bf_r * area_r, fun = "sum", na.rm = TRUE))
-    bcr_impacts <- (num_bcr / denom_bcr) * 100
-    # num_bcr is a length-12 vector (one sum per sector layer); denom_bcr is scalar
+    impact_mean <- as.numeric(global(delta * area_r, "sum", na.rm = TRUE))
+    impact_sd   <- as.numeric(sqrt(global((bf_sd^2 + obs_sd^2) * area_r^2, "sum", na.rm = TRUE)))
 
-    # ---- Subbasin-level: per-subbasin aggregate, summarised across subbasins ----
-    # For each subbasin b and sector S: sum(delta * w_S * area) / sum(bf * area) * 100
-    num_zonal   <- zonal(delta_r * weight_stack * area_r, subbasin_r, fun = "sum", na.rm = TRUE)
-    denom_zonal <- zonal(bf_r * area_r,                   subbasin_r, fun = "sum", na.rm = TRUE)
-    # num_zonal:   data.frame [n_subbasins x (1 + n_sectors)] — zone ID + one col per sector
-    # denom_zonal: data.frame [n_subbasins x 2]               — zone ID + denominator sum
+    pct_bcr    <- impact_mean / obs_total_mean * 100
+    pct_bcr_sd <- 100 * sqrt((impact_sd / obs_total_mean)^2 +
+                               (impact_mean * obs_total_sd / obs_total_mean^2)^2)
 
-    sub_pct <- sweep(as.matrix(num_zonal[, -1]), 1, denom_zonal[, 2], "/") * 100
-    sub_pct[!is.finite(sub_pct)] <- NA  # subbasins with zero backfill population
+    bcr_rows[[result_idx]] <- data.frame(
+      species        = sp,
+      bcr            = cur_bcr,
+      year           = cur_year,
+      sector         = cur_sector,
+      obs_total_mean = obs_total_mean,
+      obs_total_sd   = obs_total_sd,
+      obs_on_S_mean  = obs_on_S_mean,
+      obs_on_S_sd    = obs_on_S_sd,
+      bf_on_S_mean   = bf_on_S_mean,
+      bf_on_S_sd     = bf_on_S_sd,
+      impact_mean    = impact_mean,
+      impact_sd      = impact_sd,
+      pct_bcr        = pct_bcr,
+      pct_bcr_sd     = pct_bcr_sd,
+      stringsAsFactors = FALSE
+    )
 
-    subbasin_means <- colMeans(sub_pct, na.rm = TRUE)
-    subbasin_sds   <- apply(sub_pct, 2, sd, na.rm = TRUE)
+    # ---- Subbasin scale ------------------------------------------------------
 
-    # ---- Assemble output row ------------------------------------------------
+    impact_sub    <- zonal(delta    * area_r, subbasin_r, "sum", na.rm = TRUE)
+    obs_total_sub <- zonal(obs_mean * area_r, subbasin_r, "sum", na.rm = TRUE)
+    names(impact_sub)[2]    <- "impact_sub"
+    names(obs_total_sub)[2] <- "obs_total_sub"
 
-    row <- data.frame(species = sp, bcr = cur_bcr, year = cur_year, stringsAsFactors = FALSE)
+    sub_tbl <- merge(obs_total_sub, impact_sub, by = names(subbasin_r))
+    sub_tbl$pct_sub <- sub_tbl$impact_sub / sub_tbl$obs_total_sub * 100
+    sub_tbl$pct_sub[!is.finite(sub_tbl$pct_sub)] <- NA
 
-    for (s_idx in seq_along(sector_names)) {
-      s <- sector_names[s_idx]
-      row[[paste0(s, "_pixel_mean")]]    <- pix_stats$mean[s_idx]
-      row[[paste0(s, "_pixel_sd")]]      <- pix_stats$sd[s_idx]
-      row[[paste0(s, "_subbasin_mean")]] <- subbasin_means[s_idx]
-      row[[paste0(s, "_subbasin_sd")]]   <- subbasin_sds[s_idx]
-      row[[paste0(s, "_bcr_impact")]]    <- bcr_impacts[s_idx]
-    }
+    subbasin_rows[[result_idx]] <- data.frame(
+      species      = sp,
+      bcr          = cur_bcr,
+      year         = cur_year,
+      sector       = cur_sector,
+      subbasin_id  = sub_tbl[[1]],
+      obs_total_sub = sub_tbl$obs_total_sub,
+      impact_sub   = sub_tbl$impact_sub,
+      pct_sub      = sub_tbl$pct_sub,
+      stringsAsFactors = FALSE
+    )
 
-    results[[result_idx]] <- row
+    # ---- Footprint scale -----------------------------------------------------
+
+    impact_patch <- zonal(delta    * area_r, patches_r, "sum", na.rm = TRUE)
+    obs_patch    <- zonal(obs_mean * area_r, patches_r, "sum", na.rm = TRUE)
+    bf_patch     <- zonal(bf_mean  * area_r, patches_r, "sum", na.rm = TRUE)
+    names(impact_patch)[2] <- "impact_patch"
+    names(obs_patch)[2]    <- "obs_on_patch"
+    names(bf_patch)[2]     <- "bf_on_patch"
+
+    fp_tbl <- merge(obs_patch, bf_patch,     by = names(patches_r))
+    fp_tbl <- merge(fp_tbl,    impact_patch, by = names(patches_r))
+    fp_tbl$pct_footprint <- fp_tbl$impact_patch / fp_tbl$obs_on_patch * 100
+    fp_tbl$pct_footprint[!is.finite(fp_tbl$pct_footprint)] <- NA
+
+    footprint_rows[[result_idx]] <- data.frame(
+      species       = sp,
+      bcr           = cur_bcr,
+      year          = cur_year,
+      sector        = cur_sector,
+      footprint_id  = fp_tbl[[1]],
+      obs_on_patch  = fp_tbl$obs_on_patch,
+      bf_on_patch   = fp_tbl$bf_on_patch,
+      impact_patch  = fp_tbl$impact_patch,
+      pct_footprint = fp_tbl$pct_footprint,
+      stringsAsFactors = FALSE
+    )
+
     result_idx <- result_idx + 1
-  }
-}
 
-# ---- Save output ------------------------------------------------------------
+  } # close species loop
+} # close outer loop
 
-output <- bind_rows(results)
-write.csv(output, out_path, row.names = FALSE)
-message("Saved sector attribution table (", nrow(output), " rows x ",
-        ncol(output), " cols) to:\n  ", out_path)
+# ---- Assemble BCR table ------------------------------------------------------
+
+bcr_df <- bind_rows(bcr_rows)
+
+# ---- National scale (derived from BCR) ---------------------------------------
+
+national_df <- bcr_df |>
+  group_by(species, year, sector) |>
+  summarise(
+    obs_total_national  = sum(obs_total_mean),
+    impact_national     = sum(impact_mean),
+    # SD assuming independence across BCRs
+    impact_national_sd  = sqrt(sum(impact_sd^2)),
+    obs_total_national_sd = sqrt(sum(obs_total_sd^2)),
+    pct_national        = impact_national / obs_total_national * 100,
+    pct_national_sd     = 100 * sqrt((impact_national_sd / obs_total_national)^2 +
+                                     (impact_national * obs_total_national_sd / obs_total_national^2)^2),
+    .groups = "drop"
+  )
+
+# ---- Write outputs -----------------------------------------------------------
+
+write.csv(bcr_df,             file.path(out_dir, "sector_bcr.csv"),       row.names = FALSE)
+write.csv(national_df,        file.path(out_dir, "sector_national.csv"),  row.names = FALSE)
+write.csv(bind_rows(subbasin_rows),  file.path(out_dir, "sector_subbasin.csv"),  row.names = FALSE)
+write.csv(bind_rows(footprint_rows), file.path(out_dir, "sector_footprint.csv"), row.names = FALSE)
+
+message("Done. Wrote 4 tables to ", out_dir)
+message("  sector_bcr.csv       : ", nrow(bcr_df), " rows")
+message("  sector_national.csv  : ", nrow(national_df), " rows")
+message("  sector_subbasin.csv  : ", nrow(bind_rows(subbasin_rows)), " rows")
+message("  sector_footprint.csv : ", nrow(bind_rows(footprint_rows)), " rows")

@@ -1,5 +1,5 @@
 # define density prediction function ------------------------------------------------------
-predict_species_bcr <- function(species, year, all_subbasins_subset) {
+predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name, hirsh_dir) {
   
   # communicate
   message(Sys.time(), " | preparing for species=", species, " year=", year)
@@ -44,7 +44,18 @@ predict_species_bcr <- function(species, year, all_subbasins_subset) {
     
     # get observed environmental stack for current BCR
     stack_obs <- terra::rast(file.path(nm_root,"gis/stacks", paste0(bcr_code, "_", year, ".tif")))
-    message(Sys.time(), " | done loading observed stack")    
+    message(Sys.time(), " | done loading observed stack")
+
+    # build sector mask: sector > 0 AND CanHF >= 1, projected to BCR prediction grid
+    sector_r  <- terra::project(
+                   terra::rast(file.path(hirsh_dir, paste0(sector_name, ".tif"))),
+                   stack_obs, method = "bilinear")
+    canHF_r   <- terra::project(
+                   terra::rast(file.path(hirsh_dir, "CanHF_1km_morethan1.tif")),
+                   stack_obs, method = "near")
+    sector_mask <- terra::ifel((sector_r > 0) & (canHF_r >= 1), 1, NA)
+    message(Sys.time(), " | sector mask built for ", sector_name,
+            " (", global(sector_mask, "notNA")[[1]], " active pixels)")
     
     # get mosaiced watershed stacks for current BCR
     stack_bf <- mosaic_backfilled_stacks(sub_ids, year)
@@ -57,7 +68,7 @@ predict_species_bcr <- function(species, year, all_subbasins_subset) {
       message(Sys.time(), " | no backfilled stack — skipping BCR")
       return(NULL)
     }
-    footprint_layer <- stack_bf[[grep("_mean$", names(stack_bf))[1]]]
+    footprint_layer <- sector_mask
     message(Sys.time(), " | done loading backfilled stack")
     
     # split BART outputs (mean + empirical posterior quantiles)
@@ -72,9 +83,9 @@ predict_species_bcr <- function(species, year, all_subbasins_subset) {
 
     # construct counterfactual scenarios using empirical posterior quantiles
     X_bf_sets <- list(
-      mean = make_counterfactual_stack(stack_obs, mu_stack),
-      low  = make_counterfactual_stack(stack_obs, q025_stack),
-      high = make_counterfactual_stack(stack_obs, q975_stack)
+      mean = make_counterfactual_stack(stack_obs, mu_stack,    sector_mask),
+      low  = make_counterfactual_stack(stack_obs, q025_stack,  sector_mask),
+      high = make_counterfactual_stack(stack_obs, q975_stack,  sector_mask)
     )
     
     # create containers to store predictions
@@ -144,45 +155,49 @@ predict_species_bcr <- function(species, year, all_subbasins_subset) {
     
     # save mean and SD of prediction surfaces ------------------------------------------------------
     
-    pred_dir <- file.path(ia_dir, "data", "derived_data", "predictions", species, bcr_code, year)
-    dir.create(pred_dir, recursive = TRUE, showWarnings = FALSE)
-    
+    # observed rasters are sector-independent; write once to the shared predictions/ path
+    obs_dir <- file.path(ia_dir, "data", "derived_data", "predictions", species, bcr_code, year)
+    # sector-specific backfilled rasters go to predictions_sectors/
+    bf_dir  <- file.path(ia_dir, "data", "derived_data", "predictions_sectors",
+                         sector_name, species, bcr_code, year)
+    dir.create(obs_dir, recursive = TRUE, showWarnings = FALSE)
+    dir.create(bf_dir,  recursive = TRUE, showWarnings = FALSE)
+
     # compute mean + sd incrementally without stacking (too memory intense)
     # helper: compute raster mean and sd incrementally (no stacking)
     summarize_preds <- function(pred_list) {
-      
+
       n <- length(pred_list)
-      
+
       mean_r <- pred_list[[1]]
       m2_r   <- mean_r * 0
-      
+
       for (i in seq_len(n)) {
         x <- pred_list[[i]]
         delta <- x - mean_r
         mean_r <- mean_r + delta / i
         m2_r <- m2_r + delta * (x - mean_r)
       }
-      
+
       list(mean = mean_r, sd   = sqrt(m2_r / (n - 1)))
     }
-    
+
     # observed
     obs_summary <- summarize_preds(obs_preds)
     obs_mean <- obs_summary$mean
     obs_sd   <- obs_summary$sd
-    
+
     # backfilled
     bf_summary <- lapply(bf_preds, summarize_preds)
-    
+
     # write observed rasters
-    terra::writeRaster(obs_mean, file.path(pred_dir, "observed_mean.tif"), overwrite = TRUE)
-    terra::writeRaster(obs_sd, file.path(pred_dir, "observed_sd.tif"), overwrite = TRUE)
-    
+    terra::writeRaster(obs_mean, file.path(obs_dir, "observed_mean.tif"), overwrite = TRUE)
+    terra::writeRaster(obs_sd,   file.path(obs_dir, "observed_sd.tif"),   overwrite = TRUE)
+
     # write backfilled rasters
     for (k in names(bf_summary)) {
-      
-      terra::writeRaster(bf_summary[[k]]$mean, file.path(pred_dir, paste0("backfilled_", k, "_mean.tif")), overwrite = TRUE)
-      terra::writeRaster(bf_summary[[k]]$sd,   file.path(pred_dir, paste0("backfilled_", k, "_sd.tif")),   overwrite = TRUE)
+      terra::writeRaster(bf_summary[[k]]$mean, file.path(bf_dir, paste0("backfilled_", k, "_mean.tif")), overwrite = TRUE)
+      terra::writeRaster(bf_summary[[k]]$sd,   file.path(bf_dir, paste0("backfilled_", k, "_sd.tif")),   overwrite = TRUE)
     }
     
     
@@ -275,6 +290,7 @@ predict_species_bcr <- function(species, year, all_subbasins_subset) {
       species = species,
       subbasin = sub_ids,
       bcr      = bcr_code,
+      sector   = sector_name,
       obs_total_mean    = pop_lists$pop_obs_total$mean,
       obs_total_sd      = pop_lists$pop_obs_total$sd,
       obs_on_bf_mean    = pop_lists$pop_obs_on_bf$mean,

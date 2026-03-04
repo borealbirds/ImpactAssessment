@@ -90,14 +90,13 @@ mosaic_backfilled_stacks <- function(sub_ids, year) {
   out
 }
 
-make_counterfactual_stack <- function(stack_obs, replacement_stack) {
+make_counterfactual_stack <- function(stack_obs, replacement_stack, sector_mask) {
 
     out <- stack_obs
 
-    # overwrite continuous biotic covariates with the provided replacement values
-    # (mean, q025, or q975 layer depending on the scenario)
+    # overwrite continuous biotic covariates with backfilled values at sector pixels only
     for (v in names(replacement_stack)) {
-      out[[v]] <- replacement_stack[[v]]
+      out[[v]] <- terra::ifel(sector_mask, replacement_stack[[v]], out[[v]])
     }
 
     out
@@ -167,8 +166,17 @@ task_id <- as.integer(Sys.getenv("SLURM_ARRAY_TASK_ID"))
 species <- species_vec[task_id]
 message("running species: ", species)
 
-res <- predict_species_bcr(species, year = year, all_subbasins_subset = all_subbasins_subset)
+# get sector from environment — required
+sector_name <- Sys.getenv("SECTOR")
+if (nchar(sector_name) == 0) stop("SECTOR env var must be set (e.g. export SECTOR=mines)")
+message("Sector: ", sector_name)
+
+hirsh_dir <- file.path(ia_dir, "data", "raw_data", "hirshpearson")
+
+res <- predict_species_bcr(species, year = year, all_subbasins_subset = all_subbasins_subset,
+                           sector_name = sector_name, hirsh_dir = hirsh_dir)
 dir.create(file.path(ia_dir, "data", "derived_data", "density_tables"), showWarnings = FALSE)
-saveRDS(res, file = file.path(ia_dir, "data", "derived_data", "density_tables", paste0(species, "_", year, ".rds")))
+saveRDS(res, file = file.path(ia_dir, "data", "derived_data", "density_tables",
+                              paste0(species, "_", year, "_", sector_name, ".rds")))
 message(Sys.time(), " nice.")
 
