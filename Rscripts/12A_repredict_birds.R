@@ -94,9 +94,15 @@ make_counterfactual_stack <- function(stack_obs, replacement_stack, sector_mask)
 
     out <- stack_obs
 
-    # overwrite continuous biotic covariates with backfilled values at sector pixels only
+    # overwrite continuous biotic covariates with backfilled values at sector pixels only;
+    # at non-sector pixels retain the observed value if the layer exists in stack_obs,
+    # or NA if the covariate is absent from this BCR's observed stack
     for (v in names(replacement_stack)) {
-      out[[v]] <- terra::ifel(sector_mask, replacement_stack[[v]], out[[v]])
+      if (v %in% names(out)) {
+        out[[v]] <- terra::ifel(sector_mask, replacement_stack[[v]], out[[v]])
+      } else {
+        out[[v]] <- terra::ifel(sector_mask, replacement_stack[[v]], NA_real_)
+      }
     }
 
     out
