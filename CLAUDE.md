@@ -56,6 +56,7 @@ Scripts are numbered in execution order:
 | `12B_predict_species_bcr.R` | sourced | `predict_species_bcr()`: mosaics backfilled subbasin stacks per BCR and runs BRT density models |
 | `12C_repredict_birds_check.R` | local | Sanity checks on re-prediction outputs |
 | `13_importance_of_covs_used_in_counterfactual.R` | cluster | Assess percentile importance of backfilled covariates in V5 bird models |
+| `15B_sector_attribution.R` | local | Reads per-sector prediction rasters from `predictions_sectors/` and computes population impact at BCR, national, subbasin, and footprint scales → `sector_effects/*.csv` |
 | `misc/` | local | Downstream analysis: population summaries, visualization, vegetation vs. mines comparisons |
 
 ## Submitting Cluster Jobs
@@ -119,6 +120,14 @@ data/
     │   └── {species}/{bcr_code}/{year}/
     │       ├── observed_mean.tif / observed_sd.tif
     │       └── backfilled_{scenario}_mean.tif / _sd.tif
+    ├── predictions_sectors/
+    │   └── {sector}/{species}/{bcr_code}/{year}/
+    │       └── backfilled_{scenario}_mean.tif / _sd.tif   # sector-isolated counterfactual
+    ├── sector_effects/
+    │   ├── sector_bcr.csv
+    │   ├── sector_national.csv
+    │   ├── sector_subbasin.csv
+    │   └── sector_footprint.csv
     └── rds_files/
         ├── model_metrics/{year}/
         │   ├── continuous_train_metrics.rds
@@ -135,4 +144,7 @@ data/
 Large spatial files (`.tif`, `.gpkg`, `.shp`) and most `.rds` files are gitignored. Versioned outputs are the CSV accuracy/confusion matrices in `data/derived_data/rds_files/`.
 
 ## Instructions from Masa
-Always ignore the directory /Rscripts/misc when thinking. It's not immediately relevant to the project.
+1.Always ignore the directory /Rscripts/misc when thinking. It's not immediately relevant to the project.
+2.Note that population estimates made by boosted regression trees via `gbm` predict bird density at the hectare scale.
+In order to match the scale of our covariate rasters (1km^2), we always multiply the pixel estimates by 100 to get the 1km^2 
+density estimate. 
