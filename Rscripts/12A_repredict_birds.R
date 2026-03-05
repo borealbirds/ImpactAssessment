@@ -14,10 +14,10 @@ suppressPackageStartupMessages({
 
 # set paths ------------------------------------------------------
 
-# colleague's NationalModels directory — paths here must not change
+# Elly's NationalModels directory
 nm_root <- "/home/mannfred/projects/def-ecknight/NationalModels"
 
-cc    <- TRUE    # TRUE = Compute Canada cluster
+cc    <- TRUE    # TRUE = Alliance Canada cluster
 local <- FALSE   # TRUE = local RProject machine
 
 if (cc)            { ia_dir <- "/home/mannfred/scratch/impact_assessment" }
@@ -33,7 +33,7 @@ bam_boundary <- terra::vect(file.path(ia_dir, "data", "raw_data", "Regions", "BA
 # import merged + subsetted subbasins
 all_subbasins_subset <- terra::vect(file.path(ia_dir, "data", "raw_data", "hydrobasins_masked_merged_subset.gpkg"))
 
-# ------------------------------------------------------
+# ------------------------------------------------------------------
 # create a reference table for which subbasins are in which BCRs 
 # some subbasins will be in multiple BCRs, and that's OK because 
 # we will ultimately crop to the BCR boundary to run the `gbm` model
@@ -71,10 +71,15 @@ mosaic_backfilled_stacks <- function(sub_ids, year) {
   
   stacks <- lapply(paths, terra::rast)
 
-  # union of all subbasin extents — used to normalise per-variable rasters before stacking
+  # union of all subbasin extents 
+  # used to normalise per-variable rasters before stacking
   full_ext <- Reduce(terra::union, lapply(stacks, terra::ext))
-
+  
+  # get all covariate names from backfilled stacks
   vars <- sort(unique(unlist(lapply(stacks, names))))
+  
+  # top loop: cycle through every covariate
+  # 2nd loop: cycle through every subbasin's stack
   var_list <- lapply(vars, function(v) {
     available <- lapply(stacks, function(r) if (v %in% names(r)) r[[v]] else NULL)
     available <- Filter(Negate(is.null), available)
@@ -89,6 +94,7 @@ mosaic_backfilled_stacks <- function(sub_ids, year) {
   names(out) <- vars[keep]
   out
 }
+
 
 make_counterfactual_stack <- function(stack_obs, replacement_stack, sector_mask) {
 
@@ -172,16 +178,20 @@ task_id <- as.integer(Sys.getenv("SLURM_ARRAY_TASK_ID"))
 species <- species_vec[task_id]
 message("running species: ", species)
 
-# get sector from environment — required
+# get industry type (sector) from environment
 sector_name <- Sys.getenv("SECTOR")
 if (nchar(sector_name) == 0) stop("SECTOR env var must be set (e.g. export SECTOR=mines)")
 message("Sector: ", sector_name)
 
+# define path to sector rasters
 hirsh_dir <- file.path(ia_dir, "data", "raw_data", "hirshpearson")
 
+# run density predictions for a given species x year (all BCRs)
 res <- predict_species_bcr(species, year = year, all_subbasins_subset = all_subbasins_subset,
                            sector_name = sector_name, hirsh_dir = hirsh_dir)
+
 dir.create(file.path(ia_dir, "data", "derived_data", "density_tables"), showWarnings = FALSE)
+
 saveRDS(res, file = file.path(ia_dir, "data", "derived_data", "density_tables",
                               paste0(species, "_", year, "_", sector_name, ".rds")))
 message(Sys.time(), " nice.")
