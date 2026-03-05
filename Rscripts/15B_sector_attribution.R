@@ -113,11 +113,11 @@ for (i in seq_len(nrow(bcr_year_sector_combos))) {
 
   # use first species as spatial template (observed grid is identical across species)
   template_r <- rast(file.path(obs_root, sp_list[1], cur_bcr, cur_year, "observed_mean.tif"))
-  area_r     <- cellSize(template_r, unit = "km")
+  area_r     <- cellSize(template_r, unit = "ha")
 
   # sector mask on BCR grid
   sector_r  <- project(rast(file.path(hirsh_dir, paste0(cur_sector, ".tif"))),
-                       template_r, method = "bilinear")
+                       template_r, method = "near")
   canHF_r   <- project(rast(canHF_path), template_r, method = "near")
   sector_mask <- ifel((sector_r > 0) & (canHF_r >= 1), 1, NA)
 

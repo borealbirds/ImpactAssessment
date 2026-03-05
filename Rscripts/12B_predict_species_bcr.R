@@ -49,7 +49,7 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
     # build sector mask: sector > 0 AND CanHF >= 1, projected to BCR prediction grid
     sector_r  <- terra::project(
                    terra::rast(file.path(hirsh_dir, paste0(sector_name, ".tif"))),
-                   stack_obs, method = "bilinear")
+                   stack_obs, method = "near")
     canHF_r   <- terra::project(
                    terra::rast(file.path(hirsh_dir, "CanHF_1km_morethan1.tif")),
                    stack_obs, method = "near")
