@@ -149,7 +149,7 @@ for (i in seq_len(nrow(bcr_year_sector_combos))) {
     bf_on_S_sd     <- as.numeric(sqrt(global(mask(bf_sd, sector_mask)^2 * area_r^2, "sum", na.rm = TRUE)))
 
     impact_mean <- as.numeric(global(delta * area_r, "sum", na.rm = TRUE))
-    impact_sd   <- as.numeric(sqrt(global((bf_sd^2 + obs_sd^2) * area_r^2, "sum", na.rm = TRUE)))
+    impact_sd   <- as.numeric(sqrt(global(mask((bf_sd^2 + obs_sd^2) * area_r^2, sector_mask), "sum", na.rm = TRUE)))
 
     pct_bcr    <- impact_mean / obs_total_mean * 100
     pct_bcr_sd <- 100 * sqrt((impact_sd / obs_total_mean)^2 +
