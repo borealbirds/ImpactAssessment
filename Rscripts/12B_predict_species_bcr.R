@@ -4,17 +4,20 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
   # communicate
   message(Sys.time(), " | preparing for species=", species, " year=", year)
   
-  # find all models (BCRs) for the current `species`
+  # find all `gbm` models (BCRs) for the current `species`
   rdata_files <- list.files(file.path(nm_root,"output/06_bootstraps", species), pattern = "can14.*\\.Rdata$", full.names = TRUE)
   message(Sys.time(), " | ", species, " | found ", length(rdata_files), " BCR models")
   
-  # this sub-function will work through all model-lists (one per BCR) for a given species
+  # this sub-function executes population estimation from all model-lists in rdata_files
+  # each element in `rdata_files` is an .Rdata object with 32 bootstraps for a given species spp x BCR
+  # the output (per element) is a data.frame with each row as a species x subbasin x industry tuple
+  # and column denoting observed and counterfactual population estimates, averaged over 32 bootstraps
   do.call(dplyr::bind_rows, lapply(rdata_files, function(rdata_path) {
     
     message(Sys.time(), " | loading ", basename(rdata_path))
     e <- new.env(parent = emptyenv())
     
-    # creates a `b.list` object in the environment
+    # creates a `b.list` object in the environment (list of 32 bootstraps)
     load(rdata_path, envir = e)
     
     if (!exists("b.list", envir = e)) {
@@ -68,10 +71,10 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
       message(Sys.time(), " | no backfilled stack — skipping BCR")
       return(NULL)
     }
-    footprint_layer <- sector_mask
+    
     message(Sys.time(), " | done loading backfilled stack")
     
-    # split BART outputs (mean + empirical posterior quantiles)
+    # split BART outputs into mean, lower quantile, and upper quantile (from the posterior distribution)
     mu_stack <- stack_bf[[grep("_mean$", names(stack_bf))]]
     names(mu_stack)   <- sub("_mean$", "", names(mu_stack))
 
@@ -165,7 +168,6 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
     dir.create(bf_dir,  recursive = TRUE, showWarnings = FALSE)
 
     # compute mean + sd incrementally without stacking (too memory intense)
-    # helper: compute raster mean and sd incrementally (no stacking)
     summarize_preds <- function(pred_list) {
 
       n <- length(pred_list)
@@ -208,7 +210,7 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
     # force agg() to always return a matrix, even when there’s only one subbasin
     message(Sys.time(), " | ", species, " ", bcr_code, " | estimating population over ", length(sub_ids), " subbasins")
     
-    agg <- function(obs_rasters, bf_rasters_list, sub_ids, footprint_layer) {
+    agg <- function(obs_rasters, bf_rasters_list, sub_ids, sector_mask) {
       
       n_sub  <- length(sub_ids)
       n_boot <- length(obs_rasters)
@@ -239,7 +241,7 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
             pop_obs_total_arr[j, i, s] <- terra::extract(obs_r, poly, fun = sum, na.rm = TRUE)[,2]
             
             # restrict footprint to this subbasin
-            fp_sub <- terra::mask(footprint_layer, poly)
+            fp_sub <- terra::mask(sector_mask, poly)
             
             obs_fp <- terra::mask(obs_r, fp_sub)
             bf_fp  <- terra::mask(bf_r,  fp_sub)
@@ -273,9 +275,9 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
     
     
     # run aggregation including posterior
-    pop_lists <- agg(obs_preds, bf_preds, sub_ids, footprint_layer)
+    pop_lists <- agg(obs_preds, bf_preds, sub_ids, sector_mask)
     
-    # for each subbasin, compute counterfactual total population:
+    # for each subbasin, compute counterfactual total population
     counterfactual_total <-
       pop_lists$pop_obs_total$mean -
       pop_lists$pop_obs_on_bf$mean +
