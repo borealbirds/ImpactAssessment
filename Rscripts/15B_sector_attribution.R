@@ -148,28 +148,35 @@ for (i in seq_len(nrow(bcr_year_sector_combos))) {
     bf_on_S_mean   <- as.numeric(global(mask(bf_mean,  sector_mask) * area_r, "sum", na.rm = TRUE))
     bf_on_S_sd     <- as.numeric(sqrt(global(mask(bf_sd, sector_mask)^2 * area_r^2, "sum", na.rm = TRUE)))
 
-    impact_mean <- as.numeric(global(delta * area_r, "sum", na.rm = TRUE))
-    impact_sd   <- as.numeric(sqrt(global(mask((bf_sd^2 + obs_sd^2) * area_r^2, sector_mask), "sum", na.rm = TRUE)))
+    # impact = difference on sector pixels only; consistent with 12B counterfactual logic
+    impact_mean <- bf_on_S_mean - obs_on_S_mean
+    impact_sd   <- sqrt(bf_on_S_sd^2 + obs_on_S_sd^2)
+
+    # counterfactual BCR total: swap observed density on sector pixels for backfilled density
+    counterfactual_total_mean <- obs_total_mean - obs_on_S_mean + bf_on_S_mean
+    counterfactual_total_sd   <- sqrt(obs_total_sd^2 + impact_sd^2)
 
     pct_bcr    <- impact_mean / obs_total_mean * 100
     pct_bcr_sd <- 100 * sqrt((impact_sd / obs_total_mean)^2 +
                                (impact_mean * obs_total_sd / obs_total_mean^2)^2)
 
     bcr_rows[[result_idx]] <- data.frame(
-      species        = sp,
-      bcr            = cur_bcr,
-      year           = cur_year,
-      sector         = cur_sector,
-      obs_total_mean = obs_total_mean,
-      obs_total_sd   = obs_total_sd,
-      obs_on_S_mean  = obs_on_S_mean,
-      obs_on_S_sd    = obs_on_S_sd,
-      bf_on_S_mean   = bf_on_S_mean,
-      bf_on_S_sd     = bf_on_S_sd,
-      impact_mean    = impact_mean,
-      impact_sd      = impact_sd,
-      pct_bcr        = pct_bcr,
-      pct_bcr_sd     = pct_bcr_sd,
+      species                   = sp,
+      bcr                       = cur_bcr,
+      year                      = cur_year,
+      sector                    = cur_sector,
+      obs_total_mean            = obs_total_mean,
+      obs_total_sd              = obs_total_sd,
+      counterfactual_total_mean = counterfactual_total_mean,
+      counterfactual_total_sd   = counterfactual_total_sd,
+      obs_on_S_mean             = obs_on_S_mean,
+      obs_on_S_sd               = obs_on_S_sd,
+      bf_on_S_mean              = bf_on_S_mean,
+      bf_on_S_sd                = bf_on_S_sd,
+      impact_mean               = impact_mean,
+      impact_sd                 = impact_sd,
+      pct_bcr                   = pct_bcr,
+      pct_bcr_sd                = pct_bcr_sd,
       stringsAsFactors = FALSE
     )
 
