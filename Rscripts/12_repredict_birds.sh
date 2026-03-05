@@ -3,9 +3,9 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=40G
+#SBATCH --mem=24G
 #SBATCH --time=12:00:00
-#SBATCH --job-name=cawa_repredict_feb25
+#SBATCH --job-name=cawa_repredict_mar3
 #SBATCH --array=1-1
 #SBATCH --mail-user=mannfred@ualberta.ca
 
