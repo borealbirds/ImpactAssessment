@@ -118,11 +118,10 @@ data/
     │   └── {species}_{year}.rds
     ├── predictions/
     │   └── {species}/{bcr_code}/{year}/
-    │       ├── observed_mean.tif / observed_sd.tif
-    │       └── backfilled_{scenario}_mean.tif / _sd.tif
+    │       ├── observed_mean.tif / observed_sd.tif         # observed landscape predictions only
     ├── predictions_sectors/
     │   └── {sector}/{species}/{bcr_code}/{year}/
-    │       └── backfilled_{scenario}_mean.tif / _sd.tif   # sector-isolated counterfactual
+    │       └── backfilled_{scenario}_mean.tif / _sd.tif   # sector-isolated counterfactual predictions
     ├── sector_effects/
     │   ├── sector_bcr.csv
     │   ├── sector_national.csv
