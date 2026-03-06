@@ -121,6 +121,9 @@ for (i in seq_len(nrow(bcr_year_sector_combos))) {
   canHF_r   <- project(rast(canHF_path), template_r, method = "near")
   sector_mask <- ifel((sector_r > 0) & (canHF_r >= 1), 1, NA)
 
+  # full high-HF mask (all sectors combined); used for all-HF counterfactual
+  hf_mask <- ifel(canHF_r >= 1, 1, NA)
+
   # subbasin IDs rasterized onto BCR grid
   basins_clip <- crop(hydrobasins, ext(template_r))
   subbasin_r  <- rasterize(basins_clip, template_r, field = "first_HYBAS_ID")
@@ -139,44 +142,70 @@ for (i in seq_len(nrow(bcr_year_sector_combos))) {
 
     delta    <- bf_mean - obs_mean   # non-zero only at sector pixels
 
+    # full backfill rasters (all high-HF pixels, not sector-specific)
+    bf_full_mean <- rast(file.path(obs_root, sp, cur_bcr, cur_year, "backfilled_mean_mean.tif"))
+    bf_full_sd   <- rast(file.path(obs_root, sp, cur_bcr, cur_year, "backfilled_mean_sd.tif"))
+
     # ---- BCR scale -----------------------------------------------------------
 
-    obs_total_mean <- as.numeric(global(obs_mean * area_r, "sum", na.rm = TRUE))
-    obs_total_sd   <- as.numeric(sqrt(global(obs_sd^2 * area_r^2, "sum", na.rm = TRUE)))
-    obs_on_S_mean  <- as.numeric(global(mask(obs_mean, sector_mask) * area_r, "sum", na.rm = TRUE))
-    obs_on_S_sd    <- as.numeric(sqrt(global(mask(obs_sd, sector_mask)^2 * area_r^2, "sum", na.rm = TRUE)))
-    bf_on_S_mean   <- as.numeric(global(mask(bf_mean,  sector_mask) * area_r, "sum", na.rm = TRUE))
-    bf_on_S_sd     <- as.numeric(sqrt(global(mask(bf_sd, sector_mask)^2 * area_r^2, "sum", na.rm = TRUE)))
+    obs_population_mean <- as.numeric(global(obs_mean * area_r, "sum", na.rm = TRUE))
+    obs_population_sd   <- as.numeric(sqrt(global(obs_sd^2 * area_r^2, "sum", na.rm = TRUE)))
 
-    # impact = difference on sector pixels only; consistent with 12B counterfactual logic
-    impact_mean <- bf_on_S_mean - obs_on_S_mean
-    impact_sd   <- sqrt(bf_on_S_sd^2 + obs_on_S_sd^2)
+    # all-HF counterfactual: swap observed density on ALL high-HF pixels for backfilled density
+    obs_on_HF_mean <- as.numeric(global(mask(obs_mean,      hf_mask) * area_r, "sum", na.rm = TRUE))
+    obs_on_HF_sd   <- as.numeric(sqrt(global(mask(obs_sd,   hf_mask)^2 * area_r^2, "sum", na.rm = TRUE)))
+    bf_on_HF_mean  <- as.numeric(global(mask(bf_full_mean,  hf_mask) * area_r, "sum", na.rm = TRUE))
+    bf_on_HF_sd    <- as.numeric(sqrt(global(mask(bf_full_sd, hf_mask)^2 * area_r^2, "sum", na.rm = TRUE)))
 
-    # counterfactual BCR total: swap observed density on sector pixels for backfilled density
-    counterfactual_total_mean <- obs_total_mean - obs_on_S_mean + bf_on_S_mean
-    counterfactual_total_sd   <- sqrt(obs_total_sd^2 + impact_sd^2)
+    HF_impact_mean <- bf_on_HF_mean - obs_on_HF_mean
+    HF_impact_sd   <- sqrt(bf_on_HF_sd^2 + obs_on_HF_sd^2)
 
-    pct_bcr    <- impact_mean / obs_total_mean * 100
-    pct_bcr_sd <- 100 * sqrt((impact_sd / obs_total_mean)^2 +
-                               (impact_mean * obs_total_sd / obs_total_mean^2)^2)
+    cf_population_mean <- obs_population_mean - obs_on_HF_mean + bf_on_HF_mean
+    cf_population_sd   <- sqrt(obs_population_sd^2 + HF_impact_sd^2)
+
+    HF_percent_impact_mean <- HF_impact_mean / obs_population_mean * 100
+    HF_percent_impact_sd   <- 100 * sqrt((HF_impact_sd / obs_population_mean)^2 +
+                                           (HF_impact_mean * obs_population_sd / obs_population_mean^2)^2)
+
+    # sector-specific counterfactual: swap observed density on sector pixels only
+    obs_population_on_footprint_mean <- as.numeric(global(mask(obs_mean, sector_mask) * area_r, "sum", na.rm = TRUE))
+    obs_population_on_footprint_sd   <- as.numeric(sqrt(global(mask(obs_sd, sector_mask)^2 * area_r^2, "sum", na.rm = TRUE)))
+    cf_population_on_footprint_mean  <- as.numeric(global(mask(bf_mean, sector_mask) * area_r, "sum", na.rm = TRUE))
+    cf_population_on_footprint_sd    <- as.numeric(sqrt(global(mask(bf_sd, sector_mask)^2 * area_r^2, "sum", na.rm = TRUE)))
+
+    sector_impact_mean <- cf_population_on_footprint_mean - obs_population_on_footprint_mean
+    sector_impact_sd   <- sqrt(cf_population_on_footprint_sd^2 + obs_population_on_footprint_sd^2)
+
+    cf_sector_population_mean <- obs_population_mean - obs_population_on_footprint_mean + cf_population_on_footprint_mean
+    cf_sector_population_sd   <- sqrt(obs_population_sd^2 + sector_impact_sd^2)
+
+    sector_percent_impact_mean <- sector_impact_mean / obs_population_mean * 100
+    sector_percent_impact_sd   <- 100 * sqrt((sector_impact_sd / obs_population_mean)^2 +
+                                               (sector_impact_mean * obs_population_sd / obs_population_mean^2)^2)
 
     bcr_rows[[result_idx]] <- data.frame(
-      species                   = sp,
-      bcr                       = cur_bcr,
-      year                      = cur_year,
-      sector                    = cur_sector,
-      obs_total_mean            = obs_total_mean,
-      obs_total_sd              = obs_total_sd,
-      counterfactual_total_mean = counterfactual_total_mean,
-      counterfactual_total_sd   = counterfactual_total_sd,
-      obs_on_S_mean             = obs_on_S_mean,
-      obs_on_S_sd               = obs_on_S_sd,
-      bf_on_S_mean              = bf_on_S_mean,
-      bf_on_S_sd                = bf_on_S_sd,
-      impact_mean               = impact_mean,
-      impact_sd                 = impact_sd,
-      pct_bcr                   = pct_bcr,
-      pct_bcr_sd                = pct_bcr_sd,
+      species                          = sp,
+      bcr                              = cur_bcr,
+      year                             = cur_year,
+      sector                           = cur_sector,
+      obs_population_mean              = round(obs_population_mean),
+      obs_population_sd                = round(obs_population_sd, 1),
+      cf_population_mean               = round(cf_population_mean),
+      cf_population_sd                 = round(cf_population_sd, 1),
+      HF_impact_mean                   = round(HF_impact_mean),
+      HF_impact_sd                     = round(HF_impact_sd, 1),
+      HF_percent_impact_mean           = round(HF_percent_impact_mean, 4),
+      HF_percent_impact_sd             = round(HF_percent_impact_sd, 4),
+      cf_sector_population_mean        = round(cf_sector_population_mean),
+      cf_sector_population_sd          = round(cf_sector_population_sd, 1),
+      sector_impact_mean               = round(sector_impact_mean),
+      sector_impact_sd                 = round(sector_impact_sd, 1),
+      sector_percent_impact_mean       = round(sector_percent_impact_mean, 4),
+      sector_percent_impact_sd         = round(sector_percent_impact_sd, 4),
+      obs_population_on_footprint_mean = round(obs_population_on_footprint_mean),
+      obs_population_on_footprint_sd   = round(obs_population_on_footprint_sd, 1),
+      cf_population_on_footprint_mean  = round(cf_population_on_footprint_mean),
+      cf_population_on_footprint_sd    = round(cf_population_on_footprint_sd, 1),
       stringsAsFactors = FALSE
     )
 
@@ -244,14 +273,22 @@ bcr_df <- bind_rows(bcr_rows)
 national_df <- bcr_df |>
   group_by(species, year, sector) |>
   summarise(
-    obs_total_national  = sum(obs_total_mean),
-    impact_national     = sum(impact_mean),
-    # SD assuming independence across BCRs
-    impact_national_sd  = sqrt(sum(impact_sd^2)),
-    obs_total_national_sd = sqrt(sum(obs_total_sd^2)),
-    pct_national        = impact_national / obs_total_national * 100,
-    pct_national_sd     = 100 * sqrt((impact_national_sd / obs_total_national)^2 +
-                                     (impact_national * obs_total_national_sd / obs_total_national^2)^2),
+    obs_population_mean        = round(sum(obs_population_mean)),
+    obs_population_sd          = round(sqrt(sum(obs_population_sd^2)), 1),
+    cf_population_mean         = round(sum(cf_population_mean)),
+    cf_population_sd           = round(sqrt(sum(cf_population_sd^2)), 1),
+    HF_impact_mean             = round(sum(HF_impact_mean)),
+    HF_impact_sd               = round(sqrt(sum(HF_impact_sd^2)), 1),
+    HF_percent_impact_mean     = round(HF_impact_mean / obs_population_mean * 100, 4),
+    HF_percent_impact_sd       = round(100 * sqrt((HF_impact_sd / obs_population_mean)^2 +
+                                         (HF_impact_mean * obs_population_sd / obs_population_mean^2)^2), 4),
+    cf_sector_population_mean  = round(sum(cf_sector_population_mean)),
+    cf_sector_population_sd    = round(sqrt(sum(cf_sector_population_sd^2)), 1),
+    sector_impact_mean         = round(sum(sector_impact_mean)),
+    sector_impact_sd           = round(sqrt(sum(sector_impact_sd^2)), 1),
+    sector_percent_impact_mean = round(sector_impact_mean / obs_population_mean * 100, 4),
+    sector_percent_impact_sd   = round(100 * sqrt((sector_impact_sd / obs_population_mean)^2 +
+                                         (sector_impact_mean * obs_population_sd / obs_population_mean^2)^2), 4),
     .groups = "drop"
   )
 
