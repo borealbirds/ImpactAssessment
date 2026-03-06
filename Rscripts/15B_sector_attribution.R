@@ -194,14 +194,14 @@ for (i in seq_len(nrow(bcr_year_sector_combos))) {
       cf_population_sd                 = round(cf_population_sd, 1),
       HF_impact_mean                   = round(HF_impact_mean),
       HF_impact_sd                     = round(HF_impact_sd, 1),
-      HF_percent_impact_mean           = round(HF_percent_impact_mean, 4),
-      HF_percent_impact_sd             = round(HF_percent_impact_sd, 4),
+      HF_percent_impact_mean           = round(HF_percent_impact_mean, 2),
+      HF_percent_impact_sd             = round(HF_percent_impact_sd, 2),
       cf_sector_population_mean        = round(cf_sector_population_mean),
       cf_sector_population_sd          = round(cf_sector_population_sd, 1),
       sector_impact_mean               = round(sector_impact_mean),
       sector_impact_sd                 = round(sector_impact_sd, 1),
-      sector_percent_impact_mean       = round(sector_percent_impact_mean, 4),
-      sector_percent_impact_sd         = round(sector_percent_impact_sd, 4),
+      sector_percent_impact_mean       = round(sector_percent_impact_mean, 2),
+      sector_percent_impact_sd         = round(sector_percent_impact_sd, 2),
       obs_population_on_footprint_mean = round(obs_population_on_footprint_mean),
       obs_population_on_footprint_sd   = round(obs_population_on_footprint_sd, 1),
       cf_population_on_footprint_mean  = round(cf_population_on_footprint_mean),
@@ -211,51 +211,54 @@ for (i in seq_len(nrow(bcr_year_sector_combos))) {
 
     # ---- Subbasin scale ------------------------------------------------------
 
-    impact_sub    <- zonal(delta    * area_r, subbasin_r, "sum", na.rm = TRUE)
-    obs_total_sub <- zonal(obs_mean * area_r, subbasin_r, "sum", na.rm = TRUE)
-    names(impact_sub)[2]    <- "impact_sub"
-    names(obs_total_sub)[2] <- "obs_total_sub"
+    sector_impact_sub    <- zonal(delta    * area_r, subbasin_r, "sum", na.rm = TRUE)
+    obs_population_sub   <- zonal(obs_mean * area_r, subbasin_r, "sum", na.rm = TRUE)
+    names(sector_impact_sub)[2]  <- "sector_impact_sub"
+    names(obs_population_sub)[2] <- "obs_population_sub"
 
-    sub_tbl <- merge(obs_total_sub, impact_sub, by = names(subbasin_r))
-    sub_tbl$pct_sub <- sub_tbl$impact_sub / sub_tbl$obs_total_sub * 100
-    sub_tbl$pct_sub[!is.finite(sub_tbl$pct_sub) | sub_tbl$obs_total_sub < 1e-6] <- NA
+    sub_tbl <- merge(obs_population_sub, sector_impact_sub, by = names(subbasin_r))
+    sub_tbl$sector_percent_impact_sub <- sub_tbl$sector_impact_sub / sub_tbl$obs_population_sub * 100
+    sub_tbl$sector_percent_impact_sub[!is.finite(sub_tbl$sector_percent_impact_sub) |
+                                       sub_tbl$obs_population_sub < 1e-6] <- NA
 
     subbasin_rows[[result_idx]] <- data.frame(
-      species      = sp,
-      bcr          = cur_bcr,
-      year         = cur_year,
-      sector       = cur_sector,
-      subbasin_id  = sub_tbl[[1]],
-      obs_total_sub = sub_tbl$obs_total_sub,
-      impact_sub   = sub_tbl$impact_sub,
-      pct_sub      = sub_tbl$pct_sub,
+      species                   = sp,
+      bcr                       = cur_bcr,
+      year                      = cur_year,
+      sector                    = cur_sector,
+      subbasin_id               = sub_tbl[[1]],
+      obs_population_sub        = round(sub_tbl$obs_population_sub),
+      sector_impact_sub         = round(sub_tbl$sector_impact_sub),
+      sector_percent_impact_sub = round(sub_tbl$sector_percent_impact_sub, 2),
       stringsAsFactors = FALSE
     )
 
     # ---- Footprint scale -----------------------------------------------------
 
-    impact_patch <- zonal(delta    * area_r, patches_r, "sum", na.rm = TRUE)
-    obs_patch    <- zonal(obs_mean * area_r, patches_r, "sum", na.rm = TRUE)
-    bf_patch     <- zonal(bf_mean  * area_r, patches_r, "sum", na.rm = TRUE)
-    names(impact_patch)[2] <- "impact_patch"
-    names(obs_patch)[2]    <- "obs_on_patch"
-    names(bf_patch)[2]     <- "bf_on_patch"
+    sector_impact_footprint    <- zonal(delta    * area_r, patches_r, "sum", na.rm = TRUE)
+    obs_population_footprint   <- zonal(obs_mean * area_r, patches_r, "sum", na.rm = TRUE)
+    cf_population_footprint    <- zonal(bf_mean  * area_r, patches_r, "sum", na.rm = TRUE)
+    names(sector_impact_footprint)[2]  <- "sector_impact_footprint"
+    names(obs_population_footprint)[2] <- "obs_population_on_footprint"
+    names(cf_population_footprint)[2]  <- "cf_population_on_footprint"
 
-    fp_tbl <- merge(obs_patch, bf_patch,     by = names(patches_r))
-    fp_tbl <- merge(fp_tbl,    impact_patch, by = names(patches_r))
-    fp_tbl$pct_footprint <- fp_tbl$impact_patch / fp_tbl$obs_on_patch * 100
-    fp_tbl$pct_footprint[!is.finite(fp_tbl$pct_footprint) | fp_tbl$obs_on_patch < 1e-6] <- NA
+    fp_tbl <- merge(obs_population_footprint, cf_population_footprint, by = names(patches_r))
+    fp_tbl <- merge(fp_tbl, sector_impact_footprint, by = names(patches_r))
+    fp_tbl$sector_percent_impact_footprint <- fp_tbl$sector_impact_footprint /
+                                              fp_tbl$obs_population_on_footprint * 100
+    fp_tbl$sector_percent_impact_footprint[!is.finite(fp_tbl$sector_percent_impact_footprint) |
+                                            fp_tbl$obs_population_on_footprint < 1e-6] <- NA
 
     footprint_rows[[result_idx]] <- data.frame(
-      species       = sp,
-      bcr           = cur_bcr,
-      year          = cur_year,
-      sector        = cur_sector,
-      footprint_id  = fp_tbl[[1]],
-      obs_on_patch  = fp_tbl$obs_on_patch,
-      bf_on_patch   = fp_tbl$bf_on_patch,
-      impact_patch  = fp_tbl$impact_patch,
-      pct_footprint = fp_tbl$pct_footprint,
+      species                            = sp,
+      bcr                                = cur_bcr,
+      year                               = cur_year,
+      sector                             = cur_sector,
+      footprint_id                       = fp_tbl[[1]],
+      obs_population_on_footprint        = round(fp_tbl$obs_population_on_footprint),
+      cf_population_on_footprint         = round(fp_tbl$cf_population_on_footprint),
+      sector_impact_footprint            = round(fp_tbl$sector_impact_footprint),
+      sector_percent_impact_footprint    = round(fp_tbl$sector_percent_impact_footprint, 2),
       stringsAsFactors = FALSE
     )
 
@@ -279,16 +282,16 @@ national_df <- bcr_df |>
     cf_population_sd           = round(sqrt(sum(cf_population_sd^2)), 1),
     HF_impact_mean             = round(sum(HF_impact_mean)),
     HF_impact_sd               = round(sqrt(sum(HF_impact_sd^2)), 1),
-    HF_percent_impact_mean     = round(HF_impact_mean / obs_population_mean * 100, 4),
+    HF_percent_impact_mean     = round(HF_impact_mean / obs_population_mean * 100, 2),
     HF_percent_impact_sd       = round(100 * sqrt((HF_impact_sd / obs_population_mean)^2 +
-                                         (HF_impact_mean * obs_population_sd / obs_population_mean^2)^2), 4),
+                                         (HF_impact_mean * obs_population_sd / obs_population_mean^2)^2), 2),
     cf_sector_population_mean  = round(sum(cf_sector_population_mean)),
     cf_sector_population_sd    = round(sqrt(sum(cf_sector_population_sd^2)), 1),
     sector_impact_mean         = round(sum(sector_impact_mean)),
     sector_impact_sd           = round(sqrt(sum(sector_impact_sd^2)), 1),
-    sector_percent_impact_mean = round(sector_impact_mean / obs_population_mean * 100, 4),
+    sector_percent_impact_mean = round(sector_impact_mean / obs_population_mean * 100, 2),
     sector_percent_impact_sd   = round(100 * sqrt((sector_impact_sd / obs_population_mean)^2 +
-                                         (sector_impact_mean * obs_population_sd / obs_population_mean^2)^2), 4),
+                                         (sector_impact_mean * obs_population_sd / obs_population_mean^2)^2), 2),
     .groups = "drop"
   )
 
