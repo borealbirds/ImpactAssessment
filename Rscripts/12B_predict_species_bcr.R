@@ -47,13 +47,18 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
     message(Sys.time(), " | done loading observed stack")
 
     # build sector mask: sector > 0 AND CanHF >= 1, projected to BCR prediction grid
-    sector_r  <- terra::project(
-                   terra::rast(file.path(hirsh_dir, paste0(sector_name, ".tif"))),
-                   stack_obs, method = "near")
-    canHF_r   <- terra::project(
-                   terra::rast(file.path(hirsh_dir, "CanHF_1km_morethan1.tif")),
-                   stack_obs, method = "near")
-    sector_mask <- terra::ifel((sector_r > 0) & (canHF_r >= 1), 1, NA)
+    # "all_hf" is a special case: mask is all pixels with CanHF >= 1 (no sector raster needed)
+    canHF_r <- terra::project(
+                 terra::rast(file.path(hirsh_dir, "CanHF_1km_morethan1.tif")),
+                 stack_obs, method = "near")
+    if (sector_name == "all_hf") {
+      sector_mask <- terra::ifel(canHF_r >= 1, 1, NA)
+    } else {
+      sector_r    <- terra::project(
+                       terra::rast(file.path(hirsh_dir, paste0(sector_name, ".tif"))),
+                       stack_obs, method = "near")
+      sector_mask <- terra::ifel((sector_r > 0) & (canHF_r >= 1), 1, NA)
+    }
     message(Sys.time(), " | sector mask built for ", sector_name,
             " (", global(sector_mask, "notNA")[[1]], " active pixels)")
     

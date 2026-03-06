@@ -142,9 +142,9 @@ for (i in seq_len(nrow(bcr_year_sector_combos))) {
 
     delta    <- bf_mean - obs_mean   # non-zero only at sector pixels
 
-    # full backfill rasters (all high-HF pixels, not sector-specific)
-    bf_full_mean <- rast(file.path(obs_root, sp, cur_bcr, cur_year, "backfilled_mean_mean.tif"))
-    bf_full_sd   <- rast(file.path(obs_root, sp, cur_bcr, cur_year, "backfilled_mean_sd.tif"))
+    # full backfill rasters (all high-HF pixels, from the all_hf sector run)
+    bf_full_mean <- rast(file.path(bf_root, "all_hf", sp, cur_bcr, cur_year, "backfilled_mean_mean.tif"))
+    bf_full_sd   <- rast(file.path(bf_root, "all_hf", sp, cur_bcr, cur_year, "backfilled_mean_sd.tif"))
 
     # ---- BCR scale -----------------------------------------------------------
 
