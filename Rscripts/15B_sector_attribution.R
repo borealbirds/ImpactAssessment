@@ -157,8 +157,11 @@ for (i in seq_len(nrow(bcr_year_sector_combos))) {
     # distributions pre-computed in 12B. Take [1] since BCR-level values are
     # identical for every subbasin row within a BCR.
 
-    obs_population_mean <- dt$obs_total_bcr_mean[1]  # BCR-wide; BRT bootstrap SD only
-    obs_population_sd   <- dt$obs_total_bcr_sd[1]
+    # Use all_hf as canonical obs source: observed landscape is sector-independent,
+    # but each sector SLURM job recomputes obs independently → floating-point drift.
+    # all_hf is a single canonical run, so its obs values are the reference.
+    obs_population_mean <- dt_all_hf$obs_total_bcr_mean[1]
+    obs_population_sd   <- dt_all_hf$obs_total_bcr_sd[1]
 
     # all-HF counterfactual from the all_hf density table
     HF_impact_mean     <- dt_all_hf$sector_impact_bcr_mean[1]  # bootstrap + BART posterior SD
