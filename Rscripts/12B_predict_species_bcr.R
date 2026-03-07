@@ -9,7 +9,7 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
   message(Sys.time(), " | ", species, " | found ", length(rdata_files), " BCR models")
   
   # this sub-function will work through all model-lists (one per BCR) for a given species
-  do.call(dplyr::bind_rows, lapply(rdata_files, function(rdata_path) {
+  results <- lapply(rdata_files, function(rdata_path) {
     
     message(Sys.time(), " | loading ", basename(rdata_path))
     e <- new.env(parent = emptyenv())
@@ -100,63 +100,68 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
       low  = vector("list", length(b.list)),
       high = vector("list", length(b.list))
     )
-    
-    # run predictions for 32 bootstraps in `b.list` (a single spp x BCR)
-    for (i in seq_along(b.list)) {
-      
-      model <- b.list[[i]]
-      model_vars <- model$var.names
-      
-      # cont_vars has abiotic *and* biotic continuous variables 
-      cont_vars <- setdiff(model_vars, categorical_responses)
-      cat_vars  <- intersect(model_vars, categorical_responses)
-      
-      # check for continuous biotic covariates missing from backfilled stack
-      biotic_cont_vars <- intersect(cont_vars, biotic_continuous_vars)
-      
-      missing_bf <- biotic_cont_vars[!(paste0(biotic_cont_vars, "_mean") %in% names(stack_bf) &
-                                         paste0(biotic_cont_vars, "_q025") %in% names(stack_bf) &
-                                         paste0(biotic_cont_vars, "_q975") %in% names(stack_bf))]
-      
-      if (length(missing_bf) > 0) {
-        message(Sys.time(), " | ", species, " ", bcr_code, " | bootstrap=", i, " | missing backfilled cont vars: ", paste(missing_bf, collapse = ", "))
-      }
-      
-      # observed landscape for b.list[[i]]
-      X_obs_i <- stack_obs[[intersect(model_vars, names(stack_obs))]]
-      
-      # overwrite categorical biotic covariates at sector pixels only
-      # (stack_bf has backfilled values at all high-HF pixels; sector_mask restricts to sector)
-      for (v in cat_vars) {
-        X_bf_sets$mean[[v]] <- terra::ifel(sector_mask, stack_bf[[v]], stack_obs[[v]])
-        X_bf_sets$low [[v]] <- terra::ifel(sector_mask, stack_bf[[v]], stack_obs[[v]])
-        X_bf_sets$high[[v]] <- terra::ifel(sector_mask, stack_bf[[v]], stack_obs[[v]])
-      }
-      
-      # set disturbance vars to zero at sector pixels only
-      dist_i <- intersect(disturbance_vars$predictor, model_vars)
 
-      for (k in names(X_bf_sets)) {
-        for (v in dist_i) {
-          X_bf_sets[[k]][[v]] <- terra::ifel(sector_mask, 0, stack_obs[[v]])
-        }
-      }
-      
-      zeroed <- intersect(names(X_bf_sets$mean), dist_i)
-      message(Sys.time(), " | ", species, " ", bcr_code, " bootstrap=", i, " | zeroed out disturbance vars: ", paste(zeroed, collapse = ", "))
+    # --- pre-compute bootstrap-invariant quantities ----------------------------
+    # GBM bootstrap models share the same var.names; compute once rather than
+    # repeating identically for every bootstrap iteration.
+    model_vars_shared  <- b.list[[1]]$var.names
+    cat_vars_shared    <- intersect(model_vars_shared, categorical_responses)
+    dist_shared        <- intersect(disturbance_vars$predictor, model_vars_shared)
+    biotic_cont_shared <- intersect(setdiff(model_vars_shared, categorical_responses),
+                                    biotic_continuous_vars)
+
+    missing_bf <- biotic_cont_shared[
+      !(paste0(biotic_cont_shared, "_mean") %in% names(stack_bf) &
+        paste0(biotic_cont_shared, "_q025") %in% names(stack_bf) &
+        paste0(biotic_cont_shared, "_q975") %in% names(stack_bf))]
+    if (length(missing_bf) > 0) {
+      message(Sys.time(), " | ", species, " ", bcr_code,
+              " | missing backfilled cont vars: ", paste(missing_bf, collapse = ", "))
+    }
+
+    # categorical biotic vars: MBART output is a single layer (no mean/q025/q975),
+    # so the backfilled value is the same for all three BART scenarios
+    for (v in cat_vars_shared) {
+      layer <- terra::ifel(sector_mask, stack_bf[[v]], stack_obs[[v]])
+      X_bf_sets$mean[[v]] <- layer
+      X_bf_sets$low [[v]] <- layer
+      X_bf_sets$high[[v]] <- layer
+    }
+
+    # disturbance vars: zeroed at sector pixels, identical across all scenarios
+    for (v in dist_shared) {
+      layer <- terra::ifel(sector_mask, 0, stack_obs[[v]])
+      X_bf_sets$mean[[v]] <- layer
+      X_bf_sets$low [[v]] <- layer
+      X_bf_sets$high[[v]] <- layer
+    }
+    message(Sys.time(), " | ", species, " ", bcr_code,
+            " | zeroed out disturbance vars: ",
+            paste(intersect(names(X_bf_sets$mean), dist_shared), collapse = ", "))
+
+    # observed covariate stack is also constant across bootstraps
+    X_obs <- stack_obs[[intersect(model_vars_shared, names(stack_obs))]]
+
+    # --- bootstrap loop -------------------------------------------------------
+    for (i in seq_along(b.list)) {
+
+      model <- b.list[[i]]
 
       # predict bird density on observed landscape
-      obs_preds[[i]] <- terra::predict(X_obs_i, model, type = "response", n.trees = model$n.trees)
-      message(Sys.time(), " | ", species, " ", bcr_code, " bootstrap=", i, " | finished predict() on observed landscape")
+      obs_preds[[i]] <- terra::predict(X_obs, model, type = "response", n.trees = model$n.trees)
+      message(Sys.time(), " | ", species, " ", bcr_code, " bootstrap=", i,
+              " | finished predict() on observed landscape")
 
-      # predict bird density on backfilled landscape
+      # predict bird density on backfilled landscape (3 BART posterior scenarios)
       for (k in names(X_bf_sets)) {
-        bf_preds[[k]][[i]] <- terra::predict(X_bf_sets[[k]], model, type = "response", n.trees = model$n.trees)
+        bf_preds[[k]][[i]] <- terra::predict(X_bf_sets[[k]], model,
+                                              type = "response", n.trees = model$n.trees)
       }
-      message(Sys.time(), " | ", species, " ", bcr_code, " bootstrap=", i, " | finished predict() on backfilled landscape")
-      
+      message(Sys.time(), " | ", species, " ", bcr_code, " bootstrap=", i,
+              " | finished predict() on backfilled landscape")
+
       terra::tmpFiles(remove = TRUE)
-      
+
     } # close loop over `b.list` (a single spp x BCR)
     
     # save mean and SD of prediction surfaces ------------------------------------------------------
@@ -196,9 +201,11 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
     # backfilled
     bf_summary <- lapply(bf_preds, summarize_preds)
 
-    # write observed rasters
-    terra::writeRaster(obs_mean, file.path(obs_dir, "observed_mean.tif"), overwrite = TRUE)
-    terra::writeRaster(obs_sd,   file.path(obs_dir, "observed_sd.tif"),   overwrite = TRUE)
+    # observed rasters are sector-independent; skip if already written by a previous sector run
+    if (!file.exists(file.path(obs_dir, "observed_mean.tif"))) {
+      terra::writeRaster(obs_mean, file.path(obs_dir, "observed_mean.tif"), overwrite = TRUE)
+      terra::writeRaster(obs_sd,   file.path(obs_dir, "observed_sd.tif"),   overwrite = TRUE)
+    }
 
     # write backfilled rasters
     for (k in names(bf_summary)) {
@@ -209,108 +216,139 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
     
     
     # count birds from prediction surfaces intersecting our watersheds ------------------------------------------------------
-    
-    # force agg() to always return a matrix, even when there’s only one subbasin
+
     message(Sys.time(), " | ", species, " ", bcr_code, " | estimating population over ", length(sub_ids), " subbasins")
-    
-    agg <- function(obs_rasters, bf_rasters_list, sub_ids, footprint_layer) {
-      
+
+    # rasterize subbasin polygons once per BCR onto the prediction grid;
+    # zonal() on this layer replaces the per-subbasin extract() loop
+    subbasin_zone_r <- terra::rasterize(
+      all_subbasins_subset[sub_ids, ], stack_obs[[1]],
+      field = "first_HYBAS_ID"
+    )
+
+    agg <- function(obs_rasters, bf_rasters_list, sub_ids, footprint_layer, subbasin_zone_r) {
+
       n_sub  <- length(sub_ids)
       n_boot <- length(obs_rasters)
       n_scen <- length(bf_rasters_list) # e.g., mean/low/high
-      
-      # initialize arrays: sub x boot x scenario
-      pop_obs_total_arr   <- array(NA, dim = c(n_sub, n_boot, n_scen))
-      pop_obs_on_bf_arr   <- array(NA, dim = c(n_sub, n_boot, n_scen))
-      pop_bf_only_arr     <- array(NA, dim = c(n_sub, n_boot, n_scen))
-      
-      scenario_names <- names(bf_rasters_list)
-      
-      for (s in seq_len(n_scen)) {
-        
-        bf_rasters <- bf_rasters_list[[s]]
-        
-        for (i in seq_len(n_boot)) {
-          
-          obs_r <- obs_rasters[[i]] * 100
-          bf_r  <- bf_rasters[[i]] * 100
-          
-          for (j in seq_along(sub_ids)) {
-            
-            sub_idx <- sub_ids[j]
-            poly <- all_subbasins_subset[sub_idx, ]
-            
-            # mask using the polygon directly
-            pop_obs_total_arr[j, i, s] <- terra::extract(obs_r, poly, fun = sum, na.rm = TRUE)[,2]
-            
-            # restrict footprint to this subbasin
-            fp_sub <- terra::mask(footprint_layer, poly)
-            
-            obs_fp <- terra::mask(obs_r, fp_sub)
-            bf_fp  <- terra::mask(bf_r,  fp_sub)
-            
-            pop_obs_on_bf_arr[j, i, s] <- terra::extract(obs_fp, poly, fun = sum, na.rm = TRUE)[,2]
-            pop_bf_only_arr[j, i, s] <- terra::extract(bf_fp, poly, fun = sum, na.rm = TRUE)[,2]
-            
-          } # close for j in seq
-          
-        } # close for i in seq
-        
-      } # close for s in seq
-      
-      # combine over bootstraps and scenarios
+
+      # subbasin-level arrays: dimensions = subbasin x bootstrap x scenario
+      pop_obs_total_arr <- array(NA, dim = c(n_sub, n_boot, n_scen))
+      pop_obs_on_bf_arr <- array(NA, dim = c(n_sub, n_boot, n_scen))
+      pop_bf_only_arr   <- array(NA, dim = c(n_sub, n_boot, n_scen))
+
+      # BCR-level arrays: observed quantities don’t depend on scenario,
+      # backfilled quantities do (mean/low/high BART posterior scenarios)
+      pop_obs_bcr_arr          <- numeric(n_boot)
+      pop_obs_on_sector_bcr    <- numeric(n_boot)
+      pop_bf_on_sector_bcr_mat <- matrix(NA_real_, n_boot, n_scen)
+
+      # precompute zone alignment once: zonal() returns zones sorted by value
+      zone_ids  <- sort(unique(terra::values(subbasin_zone_r, na.rm = TRUE)))
+      hybas_ids <- all_subbasins_subset$first_HYBAS_ID[sub_ids]
+      idx       <- match(hybas_ids, zone_ids)
+
+      # outer loop: bootstrap — obs quantities are scenario-independent, compute here
+      for (i in seq_len(n_boot)) {
+
+        obs_r     <- obs_rasters[[i]] * 100
+        obs_on_fp <- terra::mask(obs_r, footprint_layer)
+
+        pop_obs_bcr_arr[i]       <- as.numeric(terra::global(obs_r,    "sum", na.rm = TRUE))
+        pop_obs_on_sector_bcr[i] <- as.numeric(terra::global(obs_on_fp, "sum", na.rm = TRUE))
+
+        sub_obs_total <- terra::zonal(obs_r,    subbasin_zone_r, "sum", na.rm = TRUE)
+        sub_obs_on_fp <- terra::zonal(obs_on_fp, subbasin_zone_r, "sum", na.rm = TRUE)
+
+        # inner loop: scenario — only backfilled quantities vary here
+        for (s in seq_len(n_scen)) {
+
+          bf_r     <- bf_rasters_list[[s]][[i]] * 100
+          bf_on_fp <- terra::mask(bf_r, footprint_layer)
+
+          pop_bf_on_sector_bcr_mat[i, s] <- as.numeric(terra::global(bf_on_fp, "sum", na.rm = TRUE))
+
+          sub_bf_on_fp <- terra::zonal(bf_on_fp, subbasin_zone_r, "sum", na.rm = TRUE)
+
+          pop_obs_total_arr[, i, s] <- sub_obs_total[[2]][idx]
+          pop_obs_on_bf_arr[, i, s] <- sub_obs_on_fp[[2]][idx]
+          pop_bf_only_arr[, i, s]   <- sub_bf_on_fp[[2]][idx]
+
+        } # close for s in seq
+
+      } # close for i in seq
+
+      # BCR-level CF and sector impact across all bootstrap x scenario combinations
+      obs_bcr_mat           <- matrix(pop_obs_bcr_arr,        n_boot, n_scen)
+      obs_on_sector_bcr_mat <- matrix(pop_obs_on_sector_bcr,  n_boot, n_scen)
+      cf_total_bcr_mat      <- obs_bcr_mat - obs_on_sector_bcr_mat + pop_bf_on_sector_bcr_mat
+      sector_impact_bcr_mat <- pop_bf_on_sector_bcr_mat - obs_on_sector_bcr_mat
+
+      # subbasin-level summary: collapse boot x scenario into mean and SD per subbasin
       combine_stats <- function(x) {
-        
-        # collapse to sub x (boot*scenario) matrix
         mat <- matrix(x, nrow = n_sub, ncol = n_boot * n_scen)
         list(mean = rowMeans(mat, na.rm = TRUE),
              sd   = apply(mat, 1, sd, na.rm = TRUE))
-        
-      } # close combine_stats()
-      
+      }
+
+      # BCR-level summary: scalar mean and SD directly from the boot x scenario distribution
+      bcr_scalar <- function(mat) {
+        list(mean = mean(mat, na.rm = TRUE), sd = sd(as.vector(mat), na.rm = TRUE))
+      }
+
       list(
-        pop_obs_total = combine_stats(pop_obs_total_arr),
-        pop_obs_on_bf = combine_stats(pop_obs_on_bf_arr),
-        pop_bf_only   = combine_stats(pop_bf_only_arr)
+        # subbasin-level
+        pop_obs_total     = combine_stats(pop_obs_total_arr),
+        pop_obs_on_bf     = combine_stats(pop_obs_on_bf_arr),
+        pop_bf_only       = combine_stats(pop_bf_only_arr),
+        # BCR-level (obs SD = bootstrap only; cf/sector SD = bootstrap + BART posterior)
+        obs_total_bcr     = list(mean = mean(pop_obs_bcr_arr),       sd = sd(pop_obs_bcr_arr)),
+        obs_on_sector_bcr = list(mean = mean(pop_obs_on_sector_bcr), sd = sd(pop_obs_on_sector_bcr)),
+        bf_on_sector_bcr  = bcr_scalar(pop_bf_on_sector_bcr_mat),
+        cf_total_bcr      = bcr_scalar(cf_total_bcr_mat),
+        sector_impact_bcr = bcr_scalar(sector_impact_bcr_mat)
       )
-      
+
     } # close agg()
     
     
     # run aggregation including posterior
-    pop_lists <- agg(obs_preds, bf_preds, sub_ids, footprint_layer)
-    
-    # for each subbasin, compute counterfactual total population:
-    counterfactual_total <-
-      pop_lists$pop_obs_total$mean -
-      pop_lists$pop_obs_on_bf$mean +
-      pop_lists$pop_bf_only$mean
-    
+    pop_lists <- agg(obs_preds, bf_preds, sub_ids, footprint_layer, subbasin_zone_r)
     
     # free up some memory
     rm(obs_preds, bf_preds, stack_obs, stack_bf)
     gc()
-    
-    # summarize into tidy tibble including SD for obs_on_bf and bf_only
+
+    # summarize into tidy tibble
     out <- tibble(
-      species = species,
+      species  = species,
       subbasin = sub_ids,
       bcr      = bcr_code,
       sector   = sector_name,
-      obs_total_mean    = pop_lists$pop_obs_total$mean,
-      obs_total_sd      = pop_lists$pop_obs_total$sd,
-      obs_on_bf_mean    = pop_lists$pop_obs_on_bf$mean,
-      obs_on_bf_sd      = pop_lists$pop_obs_on_bf$sd,
-      bf_only_mean      = pop_lists$pop_bf_only$mean,
-      bf_only_sd        = pop_lists$pop_bf_only$sd,
-      counterfactual_mean = counterfactual_total,
-      counterfactual_sd   = sqrt(pop_lists$pop_obs_total$sd^2 +
-                                   pop_lists$pop_obs_on_bf$sd^2 +
-                                   pop_lists$pop_bf_only$sd^2)  # approximate error propagation
-    )    
+      # subbasin-level: population within each subbasin polygon
+      obs_total_mean         = pop_lists$pop_obs_total$mean,
+      obs_total_sd           = pop_lists$pop_obs_total$sd,
+      obs_on_bf_mean         = pop_lists$pop_obs_on_bf$mean,
+      obs_on_bf_sd           = pop_lists$pop_obs_on_bf$sd,
+      bf_only_mean           = pop_lists$pop_bf_only$mean,
+      bf_only_sd             = pop_lists$pop_bf_only$sd,
+      # BCR-level: scalar summaries, same value repeated for every subbasin row
+      # obs SD = BRT bootstrap only; cf/sector/bf SDs = bootstrap + BART posterior
+      obs_total_bcr_mean     = pop_lists$obs_total_bcr$mean,
+      obs_total_bcr_sd       = pop_lists$obs_total_bcr$sd,
+      obs_on_sector_bcr_mean = pop_lists$obs_on_sector_bcr$mean,
+      obs_on_sector_bcr_sd   = pop_lists$obs_on_sector_bcr$sd,
+      bf_on_sector_bcr_mean  = pop_lists$bf_on_sector_bcr$mean,
+      bf_on_sector_bcr_sd    = pop_lists$bf_on_sector_bcr$sd,
+      cf_total_bcr_mean      = pop_lists$cf_total_bcr$mean,
+      cf_total_bcr_sd        = pop_lists$cf_total_bcr$sd,
+      sector_impact_bcr_mean = pop_lists$sector_impact_bcr$mean,
+      sector_impact_bcr_sd   = pop_lists$sector_impact_bcr$sd
+    )
     
     message(Sys.time(), " | ", species, " ", bcr_code, " | returning ", nrow(out), " rows")
     out
     
-  }))
+  })
+  dplyr::bind_rows(results)
 } # close predict_species_bcr()

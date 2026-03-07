@@ -121,13 +121,6 @@ for (i in seq_len(nrow(bcr_year_sector_combos))) {
   canHF_r   <- project(rast(canHF_path), template_r, method = "near")
   sector_mask <- ifel((sector_r > 0) & (canHF_r >= 1), 1, NA)
 
-  # full high-HF mask (all sectors combined); used for all-HF counterfactual
-  hf_mask <- ifel(canHF_r >= 1, 1, NA)
-
-  # subbasin IDs rasterized onto BCR grid
-  basins_clip <- crop(hydrobasins, ext(template_r))
-  subbasin_r  <- rasterize(basins_clip, template_r, field = "first_HYBAS_ID")
-
   # connected-component patches for footprint scale
   patches_r <- patches(sector_mask, directions = 8, zeroAsNA = TRUE)
 
@@ -135,53 +128,63 @@ for (i in seq_len(nrow(bcr_year_sector_combos))) {
 
     message("  ", sp)
 
-    obs_mean <- rast(file.path(obs_root, sp, cur_bcr, cur_year, "observed_mean.tif"))
-    obs_sd   <- rast(file.path(obs_root, sp, cur_bcr, cur_year, "observed_sd.tif"))
-    bf_mean  <- rast(file.path(bf_root,  cur_sector, sp, cur_bcr, cur_year, "backfilled_mean_mean.tif"))
-    bf_sd    <- rast(file.path(bf_root,  cur_sector, sp, cur_bcr, cur_year, "backfilled_mean_sd.tif"))
+    # ---- Load 12B density tables ---------------------------------------------
+    # Per-subbasin bootstrap-aggregated population counts: SDs here reflect
+    # the actual bootstrap distribution (32 boots x 3 scenarios), not pixel-level
+    # independence assumptions.
+    dt_path <- file.path(ia_dir, "data/derived_data/density_tables",
+                         paste0(sp, "_", cur_year, "_", cur_sector, ".rds"))
+    dt_all_hf_path <- file.path(ia_dir, "data/derived_data/density_tables",
+                                paste0(sp, "_", cur_year, "_all_hf.rds"))
 
-    delta    <- bf_mean - obs_mean   # non-zero only at sector pixels
+    if (!file.exists(dt_path) || !file.exists(dt_all_hf_path)) {
+      message("  density table missing for ", sp, " — skipping")
+      result_idx <- result_idx + 1
+      next
+    }
 
-    # full backfill rasters (all high-HF pixels, from the all_hf sector run)
-    bf_full_mean <- rast(file.path(bf_root, "all_hf", sp, cur_bcr, cur_year, "backfilled_mean_mean.tif"))
-    bf_full_sd   <- rast(file.path(bf_root, "all_hf", sp, cur_bcr, cur_year, "backfilled_mean_sd.tif"))
+    dt        <- dplyr::filter(readRDS(dt_path),        bcr == cur_bcr)
+    dt_all_hf <- dplyr::filter(readRDS(dt_all_hf_path), bcr == cur_bcr)
+
+    if (nrow(dt) == 0 || nrow(dt_all_hf) == 0) {
+      message("  no rows for BCR ", cur_bcr, " — skipping")
+      result_idx <- result_idx + 1
+      next
+    }
 
     # ---- BCR scale -----------------------------------------------------------
+    # All BCR-level quantities come directly from the bootstrap x scenario
+    # distributions pre-computed in 12B. Take [1] since BCR-level values are
+    # identical for every subbasin row within a BCR.
 
-    obs_population_mean <- as.numeric(global(obs_mean * area_r, "sum", na.rm = TRUE))
-    obs_population_sd   <- as.numeric(sqrt(global(obs_sd^2 * area_r^2, "sum", na.rm = TRUE)))
+    obs_population_mean <- dt$obs_total_bcr_mean[1]  # BCR-wide; BRT bootstrap SD only
+    obs_population_sd   <- dt$obs_total_bcr_sd[1]
 
-    # all-HF counterfactual: swap observed density on ALL high-HF pixels for backfilled density
-    obs_on_HF_mean <- as.numeric(global(mask(obs_mean,      hf_mask) * area_r, "sum", na.rm = TRUE))
-    obs_on_HF_sd   <- as.numeric(sqrt(global(mask(obs_sd,   hf_mask)^2 * area_r^2, "sum", na.rm = TRUE)))
-    bf_on_HF_mean  <- as.numeric(global(mask(bf_full_mean,  hf_mask) * area_r, "sum", na.rm = TRUE))
-    bf_on_HF_sd    <- as.numeric(sqrt(global(mask(bf_full_sd, hf_mask)^2 * area_r^2, "sum", na.rm = TRUE)))
-
-    HF_impact_mean <- bf_on_HF_mean - obs_on_HF_mean
-    HF_impact_sd   <- sqrt(bf_on_HF_sd^2 + obs_on_HF_sd^2)
-
-    cf_population_mean <- obs_population_mean - obs_on_HF_mean + bf_on_HF_mean
-    cf_population_sd   <- sqrt(obs_population_sd^2 + HF_impact_sd^2)
+    # all-HF counterfactual from the all_hf density table
+    HF_impact_mean     <- dt_all_hf$sector_impact_bcr_mean[1]  # bootstrap + BART posterior SD
+    HF_impact_sd       <- dt_all_hf$sector_impact_bcr_sd[1]
+    cf_population_mean <- dt_all_hf$cf_total_bcr_mean[1]
+    cf_population_sd   <- dt_all_hf$cf_total_bcr_sd[1]
 
     HF_percent_impact_mean <- HF_impact_mean / obs_population_mean * 100
     HF_percent_impact_sd   <- 100 * sqrt((HF_impact_sd / obs_population_mean)^2 +
                                            (HF_impact_mean * obs_population_sd / obs_population_mean^2)^2)
 
-    # sector-specific counterfactual: swap observed density on sector pixels only
-    obs_population_on_footprint_mean <- as.numeric(global(mask(obs_mean, sector_mask) * area_r, "sum", na.rm = TRUE))
-    obs_population_on_footprint_sd   <- as.numeric(sqrt(global(mask(obs_sd, sector_mask)^2 * area_r^2, "sum", na.rm = TRUE)))
-    cf_population_on_footprint_mean  <- as.numeric(global(mask(bf_mean, sector_mask) * area_r, "sum", na.rm = TRUE))
-    cf_population_on_footprint_sd    <- as.numeric(sqrt(global(mask(bf_sd, sector_mask)^2 * area_r^2, "sum", na.rm = TRUE)))
-
-    sector_impact_mean <- cf_population_on_footprint_mean - obs_population_on_footprint_mean
-    sector_impact_sd   <- sqrt(cf_population_on_footprint_sd^2 + obs_population_on_footprint_sd^2)
-
-    cf_sector_population_mean <- obs_population_mean - obs_population_on_footprint_mean + cf_population_on_footprint_mean
-    cf_sector_population_sd   <- sqrt(obs_population_sd^2 + sector_impact_sd^2)
+    # sector-specific impact from sector density table (bootstrap + BART posterior SD)
+    sector_impact_mean        <- dt$sector_impact_bcr_mean[1]
+    sector_impact_sd          <- dt$sector_impact_bcr_sd[1]
+    cf_sector_population_mean <- dt$cf_total_bcr_mean[1]
+    cf_sector_population_sd   <- dt$cf_total_bcr_sd[1]
 
     sector_percent_impact_mean <- sector_impact_mean / obs_population_mean * 100
     sector_percent_impact_sd   <- 100 * sqrt((sector_impact_sd / obs_population_mean)^2 +
                                                (sector_impact_mean * obs_population_sd / obs_population_mean^2)^2)
+
+    # BCR-wide footprint populations (bootstrap SD only for obs; bootstrap + posterior for cf)
+    obs_population_on_footprint_mean <- dt$obs_on_sector_bcr_mean[1]
+    obs_population_on_footprint_sd   <- dt$obs_on_sector_bcr_sd[1]
+    cf_population_on_footprint_mean  <- dt$bf_on_sector_bcr_mean[1]
+    cf_population_on_footprint_sd    <- dt$bf_on_sector_bcr_sd[1]
 
     bcr_rows[[result_idx]] <- data.frame(
       species                          = sp,
@@ -210,34 +213,35 @@ for (i in seq_len(nrow(bcr_year_sector_combos))) {
     )
 
     # ---- Subbasin scale ------------------------------------------------------
+    # Use density table directly; map subbasin row-index back to HYBAS_ID.
 
-    sector_impact_sub    <- zonal(delta    * area_r, subbasin_r, "sum", na.rm = TRUE)
-    obs_population_sub   <- zonal(obs_mean * area_r, subbasin_r, "sum", na.rm = TRUE)
-    names(sector_impact_sub)[2]  <- "sector_impact_sub"
-    names(obs_population_sub)[2] <- "obs_population_sub"
-
-    sub_tbl <- merge(obs_population_sub, sector_impact_sub, by = names(subbasin_r))
-    sub_tbl$sector_percent_impact_sub <- sub_tbl$sector_impact_sub / sub_tbl$obs_population_sub * 100
-    sub_tbl$sector_percent_impact_sub[!is.finite(sub_tbl$sector_percent_impact_sub) |
-                                       sub_tbl$obs_population_sub < 1e-6] <- NA
+    sub_hybas <- hydrobasins$first_HYBAS_ID[dt$subbasin]
+    sect_imp  <- dt$bf_only_mean - dt$obs_on_bf_mean
+    pct_sub   <- sect_imp / dt$obs_total_mean * 100
+    pct_sub[!is.finite(pct_sub) | dt$obs_total_mean < 1e-6] <- NA
 
     subbasin_rows[[result_idx]] <- data.frame(
       species                   = sp,
       bcr                       = cur_bcr,
       year                      = cur_year,
       sector                    = cur_sector,
-      subbasin_id               = sub_tbl[[1]],
-      obs_population_sub        = round(sub_tbl$obs_population_sub),
-      sector_impact_sub         = round(sub_tbl$sector_impact_sub),
-      sector_percent_impact_sub = round(sub_tbl$sector_percent_impact_sub, 2),
+      subbasin_id               = sub_hybas,
+      obs_population_sub        = round(dt$obs_total_mean),
+      sector_impact_sub         = round(sect_imp),
+      sector_percent_impact_sub = round(pct_sub, 2),
       stringsAsFactors = FALSE
     )
 
     # ---- Footprint scale -----------------------------------------------------
+    # Still raster-based: connected components don't align with subbasins.
 
-    sector_impact_footprint    <- zonal(delta    * area_r, patches_r, "sum", na.rm = TRUE)
-    obs_population_footprint   <- zonal(obs_mean * area_r, patches_r, "sum", na.rm = TRUE)
-    cf_population_footprint    <- zonal(bf_mean  * area_r, patches_r, "sum", na.rm = TRUE)
+    obs_mean <- rast(file.path(obs_root, sp, cur_bcr, cur_year, "observed_mean.tif"))
+    bf_mean  <- rast(file.path(bf_root, cur_sector, sp, cur_bcr, cur_year, "backfilled_mean_mean.tif"))
+    delta    <- bf_mean - obs_mean
+
+    sector_impact_footprint  <- zonal(delta    * area_r, patches_r, "sum", na.rm = TRUE)
+    obs_population_footprint <- zonal(obs_mean * area_r, patches_r, "sum", na.rm = TRUE)
+    cf_population_footprint  <- zonal(bf_mean  * area_r, patches_r, "sum", na.rm = TRUE)
     names(sector_impact_footprint)[2]  <- "sector_impact_footprint"
     names(obs_population_footprint)[2] <- "obs_population_on_footprint"
     names(cf_population_footprint)[2]  <- "cf_population_on_footprint"
@@ -250,15 +254,15 @@ for (i in seq_len(nrow(bcr_year_sector_combos))) {
                                             fp_tbl$obs_population_on_footprint < 1e-6] <- NA
 
     footprint_rows[[result_idx]] <- data.frame(
-      species                            = sp,
-      bcr                                = cur_bcr,
-      year                               = cur_year,
-      sector                             = cur_sector,
-      footprint_id                       = fp_tbl[[1]],
-      obs_population_on_footprint        = round(fp_tbl$obs_population_on_footprint),
-      cf_population_on_footprint         = round(fp_tbl$cf_population_on_footprint),
-      sector_impact_footprint            = round(fp_tbl$sector_impact_footprint),
-      sector_percent_impact_footprint    = round(fp_tbl$sector_percent_impact_footprint, 2),
+      species                         = sp,
+      bcr                             = cur_bcr,
+      year                            = cur_year,
+      sector                          = cur_sector,
+      footprint_id                    = fp_tbl[[1]],
+      obs_population_on_footprint     = round(fp_tbl$obs_population_on_footprint),
+      cf_population_on_footprint      = round(fp_tbl$cf_population_on_footprint),
+      sector_impact_footprint         = round(fp_tbl$sector_impact_footprint),
+      sector_percent_impact_footprint = round(fp_tbl$sector_percent_impact_footprint, 2),
       stringsAsFactors = FALSE
     )
 
