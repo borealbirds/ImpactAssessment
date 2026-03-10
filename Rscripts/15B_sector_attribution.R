@@ -189,29 +189,52 @@ for (i in seq_len(nrow(bcr_year_sector_combos))) {
     cf_population_on_footprint_mean  <- dt$bf_on_sector_bcr_mean[1]
     cf_population_on_footprint_sd    <- dt$bf_on_sector_bcr_sd[1]
 
+    # Extent: % of BCR birds residing on this sector's footprint
+    footprint_fraction_mean <- obs_population_on_footprint_mean / obs_population_mean * 100
+    footprint_fraction_sd   <- 100 * sqrt(
+      (obs_population_on_footprint_sd  / obs_population_mean)^2 +
+      (obs_population_on_footprint_mean * obs_population_sd / obs_population_mean^2)^2
+    )
+
+    # Intensity: % of footprint birds recovered by removing this sector
+    if (obs_population_on_footprint_mean > 1e-6) {
+      sector_percent_impact_on_footprint_mean <- sector_impact_mean / obs_population_on_footprint_mean * 100
+      sector_percent_impact_on_footprint_sd   <- 100 * sqrt(
+        (sector_impact_sd / obs_population_on_footprint_mean)^2 +
+        (sector_impact_mean * obs_population_on_footprint_sd / obs_population_on_footprint_mean^2)^2
+      )
+    } else {
+      sector_percent_impact_on_footprint_mean <- NA_real_
+      sector_percent_impact_on_footprint_sd   <- NA_real_
+    }
+
     bcr_rows[[result_idx]] <- data.frame(
-      species                          = sp,
-      bcr                              = cur_bcr,
-      year                             = cur_year,
-      sector                           = cur_sector,
-      obs_population_mean              = round(obs_population_mean),
-      obs_population_sd                = round(obs_population_sd, 1),
-      cf_population_mean               = round(cf_population_mean),
-      cf_population_sd                 = round(cf_population_sd, 1),
-      HF_impact_mean                   = round(HF_impact_mean),
-      HF_impact_sd                     = round(HF_impact_sd, 1),
-      HF_percent_impact_mean           = round(HF_percent_impact_mean, 2),
-      HF_percent_impact_sd             = round(HF_percent_impact_sd, 2),
-      cf_sector_population_mean        = round(cf_sector_population_mean),
-      cf_sector_population_sd          = round(cf_sector_population_sd, 1),
-      sector_impact_mean               = round(sector_impact_mean),
-      sector_impact_sd                 = round(sector_impact_sd, 1),
-      sector_percent_impact_mean       = round(sector_percent_impact_mean, 2),
-      sector_percent_impact_sd         = round(sector_percent_impact_sd, 2),
-      obs_population_on_footprint_mean = round(obs_population_on_footprint_mean),
-      obs_population_on_footprint_sd   = round(obs_population_on_footprint_sd, 1),
-      cf_population_on_footprint_mean  = round(cf_population_on_footprint_mean),
-      cf_population_on_footprint_sd    = round(cf_population_on_footprint_sd, 1),
+      species                                  = sp,
+      bcr                                      = cur_bcr,
+      year                                     = cur_year,
+      sector                                   = cur_sector,
+      obs_population_mean                      = round(obs_population_mean),
+      obs_population_sd                        = round(obs_population_sd, 1),
+      cf_population_mean                       = round(cf_population_mean),
+      cf_population_sd                         = round(cf_population_sd, 1),
+      HF_impact_mean                           = round(HF_impact_mean),
+      HF_impact_sd                             = round(HF_impact_sd, 1),
+      HF_percent_impact_mean                   = round(HF_percent_impact_mean, 2),
+      HF_percent_impact_sd                     = round(HF_percent_impact_sd, 2),
+      cf_sector_population_mean                = round(cf_sector_population_mean),
+      cf_sector_population_sd                  = round(cf_sector_population_sd, 1),
+      sector_impact_mean                       = round(sector_impact_mean),
+      sector_impact_sd                         = round(sector_impact_sd, 1),
+      sector_percent_impact_mean               = round(sector_percent_impact_mean, 2),
+      sector_percent_impact_sd                 = round(sector_percent_impact_sd, 2),
+      obs_population_on_footprint_mean         = round(obs_population_on_footprint_mean),
+      obs_population_on_footprint_sd           = round(obs_population_on_footprint_sd, 1),
+      cf_population_on_footprint_mean          = round(cf_population_on_footprint_mean),
+      cf_population_on_footprint_sd            = round(cf_population_on_footprint_sd, 1),
+      footprint_fraction_mean                  = round(footprint_fraction_mean, 2),
+      footprint_fraction_sd                    = round(footprint_fraction_sd, 2),
+      sector_percent_impact_on_footprint_mean  = round(sector_percent_impact_on_footprint_mean, 2),
+      sector_percent_impact_on_footprint_sd    = round(sector_percent_impact_on_footprint_sd, 2),
       stringsAsFactors = FALSE
     )
 
