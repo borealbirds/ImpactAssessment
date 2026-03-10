@@ -3,7 +3,10 @@
     "allow": [
       "Bash(git push:*)",
       "Bash(Rscript:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(mkdir:*)",
+      "Bash(python3 -c \" import sys, json lines = sys.stdin.read\\(\\).strip\\(\\).split\\(''\\\\n''\\) for line in lines[-20:]: try: obj = json.loads\\(line\\) role = obj.get\\(''role'', obj.get\\(''type'',''''\\)\\) if role == ''user'': content = obj.get\\(''content'',''''\\) if isinstance\\(content, list\\): for c in content: if isinstance\\(c, dict\\) and c.get\\(''type''\\) == ''text'': print\\(''USER:'', c[''text''][:500]\\) elif isinstance\\(content, str\\): print\\(''USER:'', content[:500]\\) elif role == ''assistant'': content = obj.get\\(''content'',''''\\) if isinstance\\(content, list\\): for c in content: if isinstance\\(c, dict\\) and c.get\\(''type''\\) == ''text'': print\\(''ASST:'', c[''text''][:500]\\) elif isinstance\\(content, str\\): print\\(''ASST:'', content[:500]\\) except: pass \")",
+      "Bash(python3:*)"
     ]
   }
 }

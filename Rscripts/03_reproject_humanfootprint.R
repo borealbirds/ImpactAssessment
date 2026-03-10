@@ -53,3 +53,28 @@ highhf_mask <-
 
 terra::writeRaster(highhf_mask, file.path(ia_dir, "hirshpearson", "CanHF_1km_morethan1.tif"), overwrite = TRUE)
 
+
+
+# ----------------------------------------------
+# create "good sectors" high HF layer:
+# CanHF >= 1 AND at least one target sector present (score > 0)
+# excluded sectors: forestry_harvest, night_lights, population_density, nav_water
+good_sectors <- c("built", "crop", "dam_and_associated_reservoir", "mines",
+                  "oil_gas", "pasture", "rail", "roads")
+
+good_sector_stack <- terra::rast(lapply(good_sectors, function(sec) {
+  r <- terra::rast(file.path(ia_dir, "hirshpearson", paste0(sec, ".tif")))
+  terra::project(r, CanHF_1km, method = "near")
+}))
+
+# sum sector scores; > 0 means at least one target sector is present
+sector_sum <- terra::app(good_sector_stack, sum, na.rm = TRUE)
+
+goodsectors_mask <-
+  terra::ifel((CanHF_1km >= 1) & (sector_sum > 0), 1, NA) |>
+  as.factor()
+
+terra::writeRaster(goodsectors_mask,
+                   file.path(ia_dir, "hirshpearson", "CanHF_1km_morethan1_goodsectors.tif"),
+                   overwrite = TRUE)
+
