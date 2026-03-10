@@ -80,26 +80,33 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
     mu_stack <- stack_bf[[grep("_mean$", names(stack_bf))]]
     names(mu_stack)   <- sub("_mean$", "", names(mu_stack))
 
-    q025_stack <- stack_bf[[grep("_q025$", names(stack_bf))]]
-    names(q025_stack) <- sub("_q025$", "", names(q025_stack))
+    logmean_stack        <- stack_bf[[grep("_logmean$", names(stack_bf))]]
+    names(logmean_stack) <- sub("_logmean$", "", names(logmean_stack))
+    logsd_stack          <- stack_bf[[grep("_logsd$",   names(stack_bf))]]
+    names(logsd_stack)   <- sub("_logsd$",   "", names(logsd_stack))
 
-    q975_stack <- stack_bf[[grep("_q975$", names(stack_bf))]]
-    names(q975_stack) <- sub("_q975$", "", names(q975_stack))
+    # construct K=100 counterfactual scenario stacks by sampling from the BART posterior
+    # in log1p space (Gaussian by construction), then back-transforming with expm1.
+    # This avoids the normality assumption on the original scale that q025/q975 imposed.
+    n_scen <- 100L
+    set.seed(sum(utf8ToInt(paste0(species, bcr_code))) %% .Machine$integer.max)
 
-    # construct counterfactual scenarios using empirical posterior quantiles
-    X_bf_sets <- list(
-      mean = make_counterfactual_stack(stack_obs, mu_stack,    sector_mask),
-      low  = make_counterfactual_stack(stack_obs, q025_stack,  sector_mask),
-      high = make_counterfactual_stack(stack_obs, q975_stack,  sector_mask)
-    )
+    X_bf_sets <- lapply(seq_len(n_scen), function(k) {
+      draw_stack <- mu_stack
+      for (v in names(mu_stack)) {
+        noise_r        <- terra::setValues(logmean_stack[[v]],
+                                           rnorm(terra::ncell(logmean_stack[[v]])))
+        draw_v         <- terra::app(logmean_stack[[v]] + logsd_stack[[v]] * noise_r, expm1)
+        draw_v         <- terra::ifel(draw_v < 0, 0, draw_v)
+        draw_stack[[v]] <- draw_v
+      }
+      make_counterfactual_stack(stack_obs, draw_stack, sector_mask)
+    })
     
     # create containers to store predictions
     obs_preds <- vector("list", length(b.list))
-    bf_preds  <- list(
-      mean = vector("list", length(b.list)),
-      low  = vector("list", length(b.list)),
-      high = vector("list", length(b.list))
-    )
+    bf_preds  <- vector("list", n_scen)
+    for (k in seq_len(n_scen)) bf_preds[[k]] <- vector("list", length(b.list))
 
     # --- pre-compute bootstrap-invariant quantities ----------------------------
     # GBM bootstrap models share the same var.names; compute once rather than
@@ -111,29 +118,25 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
                                     biotic_continuous_vars)
 
     missing_bf <- biotic_cont_shared[
-      !(paste0(biotic_cont_shared, "_mean") %in% names(stack_bf) &
-        paste0(biotic_cont_shared, "_q025") %in% names(stack_bf) &
-        paste0(biotic_cont_shared, "_q975") %in% names(stack_bf))]
+      !(paste0(biotic_cont_shared, "_mean")    %in% names(stack_bf) &
+        paste0(biotic_cont_shared, "_logmean") %in% names(stack_bf) &
+        paste0(biotic_cont_shared, "_logsd")   %in% names(stack_bf))]
     if (length(missing_bf) > 0) {
       message(Sys.time(), " | ", species, " ", bcr_code,
               " | missing backfilled cont vars: ", paste(missing_bf, collapse = ", "))
     }
 
-    # categorical biotic vars: MBART output is a single layer (no mean/q025/q975),
-    # so the backfilled value is the same for all three BART scenarios
+    # categorical biotic vars: MBART output is a single layer (no posterior distribution),
+    # so the backfilled value is the same for all K scenarios
     for (v in cat_vars_shared) {
       layer <- terra::ifel(sector_mask, stack_bf[[v]], stack_obs[[v]])
-      X_bf_sets$mean[[v]] <- layer
-      X_bf_sets$low [[v]] <- layer
-      X_bf_sets$high[[v]] <- layer
+      for (k in seq_len(n_scen)) X_bf_sets[[k]][[v]] <- layer
     }
 
     # disturbance vars: zeroed at sector pixels, identical across all scenarios
     for (v in dist_shared) {
       layer <- terra::ifel(sector_mask, 0, stack_obs[[v]])
-      X_bf_sets$mean[[v]] <- layer
-      X_bf_sets$low [[v]] <- layer
-      X_bf_sets$high[[v]] <- layer
+      for (k in seq_len(n_scen)) X_bf_sets[[k]][[v]] <- layer
     }
     message(Sys.time(), " | ", species, " ", bcr_code,
             " | zeroed out disturbance vars: ",
@@ -152,8 +155,8 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
       message(Sys.time(), " | ", species, " ", bcr_code, " bootstrap=", i,
               " | finished predict() on observed landscape")
 
-      # predict bird density on backfilled landscape (3 BART posterior scenarios)
-      for (k in names(X_bf_sets)) {
+      # predict bird density on backfilled landscape (K=100 posterior draw scenarios)
+      for (k in seq_len(n_scen)) {
         bf_preds[[k]][[i]] <- terra::predict(X_bf_sets[[k]], model,
                                               type = "response", n.trees = model$n.trees)
       }
@@ -198,8 +201,11 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
     obs_mean <- obs_summary$mean
     obs_sd   <- obs_summary$sd
 
-    # backfilled
-    bf_summary <- lapply(bf_preds, summarize_preds)
+    # backfilled: pool all K*n_boot predictions into a single grand summary.
+    # Writing one mean+SD raster pair maintains backward compatibility with 15B
+    # (which reads backfilled_mean_mean.tif for the footprint scale).
+    all_bf_flat <- unlist(bf_preds, recursive = FALSE)  # K*n_boot rasters
+    bf_grand    <- summarize_preds(all_bf_flat)
 
     # observed rasters are sector-independent; skip if already written by a previous sector run
     if (!file.exists(file.path(obs_dir, "observed_mean.tif"))) {
@@ -207,11 +213,9 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
       terra::writeRaster(obs_sd,   file.path(obs_dir, "observed_sd.tif"),   overwrite = TRUE)
     }
 
-    # write backfilled rasters
-    for (k in names(bf_summary)) {
-      terra::writeRaster(bf_summary[[k]]$mean, file.path(bf_dir, paste0("backfilled_", k, "_mean.tif")), overwrite = TRUE)
-      terra::writeRaster(bf_summary[[k]]$sd,   file.path(bf_dir, paste0("backfilled_", k, "_sd.tif")),   overwrite = TRUE)
-    }
+    # write pooled backfilled rasters
+    terra::writeRaster(bf_grand$mean, file.path(bf_dir, "backfilled_mean_mean.tif"), overwrite = TRUE)
+    terra::writeRaster(bf_grand$sd,   file.path(bf_dir, "backfilled_mean_sd.tif"),   overwrite = TRUE)
     
     
     
