@@ -163,7 +163,7 @@ source(file.path(ia_dir, "Rscripts", "12B_predict_species_bcr.R"))
 
 # run one species on one core ------------------------------------------------------
 
-species_vec <- c("CAWA")
+species_vec <- c("CAWA", "OSFL", "WOTH", "ALFL", "WTSP", "BCCH")
 # species_vec <- sort(list.dirs(file.path(nm_root, "output/06_bootstraps"), full.names = FALSE, recursive = FALSE))[4]
 year <- 2020
 

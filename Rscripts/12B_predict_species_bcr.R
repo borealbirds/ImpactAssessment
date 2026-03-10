@@ -5,7 +5,7 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
   message(Sys.time(), " | preparing for species=", species, " year=", year)
   
   # find all models (BCRs) for the current `species`
-  rdata_files <- list.files(file.path(nm_root,"output/06_bootstraps", species), pattern = "can14.*\\.Rdata$", full.names = TRUE)
+  rdata_files <- list.files(file.path(nm_root,"output/06_bootstraps", species), pattern = "can.*\\.Rdata$", full.names = TRUE)
   message(Sys.time(), " | ", species, " | found ", length(rdata_files), " BCR models")
   
   # this sub-function will work through all model-lists (one per BCR) for a given species
@@ -46,14 +46,20 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
     stack_obs <- terra::rast(file.path(nm_root,"gis/stacks", paste0(bcr_code, "_", year, ".tif")))
     message(Sys.time(), " | done loading observed stack")
 
-    # build sector mask: sector > 0 AND CanHF >= 1, projected to BCR prediction grid
-    # "all_hf" is a special case: mask is all pixels with CanHF >= 1 (no sector raster needed)
-    canHF_r <- terra::project(
-                 terra::rast(file.path(hirsh_dir, "CanHF_1km_morethan1.tif")),
-                 stack_obs, method = "near")
+    # build sector mask projected to BCR prediction grid
+    # "all_hf": pre-built goodsectors raster (CanHF >= 1 AND any target sector > 0);
+    #   pixels that are only forestry_harvest/night_lights/population_density/nav_water
+    #   are excluded and keep their observed landscape bird estimates
+    # individual sectors: sector > 0 AND CanHF >= 1 (original full HF mask)
     if (sector_name == "all_hf") {
-      sector_mask <- terra::ifel(canHF_r >= 1, 1, NA)
+      goodsectors_r <- terra::project(
+                         terra::rast(file.path(hirsh_dir, "CanHF_1km_morethan1_goodsectors.tif")),
+                         stack_obs, method = "near")
+      sector_mask <- terra::ifel(!is.na(goodsectors_r), 1, NA)
     } else {
+      canHF_r     <- terra::project(
+                       terra::rast(file.path(hirsh_dir, "CanHF_1km_morethan1.tif")),
+                       stack_obs, method = "near")
       sector_r    <- terra::project(
                        terra::rast(file.path(hirsh_dir, paste0(sector_name, ".tif"))),
                        stack_obs, method = "near")
@@ -73,10 +79,10 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
       message(Sys.time(), " | no backfilled stack — skipping BCR")
       return(NULL)
     }
-    footprint_layer <- sector_mask
+    
     message(Sys.time(), " | done loading backfilled stack")
     
-    # split BART outputs (mean + empirical posterior quantiles)
+    # split BART outputs (mean + sd)
     mu_stack <- stack_bf[[grep("_mean$", names(stack_bf))]]
     names(mu_stack)   <- sub("_mean$", "", names(mu_stack))
 
@@ -201,9 +207,7 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
     obs_mean <- obs_summary$mean
     obs_sd   <- obs_summary$sd
 
-    # backfilled: pool all K*n_boot predictions into a single grand summary.
-    # Writing one mean+SD raster pair maintains backward compatibility with 15B
-    # (which reads backfilled_mean_mean.tif for the footprint scale).
+    # backfilled: pool all K*n_boot predictions into a single grand summary
     all_bf_flat <- unlist(bf_preds, recursive = FALSE)  # K*n_boot rasters
     bf_grand    <- summarize_preds(all_bf_flat)
 
@@ -230,7 +234,7 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
       field = "first_HYBAS_ID"
     )
 
-    agg <- function(obs_rasters, bf_rasters_list, sub_ids, footprint_layer, subbasin_zone_r) {
+    agg <- function(obs_rasters, bf_rasters_list, sub_ids, sector_mask, subbasin_zone_r) {
 
       n_sub  <- length(sub_ids)
       n_boot <- length(obs_rasters)
@@ -256,7 +260,7 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
       for (i in seq_len(n_boot)) {
 
         obs_r     <- obs_rasters[[i]] * 100
-        obs_on_fp <- terra::mask(obs_r, footprint_layer)
+        obs_on_fp <- terra::mask(obs_r, sector_mask)
 
         pop_obs_bcr_arr[i]       <- as.numeric(terra::global(obs_r,    "sum", na.rm = TRUE))
         pop_obs_on_sector_bcr[i] <- as.numeric(terra::global(obs_on_fp, "sum", na.rm = TRUE))
@@ -268,7 +272,7 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
         for (s in seq_len(n_scen)) {
 
           bf_r     <- bf_rasters_list[[s]][[i]] * 100
-          bf_on_fp <- terra::mask(bf_r, footprint_layer)
+          bf_on_fp <- terra::mask(bf_r, sector_mask)
 
           pop_bf_on_sector_bcr_mat[i, s] <- as.numeric(terra::global(bf_on_fp, "sum", na.rm = TRUE))
 
@@ -317,7 +321,7 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
     
     
     # run aggregation including posterior
-    pop_lists <- agg(obs_preds, bf_preds, sub_ids, footprint_layer, subbasin_zone_r)
+    pop_lists <- agg(obs_preds, bf_preds, sub_ids, sector_mask, subbasin_zone_r)
     
     # free up some memory
     rm(obs_preds, bf_preds, stack_obs, stack_bf)
