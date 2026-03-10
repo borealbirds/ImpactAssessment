@@ -1,0 +1,2 @@
+year,n_hf_pixels,n_disturbed,n_not_disturbed,pct_disturbed,pct_not_disturbed,mean_abs_delta,median_abs_delta,threshold_median
+2020,1779685,394715,1384970,22.18,77.82,3.3642,0.9383,5.1837

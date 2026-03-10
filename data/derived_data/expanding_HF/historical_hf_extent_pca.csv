@@ -1,0 +1,2 @@
+year,n_hf_pixels,n_disturbed,n_not_disturbed,pct_disturbed,pct_not_disturbed,mean_dist,median_dist,pca_threshold_95,n_pcs_used,cumvar_explained
+2020,1854921,1672411,182510,90.16,9.84,2.943,2.0651,0.6351,10,0.9573
