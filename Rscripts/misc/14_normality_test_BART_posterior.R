@@ -1,12 +1,13 @@
 # ---
 # title:   Test normality assumption of gbart() posterior for backfilled covariates
 # author:  Mannfred Boehm
-# purpose: 12B_predict_species_bcr.R constructs counterfactual covariate stacks as
-#            mu_stack[[v]] + z * sd_stack[[v]]    (z = 0, ±1.96)
-#          where mu and sd are derived from the gbart() posterior via the log-normal
-#          formulas in 08B_deploy_gbart.R.  This is only accurate if the ±1.96*SD
-#          interval on the original scale closely matches the empirical 2.5/97.5th
-#          percentiles of the back-transformed posterior draws.
+# purpose: 12B_predict_species_bcr.R constructs counterfactual covariate stacks by
+#          sampling  expm1(logmean + logsd * ε)  (ε ~ N(0,1) per pixel),
+#          where logmean and logsd are the per-pixel posterior mean and SD in log1p
+#          space from gbart().  This is only accurate if the ±1.96·logsd interval
+#          in log1p space — back-transformed as expm1(logmean ± 1.96·logsd) —
+#          closely matches the empirical 2.5/97.5th percentiles of the
+#          back-transformed posterior draws.
 #
 #          This script tests that assumption by fitting gbart() (with identical
 #          arguments to 08B) on n_samples random (subbasin, covariate) pairs from
@@ -238,17 +239,14 @@ test_one_pair <- function(pair,
     # These mirror the exact back-transformation in 08B_deploy_gbart.R and
     # the CI structure used in 12B's make_counterfactual_stack().
 
-    b_mean <- expm1(mu_log)
-    b_sd   <- sqrt(expm1(var_log) * exp(2 * mu_log + var_log))   # log-normal SD
-
     post_orig <- expm1(fit$yhat.test)   # back-transformed posterior [ndpost x n_px]
     q025_orig <- apply(post_orig, 2, quantile, probs = 0.025)
     q975_orig <- apply(post_orig, 2, quantile, probs = 0.975)
 
-    # normal-approximation CI on original scale  (b_mean ± 1.96 * b_sd)
-    # this is what make_counterfactual_stack() produces with z = ±1.96
-    norm_lo_orig <- b_mean - 1.96 * b_sd
-    norm_hi_orig <- b_mean + 1.96 * b_sd
+    # back-transform log1p-scale CI bounds — matches what 12B samples:
+    # expm1(logmean + logsd * ε), so ±1.96 bounds become expm1(logmean ± 1.96·logsd)
+    norm_lo_orig <- expm1(mu_log - 1.96 * sd_log)
+    norm_hi_orig <- expm1(mu_log + 1.96 * sd_log)
 
     # ---- summary statistics per run -----------------------------------------
 
@@ -340,7 +338,7 @@ if (nrow(ok) > 0) {
 
 --- (b) CI containment: normal approx CI ⊇ empirical 95%% interval ---
   log1p scale:    %.3f  (ideal = 1.00)
-  original scale: %.3f  (ideal = 1.00; this is what 12B uses)
+  original scale: %.3f  (ideal = 1.00; expm1(logmean ± 1.96·logsd), as in 12B)
 
 --- (c) Signed relative error  (norm_bound − empirical_bound) / |empirical_bound| ---
   log1p  lower bound (ideal ≈ 0): %+.4f   upper: %+.4f
