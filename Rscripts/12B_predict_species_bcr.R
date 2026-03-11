@@ -21,7 +21,7 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
       stop("b.list not found in ", basename(rdata_path))
     }
     
-    # loads b.list for some spp x bcr
+    # loads b.list (32 boots) for some spp x bcr
     b.list <- e$b.list
     
     # get current bcr
@@ -47,9 +47,9 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
     message(Sys.time(), " | done loading observed stack")
 
     # build sector mask projected to BCR prediction grid
-    # "all_hf": pre-built goodsectors raster (CanHF >= 1 AND any target sector > 0);
-    #   pixels that are only forestry_harvest/night_lights/population_density/nav_water
-    #   are excluded and keep their observed landscape bird estimates
+    # "all_hf": pre-built "goodsectors" raster (CanHF >= 1 AND any *target* sector > 0).
+    # "goodsectors" raster: pixels that are only forestry_harvest/night_lights/population_density/nav_water
+    # are excluded and keep their observed landscape bird estimates.
     # individual sectors: sector > 0 AND CanHF >= 1 (original full HF mask)
     if (sector_name == "all_hf") {
       goodsectors_r <- terra::project(
@@ -82,10 +82,8 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
     
     message(Sys.time(), " | done loading backfilled stack")
     
-    # split BART outputs (mean + sd)
-    mu_stack <- stack_bf[[grep("_mean$", names(stack_bf))]]
-    names(mu_stack)   <- sub("_mean$", "", names(mu_stack))
-
+    # split BART outputs: logmean/logsd for continuous biotic vars (posterior sampling in 12B);
+    # _mean layers are only needed by make_counterfactual_stack via stack_bf for categoricals.
     logmean_stack        <- stack_bf[[grep("_logmean$", names(stack_bf))]]
     names(logmean_stack) <- sub("_logmean$", "", names(logmean_stack))
     logsd_stack          <- stack_bf[[grep("_logsd$",   names(stack_bf))]]
@@ -93,13 +91,14 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
 
     # construct K=100 counterfactual scenario stacks by sampling from the BART posterior
     # in log1p space (Gaussian by construction), then back-transforming with expm1.
-    # This avoids the normality assumption on the original scale that q025/q975 imposed.
+    # Loop only over names(logmean_stack) — continuous biotic vars — to avoid accessing
+    # non-existent logmean/logsd layers for categorical covariates.
     n_scen <- 100L
     set.seed(sum(utf8ToInt(paste0(species, bcr_code))) %% .Machine$integer.max)
 
     X_bf_sets <- lapply(seq_len(n_scen), function(k) {
-      draw_stack <- mu_stack
-      for (v in names(mu_stack)) {
+      draw_stack <- logmean_stack
+      for (v in names(logmean_stack)) {
         noise_r        <- terra::setValues(logmean_stack[[v]],
                                            rnorm(terra::ncell(logmean_stack[[v]])))
         draw_v         <- terra::app(logmean_stack[[v]] + logsd_stack[[v]] * noise_r, expm1)
@@ -146,7 +145,7 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
     }
     message(Sys.time(), " | ", species, " ", bcr_code,
             " | zeroed out disturbance vars: ",
-            paste(intersect(names(X_bf_sets$mean), dist_shared), collapse = ", "))
+            paste(intersect(names(X_bf_sets[[1]]), dist_shared), collapse = ", "))
 
     # observed covariate stack is also constant across bootstraps
     X_obs <- stack_obs[[intersect(model_vars_shared, names(stack_obs))]]
