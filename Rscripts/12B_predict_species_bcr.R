@@ -91,7 +91,7 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
 
     # construct K=100 counterfactual scenario stacks by sampling from the BART posterior
     # in log1p space (Gaussian by construction), then back-transforming with expm1.
-    # Loop only over names(logmean_stack) — continuous biotic vars — to avoid accessing
+    # Loop only over names(logmean_stack) (continuous biotic vars) to avoid accessing
     # non-existent logmean/logsd layers for categorical covariates.
     n_scen <- 100L
     set.seed(sum(utf8ToInt(paste0(species, bcr_code))) %% .Machine$integer.max)
@@ -113,7 +113,7 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
     bf_preds  <- vector("list", n_scen)
     for (k in seq_len(n_scen)) bf_preds[[k]] <- vector("list", length(b.list))
 
-    # --- pre-compute bootstrap-invariant quantities ----------------------------
+    # pre-compute bootstrap-invariant quantities
     # GBM bootstrap models share the same var.names; compute once rather than
     # repeating identically for every bootstrap iteration.
     model_vars_shared  <- b.list[[1]]$var.names
