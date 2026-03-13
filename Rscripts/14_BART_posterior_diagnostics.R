@@ -24,7 +24,7 @@
 #              (f) SD of the above metrics across the 20 repeated subsamples
 #
 # context: Alliance Canada cluster, single node, multi-core
-# output:  data/derived_data/rds_files/normality_test_results.rds
+# output:  data/derived_data/rds_files/bart_posterior_diagnostics.rds
 # ---
 
 suppressPackageStartupMessages({
@@ -367,7 +367,7 @@ results <- dplyr::bind_rows(lapply(results_raw, as.data.frame))
 
 # ---- save --------------------------------------------------------------------
 
-out_path <- file.path(ia_dir, "data", "derived_data", "rds_files", "normality_test_results.rds")
+out_path <- file.path(ia_dir, "data", "derived_data", "rds_files", "bart_posterior_diagnostics.rds")
 saveRDS(results, out_path)
 message(sprintf("[%s] saved %d rows → %s", Sys.time(), nrow(results), out_path))
 
