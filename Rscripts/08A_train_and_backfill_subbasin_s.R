@@ -234,7 +234,9 @@ train_and_backfill_subbasin_s <- function(
   terra::writeRaster(
     result_raster,
     file.path(out_dir, sprintf("subbasin_%d_backfill.tif", subbasin_index)),
-    overwrite = TRUE
+    overwrite  = TRUE,
+    datatype   = "FLT4S",
+    gdal       = c("COMPRESS=DEFLATE", "PREDICTOR=3", "ZLEVEL=6", "BIGTIFF=YES")
   )
   
   logp("writing %d layers to %s", length(created), out_dir)

@@ -38,8 +38,10 @@ deploy_gbart <- function(
     b_mean_deg <- mean(y[-holdout_idx])
     df_backfill[[b]] <- b_mean_deg
     out_layers[[paste0(b, "_mean")]] <- rep(b_mean_deg, nrow(df_backfill))
-    out_layers[[paste0(b, "_logmean")]] <- rep(log1p(b_mean_deg), nrow(df_backfill))
-    out_layers[[paste0(b, "_logsd")]]   <- rep(0,                  nrow(df_backfill))
+    draw_val <- log1p(b_mean_deg)
+    for (d in seq_len(50L)) {
+      out_layers[[paste0(b, "_draw_", sprintf("%02d", d))]] <- rep(draw_val, nrow(df_backfill))
+    }
 
     logp("[%s] degenerate (≤2 unique values after log1p)", b)
     return(list(
@@ -56,12 +58,12 @@ deploy_gbart <- function(
     y_tr   <- y[-holdout_idx]
     b_mean <- mean(y_tr)
     b_logmean <- mean(log1p(y_tr))
-    b_logsd   <- sd(log1p(y_tr))
 
     df_backfill[[b]] <- b_mean
-    out_layers[[paste0(b, "_mean")]]    <- b_mean
-    out_layers[[paste0(b, "_logmean")]] <- b_logmean
-    out_layers[[paste0(b, "_logsd")]]   <- b_logsd
+    out_layers[[paste0(b, "_mean")]] <- b_mean
+    for (d in seq_len(50L)) {
+      out_layers[[paste0(b, "_draw_", sprintf("%02d", d))]] <- b_logmean
+    }
     
     logp("[%s] single backfill pixel: skipped gbart()", b)
     return(list(
@@ -88,21 +90,21 @@ deploy_gbart <- function(
   
   # --------------------------------------
   # post-modelling PART 1
-  # estimate posterior mean and empirical 2.5/97.5th percentiles on the original scale.
-  # yhat.test: posterior draws [ndpost x n_px]; rows = draws, columns = pixels.
-  # Back-transforming all draws before summarising avoids the log-normal normality
-  # assumption that the previous expm1(mu) +/- log-normal SD approach required.
-  # summarise posterior in log1p space (Gaussian by construction) for unbiased sampling in 12B,
-  # plus original-scale mean for use in the biotic covariate backfilling cascade (08A).
-  b_mean    <- colMeans(expm1(fit$yhat.test))  # original scale; used by cascade
-  b_logmean <- colMeans(fit$yhat.test)         # log1p-scale posterior mean
-  b_logsd   <- apply(fit$yhat.test, 2, sd)     # log1p-scale posterior SD
+  # yhat.test: posterior draws [ndpost x n_px]; rows = draws, columns = pixels (log1p scale).
+  # Sample 50 random draws and store them as {cov}_draw_01…50 layers.
+  # 12B resamples from these draws directly, avoiding the Gaussian normality assumption.
+  # Original-scale mean is kept as {cov}_mean for the biotic hierarchy cascade (08A).
+  b_mean   <- colMeans(expm1(fit$yhat.test))  # original scale; used by cascade
+  n_draws  <- 50L
+  draw_idx <- sample(nrow(fit$yhat.test), n_draws)
+  draw_mat <- fit$yhat.test[draw_idx, , drop = FALSE]  # [50 x n_px] in log1p space
 
   # replace backfilled b in backfilling dataset for using in next iteration (following `neworder`), and for outputs
   df_backfill[[b]] <- b_mean
-  out_layers[[paste0(b, "_mean")]]    <- b_mean
-  out_layers[[paste0(b, "_logmean")]] <- b_logmean
-  out_layers[[paste0(b, "_logsd")]]   <- b_logsd
+  out_layers[[paste0(b, "_mean")]] <- b_mean
+  for (d in seq_len(n_draws)) {
+    out_layers[[paste0(b, "_draw_", sprintf("%02d", d))]] <- draw_mat[d, ]
+  }
   
   # --------------------------------------
   # post-modelling PART 2

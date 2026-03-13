@@ -1,22 +1,27 @@
 # ---
-# title:   Test normality assumption of gbart() posterior for backfilled covariates
+# title:   Test gbart() posterior diagnostics: normality assumption and draw adequacy
 # author:  Mannfred Boehm
-# purpose: 12B_predict_species_bcr.R constructs counterfactual covariate stacks by
-#          sampling  expm1(logmean + logsd * ε)  (ε ~ N(0,1) per pixel),
-#          where logmean and logsd are the per-pixel posterior mean and SD in log1p
-#          space from gbart().  This is only accurate if the ±1.96·logsd interval
-#          in log1p space — back-transformed as expm1(logmean ± 1.96·logsd) —
-#          closely matches the empirical 2.5/97.5th percentiles of the
-#          back-transformed posterior draws.
+# purpose: Two diagnostic questions, answered by fitting gbart() (identical arguments
+#          to 08B) on n_samples random (subbasin, covariate) pairs from year 2020:
 #
-#          This script tests that assumption by fitting gbart() (with identical
-#          arguments to 08B) on n_samples random (subbasin, covariate) pairs from
-#          year 2020, then comparing:
-#            (a) Shapiro-Wilk test on log1p-scale posterior draws (is the log-scale
-#                posterior actually normal?)
-#            (b) containment rate: does b_mean ± 1.96*b_sd contain the empirical
-#                95% posterior interval?
-#            (c) signed relative error of the normal CI bounds vs. empirical quantiles
+#          (A) NORMALITY (legacy diagnostic, Gaussian sampling approach now retired):
+#              Was the log1p-scale posterior actually Gaussian?  12B previously sampled
+#              expm1(logmean + logsd * ε) (ε ~ N(0,1)).  Tests:
+#              (a) Shapiro-Wilk test on log1p-scale draws
+#              (b) containment rate: does expm1(logmean ± 1.96·logsd) contain the
+#                  empirical 2.5/97.5 percentiles?
+#              (c) signed relative error of the normal CI bounds
+#
+#          (B) DRAW ADEQUACY (new diagnostic, for current draw-based approach):
+#              Does a random subsample of n_draws=50 from the 700-draw posterior
+#              adequately represent the full posterior?  12B now resamples 1 of 50
+#              stored draws per scenario rather than drawing from a Gaussian.
+#              Tests (20 repeated subsamples of 50, to get stability):
+#              (d) mean absolute relative error of q025/q50/q975 from 50 draws
+#                  vs. the full 700-draw posterior (per pixel, averaged across pixels)
+#              (e) containment rate: does the 50-draw 95% interval contain the
+#                  700-draw 95% interval?
+#              (f) SD of the above metrics across the 20 repeated subsamples
 #
 # context: Alliance Canada cluster, single node, multi-core
 # output:  data/derived_data/rds_files/normality_test_results.rds
@@ -248,7 +253,7 @@ test_one_pair <- function(pair,
     norm_lo_orig <- expm1(mu_log - 1.96 * sd_log)
     norm_hi_orig <- expm1(mu_log + 1.96 * sd_log)
 
-    # ---- summary statistics per run -----------------------------------------
+    # ---- (A) normality summary statistics ------------------------------------
 
     # containment: does the normal CI fully contain the empirical 95% interval?
     contains_log  <- mean(norm_lo_log  <= q025_log  & norm_hi_log  >= q975_log)
@@ -263,6 +268,47 @@ test_one_pair <- function(pair,
     err_lo_orig <- mean((norm_lo_orig - q025_orig) / (abs(q025_orig) + eps))
     err_hi_orig <- mean((norm_hi_orig - q975_orig) / (abs(q975_orig) + eps))
 
+    # ---- (B) draw adequacy: does n_draws=50 represent the full posterior? ----
+    # Reference quantiles from all 700 draws (the "truth").
+    n_draws_test <- 50L
+    n_reps_da    <- 20L   # repeated subsamples to assess stability
+
+    q025_full <- apply(fit$yhat.test, 2, quantile, probs = 0.025)
+    q50_full  <- apply(fit$yhat.test, 2, quantile, probs = 0.50)
+    q975_full <- apply(fit$yhat.test, 2, quantile, probs = 0.975)
+
+    # For each rep: subsample n_draws_test rows, compute quantiles, compare to full
+    rep_stats <- vapply(seq_len(n_reps_da), function(r) {
+      idx50  <- sample(nrow(fit$yhat.test), n_draws_test)
+      mat50  <- fit$yhat.test[idx50, , drop = FALSE]
+      q025_s <- apply(mat50, 2, quantile, probs = 0.025)
+      q50_s  <- apply(mat50, 2, quantile, probs = 0.50)
+      q975_s <- apply(mat50, 2, quantile, probs = 0.975)
+
+      # containment: 50-draw interval contains the full-posterior 95% interval
+      contains50 <- mean(q025_s <= q025_full & q975_s >= q975_full)
+
+      # mean absolute relative error per quantile (averaged across pixels)
+      err_q025 <- mean(abs(q025_s - q025_full) / (abs(q025_full) + eps))
+      err_q50  <- mean(abs(q50_s  - q50_full)  / (abs(q50_full)  + eps))
+      err_q975 <- mean(abs(q975_s - q975_full) / (abs(q975_full) + eps))
+
+      c(contains50 = contains50,
+        err_q025   = err_q025,
+        err_q50    = err_q50,
+        err_q975   = err_q975)
+    }, numeric(4))
+
+    # mean and SD across the n_reps_da subsamples (SD reflects subsample variability)
+    da_contains_mean <- mean(rep_stats["contains50", ])
+    da_contains_sd   <- sd(rep_stats["contains50", ])
+    da_err_q025_mean <- mean(rep_stats["err_q025",   ])
+    da_err_q025_sd   <- sd(rep_stats["err_q025",   ])
+    da_err_q50_mean  <- mean(rep_stats["err_q50",    ])
+    da_err_q50_sd    <- sd(rep_stats["err_q50",    ])
+    da_err_q975_mean <- mean(rep_stats["err_q975",   ])
+    da_err_q975_sd   <- sd(rep_stats["err_q975",   ])
+
     list(
       sample_id          = k,
       subbasin           = sub_idx,
@@ -270,19 +316,30 @@ test_one_pair <- function(pair,
       status             = "ok",
       n_train            = nrow(df_tb),
       n_test             = n_px,
-      # Shapiro-Wilk (log1p scale): are posterior draws normally distributed?
+      # (A) Shapiro-Wilk (log1p scale): are posterior draws normally distributed?
       sw_frac_reject_05  = mean(sw_pv < 0.05, na.rm = TRUE),
       sw_pval_median     = median(sw_pv, na.rm = TRUE),
-      # log1p-scale CI agreement
+      # (A) log1p-scale CI agreement
       contains_log       = contains_log,
       err_lo_log         = err_lo_log,
       err_hi_log         = err_hi_log,
-      # original-scale CI agreement (what 12B actually uses)
+      # (A) original-scale CI agreement (what 12B previously used)
       contains_orig      = contains_orig,
       err_lo_orig        = err_lo_orig,
       err_hi_orig        = err_hi_orig,
-      # posterior spread on log1p scale (context for how diffuse the posteriors are)
-      mean_sd_log        = mean(sd_log)
+      # (A) posterior spread on log1p scale (context for how diffuse the posteriors are)
+      mean_sd_log        = mean(sd_log),
+      # (B) draw adequacy: 50-draw subsample vs. full 700-draw posterior
+      # containment: fraction of pixels where 50-draw 95% interval ⊇ full 95% interval
+      da_contains_mean   = da_contains_mean,
+      da_contains_sd     = da_contains_sd,
+      # mean absolute relative error of q025/q50/q975 (mean and SD across 20 subsamples)
+      da_err_q025_mean   = da_err_q025_mean,
+      da_err_q025_sd     = da_err_q025_sd,
+      da_err_q50_mean    = da_err_q50_mean,
+      da_err_q50_sd      = da_err_q50_sd,
+      da_err_q975_mean   = da_err_q975_mean,
+      da_err_q975_sd     = da_err_q975_sd
     )
 
   }, error = function(e) c(stub, list(status = paste0("error: ", conditionMessage(e)))))
@@ -331,6 +388,8 @@ if (nrow(skip) > 0) {
 if (nrow(ok) > 0) {
   message(sprintf(
 "
+=== (A) NORMALITY (legacy Gaussian sampling — now retired) ===
+
 --- (a) Shapiro-Wilk on log1p-scale posterior draws ---
   Fraction of pixels rejecting normality (alpha=0.05):  %.3f  [median across pairs]
   Median Shapiro-Wilk p-value:                          %.4f  [median across pairs]
@@ -338,7 +397,7 @@ if (nrow(ok) > 0) {
 
 --- (b) CI containment: normal approx CI ⊇ empirical 95%% interval ---
   log1p scale:    %.3f  (ideal = 1.00)
-  original scale: %.3f  (ideal = 1.00; expm1(logmean ± 1.96·logsd), as in 12B)
+  original scale: %.3f  (ideal = 1.00; expm1(logmean ± 1.96·logsd), as in old 12B)
 
 --- (c) Signed relative error  (norm_bound − empirical_bound) / |empirical_bound| ---
   log1p  lower bound (ideal ≈ 0): %+.4f   upper: %+.4f
@@ -350,5 +409,25 @@ if (nrow(ok) > 0) {
     mean(ok$contains_orig, na.rm = TRUE),
     mean(ok$err_lo_log,  na.rm = TRUE), mean(ok$err_hi_log,  na.rm = TRUE),
     mean(ok$err_lo_orig, na.rm = TRUE), mean(ok$err_hi_orig, na.rm = TRUE)
+  ))
+
+  message(sprintf(
+"
+=== (B) DRAW ADEQUACY (50-draw subsample vs. full 700-draw posterior) ===
+    Each metric is the mean across %d pairs; (SD) is SD across 20 subsamples per pair.
+
+--- (d) Mean absolute relative error of quantiles (50 draws vs. 700 draws) ---
+  q025:  %.4f  (SD %.4f)   (ideal = 0)
+  q50:   %.4f  (SD %.4f)   (ideal = 0)
+  q975:  %.4f  (SD %.4f)   (ideal = 0)
+
+--- (e) Containment: 50-draw 95%% interval ⊇ full-posterior 95%% interval ---
+  mean containment rate: %.3f  (SD %.4f)   (ideal = 1.00)
+  (values < 1 mean some pixels' tails are underrepresented by the 50 stored draws)",
+    nrow(ok),
+    mean(ok$da_err_q025_mean, na.rm = TRUE), mean(ok$da_err_q025_sd, na.rm = TRUE),
+    mean(ok$da_err_q50_mean,  na.rm = TRUE), mean(ok$da_err_q50_sd,  na.rm = TRUE),
+    mean(ok$da_err_q975_mean, na.rm = TRUE), mean(ok$da_err_q975_sd, na.rm = TRUE),
+    mean(ok$da_contains_mean, na.rm = TRUE), mean(ok$da_contains_sd, na.rm = TRUE)
   ))
 }

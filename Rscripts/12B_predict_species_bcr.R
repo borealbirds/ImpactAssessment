@@ -82,29 +82,25 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
     
     message(Sys.time(), " | done loading backfilled stack")
     
-    # split BART outputs: logmean/logsd for continuous biotic vars (posterior sampling in 12B);
-    # _mean layers are only needed by make_counterfactual_stack via stack_bf for categoricals.
-    logmean_stack        <- stack_bf[[grep("_logmean$", names(stack_bf))]]
-    names(logmean_stack) <- sub("_logmean$", "", names(logmean_stack))
-    logsd_stack          <- stack_bf[[grep("_logsd$",   names(stack_bf))]]
-    names(logsd_stack)   <- sub("_logsd$",   "", names(logsd_stack))
+    # identify continuous biotic covariates with stored posterior draw layers
+    draw_layer_names <- names(stack_bf)[grep("_draw_[0-9]{2}$", names(stack_bf))]
+    draw_covs        <- unique(sub("_draw_[0-9]{2}$", "", draw_layer_names))
+    n_draws          <- 50L
 
-    # construct K=100 counterfactual scenario stacks by sampling from the BART posterior
-    # in log1p space (Gaussian by construction), then back-transforming with expm1.
-    # Loop only over names(logmean_stack) (continuous biotic vars) to avoid accessing
-    # non-existent logmean/logsd layers for categorical covariates.
+    # construct K=100 counterfactual scenario stacks by resampling from the stored
+    # BART posterior draws (log1p scale), then back-transforming with expm1.
+    # Avoids the Gaussian normality assumption: draws are the actual posterior.
     n_scen <- 100L
     set.seed(sum(utf8ToInt(paste0(species, bcr_code))) %% .Machine$integer.max)
 
     X_bf_sets <- lapply(seq_len(n_scen), function(k) {
-      draw_stack <- logmean_stack
-      for (v in names(logmean_stack)) {
-        noise_r        <- terra::setValues(logmean_stack[[v]],
-                                           rnorm(terra::ncell(logmean_stack[[v]])))
-        draw_v         <- terra::app(logmean_stack[[v]] + logsd_stack[[v]] * noise_r, expm1)
-        draw_v         <- terra::ifel(draw_v < 0, 0, draw_v)
-        draw_stack[[v]] <- draw_v
-      }
+      chosen     <- sample(n_draws, 1)
+      draw_stack <- terra::rast(lapply(draw_covs, function(v) {
+        lyr    <- stack_bf[[paste0(v, "_draw_", sprintf("%02d", chosen))]]
+        draw_v <- terra::app(lyr, expm1)
+        terra::ifel(draw_v < 0, 0, draw_v)
+      }))
+      names(draw_stack) <- draw_covs
       make_counterfactual_stack(stack_obs, draw_stack, sector_mask)
     })
     
@@ -124,8 +120,7 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
 
     missing_bf <- biotic_cont_shared[
       !(paste0(biotic_cont_shared, "_mean")    %in% names(stack_bf) &
-        paste0(biotic_cont_shared, "_logmean") %in% names(stack_bf) &
-        paste0(biotic_cont_shared, "_logsd")   %in% names(stack_bf))]
+        paste0(biotic_cont_shared, "_draw_01") %in% names(stack_bf))]
     if (length(missing_bf) > 0) {
       message(Sys.time(), " | ", species, " ", bcr_code,
               " | missing backfilled cont vars: ", paste(missing_bf, collapse = ", "))
