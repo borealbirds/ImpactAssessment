@@ -39,8 +39,8 @@ deploy_gbart <- function(
     df_backfill[[b]] <- b_mean_deg
     out_layers[[paste0(b, "_mean")]] <- rep(b_mean_deg, nrow(df_backfill))
     draw_val <- log1p(b_mean_deg)
-    for (d in seq_len(50L)) {
-      out_layers[[paste0(b, "_draw_", sprintf("%02d", d))]] <- rep(draw_val, nrow(df_backfill))
+    for (d in seq_len(100L)) {
+      out_layers[[paste0(b, "_draw_", sprintf("%03d", d))]] <- rep(draw_val, nrow(df_backfill))
     }
 
     logp("[%s] degenerate (≤2 unique values after log1p)", b)
@@ -61,8 +61,8 @@ deploy_gbart <- function(
 
     df_backfill[[b]] <- b_mean
     out_layers[[paste0(b, "_mean")]] <- b_mean
-    for (d in seq_len(50L)) {
-      out_layers[[paste0(b, "_draw_", sprintf("%02d", d))]] <- b_logmean
+    for (d in seq_len(100L)) {
+      out_layers[[paste0(b, "_draw_", sprintf("%03d", d))]] <- b_logmean
     }
     
     logp("[%s] single backfill pixel: skipped gbart()", b)
@@ -91,19 +91,19 @@ deploy_gbart <- function(
   # --------------------------------------
   # post-modelling PART 1
   # yhat.test: posterior draws [ndpost x n_px]; rows = draws, columns = pixels (log1p scale).
-  # Sample 50 random draws and store them as {cov}_draw_01…50 layers.
+  # Sample 100 random draws and store them as {cov}_draw_001…100 layers.
   # 12B resamples from these draws directly, avoiding the Gaussian normality assumption.
   # Original-scale mean is kept as {cov}_mean for the biotic hierarchy cascade (08A).
   b_mean   <- colMeans(expm1(fit$yhat.test))  # original scale; used by cascade
-  n_draws  <- 50L
+  n_draws  <- 100L
   draw_idx <- sample(nrow(fit$yhat.test), n_draws)
-  draw_mat <- fit$yhat.test[draw_idx, , drop = FALSE]  # [50 x n_px] in log1p space
+  draw_mat <- fit$yhat.test[draw_idx, , drop = FALSE]  # [100 x n_px] in log1p space
 
   # replace backfilled b in backfilling dataset for using in next iteration (following `neworder`), and for outputs
   df_backfill[[b]] <- b_mean
   out_layers[[paste0(b, "_mean")]] <- b_mean
   for (d in seq_len(n_draws)) {
-    out_layers[[paste0(b, "_draw_", sprintf("%02d", d))]] <- draw_mat[d, ]
+    out_layers[[paste0(b, "_draw_", sprintf("%03d", d))]] <- draw_mat[d, ]
   }
   
   # --------------------------------------

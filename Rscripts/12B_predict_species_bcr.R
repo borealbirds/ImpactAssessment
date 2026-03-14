@@ -83,9 +83,9 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
     message(Sys.time(), " | done loading backfilled stack")
     
     # identify continuous biotic covariates with stored posterior draw layers
-    draw_layer_names <- names(stack_bf)[grep("_draw_[0-9]{2}$", names(stack_bf))]
-    draw_covs        <- unique(sub("_draw_[0-9]{2}$", "", draw_layer_names))
-    n_draws          <- 50L
+    draw_layer_names <- names(stack_bf)[grep("_draw_[0-9]{3}$", names(stack_bf))]
+    draw_covs        <- unique(sub("_draw_[0-9]{3}$", "", draw_layer_names))
+    n_draws          <- 100L
 
     # construct K=100 counterfactual scenario stacks by resampling from the stored
     # BART posterior draws (log1p scale), then back-transforming with expm1.
@@ -96,7 +96,7 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
     X_bf_sets <- lapply(seq_len(n_scen), function(k) {
       chosen     <- sample(n_draws, 1)
       draw_stack <- terra::rast(lapply(draw_covs, function(v) {
-        lyr    <- stack_bf[[paste0(v, "_draw_", sprintf("%02d", chosen))]]
+        lyr    <- stack_bf[[paste0(v, "_draw_", sprintf("%03d", chosen))]]
         draw_v <- terra::app(lyr, expm1)
         terra::ifel(draw_v < 0, 0, draw_v)
       }))
@@ -120,7 +120,7 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
 
     missing_bf <- biotic_cont_shared[
       !(paste0(biotic_cont_shared, "_mean")    %in% names(stack_bf) &
-        paste0(biotic_cont_shared, "_draw_01") %in% names(stack_bf))]
+        paste0(biotic_cont_shared, "_draw_001") %in% names(stack_bf))]
     if (length(missing_bf) > 0) {
       message(Sys.time(), " | ", species, " ", bcr_code,
               " | missing backfilled cont vars: ", paste(missing_bf, collapse = ", "))

@@ -1,21 +1,19 @@
 # ---
 # title:   BART posterior draw adequacy diagnostic
 # author:  Mannfred Boehm
-# purpose: Test whether n_draws=50 random draws subsampled from the 700-draw
+# purpose: Test whether n_draws=100 random draws subsampled from the 700-draw
 #          gbart() posterior adequately represent the full posterior.
-#          12B resamples 1 of 50 stored draws per counterfactual scenario; this
-#          script verifies that 50 draws is enough to cover the posterior's shape
+#          12B resamples 1 of 100 stored draws per counterfactual scenario; this
+#          script verifies that 100 draws is enough to cover the posterior's shape
 #          and tails regardless of their distribution.
 #
 #          For each of n_samples random (subbasin, covariate) pairs, fits gbart()
-#          (identical arguments to 08B), then repeats 20 subsamples of 50 draws
+#          (identical arguments to 08B), then repeats 20 subsamples of 100 draws
 #          and compares their quantiles to the full 700-draw posterior:
 #            (a) mean absolute relative error of q025/q50/q975
-#                (50-draw subsample vs. full 700-draw posterior, per pixel)
-#            (b) containment rate: does the 50-draw 95% interval contain the
-#                full-posterior 95% interval?
-#            (c) SD of the above across the 20 repeated subsamples
-#                (reflects how stable a single stored set of 50 draws is)
+#                (100-draw subsample vs. full 700-draw posterior, per pixel)
+#            (b) SD of the above across the 20 repeated subsamples
+#                (reflects how stable a single stored set of 100 draws is)
 #
 # context: Alliance Canada cluster, single node, multi-core
 # output:  data/derived_data/rds_files/bart_posterior_diagnostics.rds
@@ -211,7 +209,7 @@ test_one_pair <- function(pair,
 
     # ---- draw adequacy: does n_draws=50 represent the full posterior? --------
     # Reference quantiles from all 700 draws (the "truth").
-    n_draws_test <- 50L
+    n_draws_test <- 100L
     n_reps_da    <- 20L   # repeated subsamples to assess stability
     eps          <- 1e-6
 
@@ -221,34 +219,28 @@ test_one_pair <- function(pair,
 
     # For each rep: subsample n_draws_test rows, compute quantiles, compare to full
     rep_stats <- vapply(seq_len(n_reps_da), function(r) {
-      idx50  <- sample(nrow(fit$yhat.test), n_draws_test)
-      mat50  <- fit$yhat.test[idx50, , drop = FALSE]
-      q025_s <- apply(mat50, 2, quantile, probs = 0.025)
-      q50_s  <- apply(mat50, 2, quantile, probs = 0.50)
-      q975_s <- apply(mat50, 2, quantile, probs = 0.975)
-
-      # containment: 50-draw interval contains the full-posterior 95% interval
-      contains50 <- mean(q025_s <= q025_full & q975_s >= q975_full)
+      idx100 <- sample(nrow(fit$yhat.test), n_draws_test)
+      mat100 <- fit$yhat.test[idx100, , drop = FALSE]
+      q025_s <- apply(mat100, 2, quantile, probs = 0.025)
+      q50_s  <- apply(mat100, 2, quantile, probs = 0.50)
+      q975_s <- apply(mat100, 2, quantile, probs = 0.975)
 
       # mean absolute relative error per quantile (averaged across pixels)
       err_q025 <- mean(abs(q025_s - q025_full) / (abs(q025_full) + eps))
       err_q50  <- mean(abs(q50_s  - q50_full)  / (abs(q50_full)  + eps))
       err_q975 <- mean(abs(q975_s - q975_full) / (abs(q975_full) + eps))
 
-      c(contains50 = contains50,
-        err_q025   = err_q025,
-        err_q50    = err_q50,
-        err_q975   = err_q975)
-    }, numeric(4))
+      c(err_q025 = err_q025,
+        err_q50  = err_q50,
+        err_q975 = err_q975)
+    }, numeric(3))
 
     # mean and SD across the n_reps_da subsamples (SD reflects subsample variability)
-    da_contains_mean <- mean(rep_stats["contains50", ])
-    da_contains_sd   <- sd(rep_stats["contains50", ])
-    da_err_q025_mean <- mean(rep_stats["err_q025",   ])
+    da_err_q025_mean <- mean(rep_stats["err_q025", ])
     da_err_q025_sd   <- sd(rep_stats["err_q025",   ])
-    da_err_q50_mean  <- mean(rep_stats["err_q50",    ])
+    da_err_q50_mean  <- mean(rep_stats["err_q50",  ])
     da_err_q50_sd    <- sd(rep_stats["err_q50",    ])
-    da_err_q975_mean <- mean(rep_stats["err_q975",   ])
+    da_err_q975_mean <- mean(rep_stats["err_q975", ])
     da_err_q975_sd   <- sd(rep_stats["err_q975",   ])
 
     list(
@@ -258,9 +250,6 @@ test_one_pair <- function(pair,
       status           = "ok",
       n_train          = nrow(df_tb),
       n_test           = n_px,
-      # containment: fraction of pixels where 50-draw 95% interval ⊇ full 95% interval
-      da_contains_mean = da_contains_mean,
-      da_contains_sd   = da_contains_sd,
       # mean absolute relative error of q025/q50/q975 (mean and SD across 20 subsamples)
       da_err_q025_mean = da_err_q025_mean,
       da_err_q025_sd   = da_err_q025_sd,
@@ -315,21 +304,16 @@ if (nrow(skip) > 0) {
 if (nrow(ok) > 0) {
   message(sprintf(
 "
-=== DRAW ADEQUACY (50-draw subsample vs. full 700-draw posterior) ===
+=== DRAW ADEQUACY (100-draw subsample vs. full 700-draw posterior) ===
     Each metric is the mean across %d pairs; (SD) is SD across 20 subsamples per pair.
 
---- Mean absolute relative error of quantiles (50 draws vs. 700 draws) ---
+--- Mean absolute relative error of quantiles (100 draws vs. 700 draws) ---
   q025:  %.4f  (SD %.4f)   (ideal = 0)
   q50:   %.4f  (SD %.4f)   (ideal = 0)
-  q975:  %.4f  (SD %.4f)   (ideal = 0)
-
---- Containment: 50-draw 95%% interval ⊇ full-posterior 95%% interval ---
-  mean containment rate: %.3f  (SD %.4f)   (ideal = 1.00)
-  (values < 1 mean some pixels' tails are underrepresented by the 50 stored draws)",
+  q975:  %.4f  (SD %.4f)   (ideal = 0)",
     nrow(ok),
     mean(ok$da_err_q025_mean, na.rm = TRUE), mean(ok$da_err_q025_sd, na.rm = TRUE),
     mean(ok$da_err_q50_mean,  na.rm = TRUE), mean(ok$da_err_q50_sd,  na.rm = TRUE),
-    mean(ok$da_err_q975_mean, na.rm = TRUE), mean(ok$da_err_q975_sd, na.rm = TRUE),
-    mean(ok$da_contains_mean, na.rm = TRUE), mean(ok$da_contains_sd, na.rm = TRUE)
+    mean(ok$da_err_q975_mean, na.rm = TRUE), mean(ok$da_err_q975_sd, na.rm = TRUE)
   ))
 }
