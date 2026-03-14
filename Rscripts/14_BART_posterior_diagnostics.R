@@ -207,7 +207,7 @@ test_one_pair <- function(pair,
     # yhat.test is [ndpost x n_px]; each column is one backfill pixel
     n_px <- ncol(fit$yhat.test)
 
-    # ---- draw adequacy: does n_draws=50 represent the full posterior? --------
+    # ---- draw adequacy: does n_draws=100 represent the full posterior? -------
     # Reference quantiles from all 700 draws (the "truth").
     n_draws_test <- 100L
     n_reps_da    <- 20L   # repeated subsamples to assess stability
