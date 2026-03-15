@@ -29,13 +29,14 @@ suppressPackageStartupMessages({
 
 # ---- settings ----------------------------------------------------------------
 
-ia_dir    <- "/home/mannfred/scratch/impact_assessment"
-year      <- 2020
-n_samples <- 500L   # number of random (subbasin, covariate) pairs to test
+ia_dir     <- "/home/mannfred/scratch/impact_assessment"
+year       <- 2020
+target_ok  <- 500L  # stop when this many pairs return status == "ok"
+batch_size <- 300L  # pairs per mclapply call (~55% ok rate → ~165 ok per batch)
 set.seed(42)
 
 n_cores <- as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", unset = "1"))
-message(sprintf("[%s] starting — %d core(s), %d pairs", Sys.time(), n_cores, n_samples))
+message(sprintf("[%s] starting — %d core(s), target %d ok pairs", Sys.time(), n_cores, target_ok))
 
 # ---- file paths (passed by value to workers; avoids terra fork issues) -------
 
@@ -91,16 +92,7 @@ stack_layers      <- names(terra::rast(stack_path))
 biotic_continuous <- intersect(setdiff(neworder, categorical_responses), stack_layers)
 message(sprintf("[%s] %d continuous biotic covariates in stack", Sys.time(), length(biotic_continuous)))
 
-# ---- sample n_samples random (subbasin, covariate) pairs --------------------
-
 n_subbasins <- nrow(terra::vect(subbasins_path))
-pairs <- data.frame(
-  sample_id = seq_len(n_samples),
-  subbasin  = sample(seq_len(n_subbasins), n_samples, replace = TRUE),
-  covariate = sample(biotic_continuous,    n_samples, replace = TRUE),
-  stringsAsFactors = FALSE)
-
-message(sprintf("[%s] sampled %d pairs; dispatching to workers", Sys.time(), n_samples))
 
 # ---- per-pair worker function ------------------------------------------------
 # Everything terra-related is loaded from disk inside this function so that
@@ -264,62 +256,68 @@ test_one_pair <- function(pair,
   }, error = function(e) modifyList(stub, list(status = paste0("error: ", conditionMessage(e)))))
 }
 
-# ---- dispatch ----------------------------------------------------------------
+# ---- dispatch: batch loop until target_ok successful fits -------------------
 
-results_raw <- parallel::mclapply(
-  X                     = split(pairs, pairs$sample_id),
-  FUN                   = test_one_pair,
-  stack_path            = stack_path,
-  lowhf_path            = lowhf_path,
-  highhf_path           = highhf_path,
-  subbasins_path        = subbasins_path,
-  abiotic_vars          = abiotic_vars,
-  biotic_vars           = biotic_vars,
-  neworder              = neworder,
-  categorical_responses = categorical_responses,
-  mc.cores              = n_cores,
-  mc.preschedule        = FALSE   # dynamic scheduling; faster workers pick up the next task
-)
+all_results <- list()
+ok_count    <- 0L
+batch_num   <- 0L
 
-# ---- inspect mclapply worker failures ----------------------------------------
-# try-error objects indicate OS-level kills (fork crash, OOM, terra/GDAL signal)
-# that tryCatch inside test_one_pair() cannot catch. Identify and report them
-# before bind_rows silently drops them.
+while (ok_count < target_ok) {
 
-worker_status <- vapply(results_raw, function(x) {
-  if (inherits(x, "try-error")) "try-error"
-  else if (is.null(x))          "null"
-  else if (is.list(x) && !is.data.frame(x) && is.null(x$status)) "unknown"
-  else                           "ok"
-}, character(1))
+  batch_num   <- batch_num + 1L
+  message(sprintf("[%s] batch %d — ok so far: %d / %d",
+                  Sys.time(), batch_num, ok_count, target_ok))
 
-failed_idx <- which(worker_status != "ok")
-if (length(failed_idx) > 0) {
-  message(sprintf("[%s] %d workers did not return a result:", Sys.time(), length(failed_idx)))
-  for (i in failed_idx) {
-    p   <- pairs[i, ]
-    msg <- if (worker_status[i] == "try-error")
-             as.character(results_raw[[i]])
-           else
-             worker_status[i]
-    message(sprintf("  sample_id=%d  subbasin=%d  covariate=%s  reason=%s",
-                    p$sample_id, p$subbasin, p$covariate, msg))
+  batch_pairs <- data.frame(
+    sample_id = seq_len(batch_size),
+    subbasin  = sample(seq_len(n_subbasins), batch_size, replace = TRUE),
+    covariate = sample(biotic_continuous,    batch_size, replace = TRUE),
+    stringsAsFactors = FALSE)
+
+  batch_raw <- parallel::mclapply(
+    X                     = split(batch_pairs, batch_pairs$sample_id),
+    FUN                   = test_one_pair,
+    stack_path            = stack_path,
+    lowhf_path            = lowhf_path,
+    highhf_path           = highhf_path,
+    subbasins_path        = subbasins_path,
+    abiotic_vars          = abiotic_vars,
+    biotic_vars           = biotic_vars,
+    neworder              = neworder,
+    categorical_responses = categorical_responses,
+    mc.cores              = n_cores,
+    mc.preschedule        = FALSE
+  )
+
+  # report any OS-level worker kills (try-error) not caught by tryCatch
+  for (i in seq_along(batch_raw)) {
+    if (inherits(batch_raw[[i]], "try-error")) {
+      p <- batch_pairs[i, ]
+      message(sprintf("  [batch %d] worker killed: subbasin=%d covariate=%s reason=%s",
+                      batch_num, p$subbasin, p$covariate, as.character(batch_raw[[i]])))
+    }
   }
-} else {
-  message(sprintf("[%s] all %d workers returned a result", Sys.time(), n_samples))
-}
 
-results <- dplyr::bind_rows(lapply(results_raw, as.data.frame))
+  batch_df <- dplyr::bind_rows(lapply(batch_raw, function(x) {
+    if (inherits(x, "try-error") || is.null(x)) return(NULL)
+    tryCatch(as.data.frame(x), error = function(e) NULL)
+  }))
 
-# report any sample_ids missing from results (should match failed_idx above)
-missing_ids <- setdiff(seq_len(n_samples), results$sample_id)
-if (length(missing_ids) > 0) {
-  message(sprintf("[%s] %d sample_ids absent from results table: %s",
-                  Sys.time(), length(missing_ids),
-                  paste(missing_ids, collapse = ", ")))
+  all_results[[batch_num]] <- batch_df
+  ok_count <- sum(vapply(all_results, function(df) sum(df$status == "ok", na.rm = TRUE), integer(1)))
+
+  message(sprintf("[%s] batch %d done — %d ok this batch, %d ok total",
+                  Sys.time(), batch_num,
+                  sum(batch_df$status == "ok", na.rm = TRUE),
+                  ok_count))
 }
 
 # ---- save --------------------------------------------------------------------
+
+results  <- dplyr::bind_rows(all_results)
+ok       <- dplyr::filter(results, status == "ok")[seq_len(target_ok), ]  # trim to exactly target_ok
+skip     <- dplyr::filter(results, status != "ok")
+results  <- dplyr::bind_rows(ok, skip)
 
 out_path <- file.path(ia_dir, "data", "derived_data", "rds_files", "bart_posterior_diagnostics.rds")
 saveRDS(results, out_path)
@@ -327,12 +325,9 @@ message(sprintf("[%s] saved %d rows → %s", Sys.time(), nrow(results), out_path
 
 # ---- console summary ---------------------------------------------------------
 
-ok   <- dplyr::filter(results, status == "ok")
-skip <- dplyr::filter(results, status != "ok")
-
 message(sprintf(
-  "\n=== Results ===\nok: %d | skipped/errored: %d (of %d requested)\n",
-  nrow(ok), nrow(skip), n_samples))
+  "\n=== Results ===\nok: %d | skipped/errored: %d (across %d batches)\n",
+  nrow(ok), nrow(skip), batch_num))
 
 if (nrow(skip) > 0) {
   message("Skip/error breakdown:")
