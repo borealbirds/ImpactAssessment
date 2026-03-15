@@ -140,7 +140,7 @@ test_one_pair <- function(pair,
     backfill_idx <- which(terra::values(highhf_s) == 1)
     df_backfill  <- df_full[backfill_idx, , drop = FALSE]
 
-    if (nrow(df_backfill) == 0) return(c(stub, list(status = "no_highhf_pixels")))
+    if (nrow(df_backfill) == 0) return(modifyList(stub, list(status ="no_highhf_pixels")))
 
     # coordinate scaling (mirrors 08A) ----------------------------------------
     xy_ok     <- which(!is.na(df_full$x) & !is.na(df_full$y))
@@ -158,10 +158,10 @@ test_one_pair <- function(pair,
     biotic_cols  <- na.omit(biotic_cols[match(neworder, biotic_cols)])
     biotic_cols_cont_local <- setdiff(biotic_cols, categorical_responses)
 
-    if (!(b %in% names(df_train)))                      return(c(stub, list(status = "covariate_absent")))
+    if (!(b %in% names(df_train)))                      return(modifyList(stub, list(status ="covariate_absent")))
     idx <- which(!is.na(df_train[[b]]))
-    if (length(idx) < 10)                               return(c(stub, list(status = "too_few_train")))
-    if (length(unique(df_train[[b]][idx])) < 2)         return(c(stub, list(status = "invariant")))
+    if (length(idx) < 10)                               return(modifyList(stub, list(status ="too_few_train")))
+    if (length(unique(df_train[[b]][idx])) < 2)         return(modifyList(stub, list(status ="invariant")))
 
     b_pos    <- match(b, biotic_cols_cont_local)
     b_before <- if (!is.na(b_pos) && b_pos > 1L)
@@ -179,15 +179,17 @@ test_one_pair <- function(pair,
     df_tb <- df_tb[, colnames(df_bb), drop = FALSE]
 
     y <- as.numeric(df_train[[b]][idx])
-    if (length(unique(log1p(y))) <= 2) return(c(stub, list(status = "degenerate_logy")))
+    if (length(unique(log1p(y))) <= 2) return(modifyList(stub, list(status ="degenerate_logy")))
 
     # 90/10 holdout split (mirrors 08B_deploy_gbart.R) ------------------------
-    set.seed(abs(as.integer(sprintf("%d%03d", sub_idx, which(biotic_cols == b)))))
+    b_pos_in_biotic <- which(biotic_cols == b)
+    if (length(b_pos_in_biotic) == 0) return(modifyList(stub, list(status = "not_in_biotic_cols")))
+    set.seed(abs(as.integer(sprintf("%d%03d", sub_idx, b_pos_in_biotic))))
     ho    <- sample(seq_along(y), size = round(0.10 * length(y)))
     df_tb <- df_tb[-ho, , drop = FALSE]
     y_tr  <- y[-ho]
 
-    if (length(unique(log1p(y_tr))) <= 2) return(c(stub, list(status = "degenerate_after_split")))
+    if (length(unique(log1p(y_tr))) <= 2) return(modifyList(stub, list(status ="degenerate_after_split")))
 
     # fit gbart — identical arguments to 08B_deploy_gbart.R ------------------
     fit <- BART::gbart(
@@ -259,7 +261,7 @@ test_one_pair <- function(pair,
       da_err_q975_sd   = da_err_q975_sd
     )
 
-  }, error = function(e) c(stub, list(status = paste0("error: ", conditionMessage(e)))))
+  }, error = function(e) modifyList(stub, list(status = paste0("error: ", conditionMessage(e)))))
 }
 
 # ---- dispatch ----------------------------------------------------------------
