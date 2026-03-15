@@ -279,7 +279,43 @@ results_raw <- parallel::mclapply(
   mc.preschedule        = FALSE   # dynamic scheduling; faster workers pick up the next task
 )
 
+# ---- inspect mclapply worker failures ----------------------------------------
+# try-error objects indicate OS-level kills (fork crash, OOM, terra/GDAL signal)
+# that tryCatch inside test_one_pair() cannot catch. Identify and report them
+# before bind_rows silently drops them.
+
+worker_status <- vapply(results_raw, function(x) {
+  if (inherits(x, "try-error")) "try-error"
+  else if (is.null(x))          "null"
+  else if (is.list(x) && !is.data.frame(x) && is.null(x$status)) "unknown"
+  else                           "ok"
+}, character(1))
+
+failed_idx <- which(worker_status != "ok")
+if (length(failed_idx) > 0) {
+  message(sprintf("[%s] %d workers did not return a result:", Sys.time(), length(failed_idx)))
+  for (i in failed_idx) {
+    p   <- pairs[i, ]
+    msg <- if (worker_status[i] == "try-error")
+             as.character(results_raw[[i]])
+           else
+             worker_status[i]
+    message(sprintf("  sample_id=%d  subbasin=%d  covariate=%s  reason=%s",
+                    p$sample_id, p$subbasin, p$covariate, msg))
+  }
+} else {
+  message(sprintf("[%s] all %d workers returned a result", Sys.time(), n_samples))
+}
+
 results <- dplyr::bind_rows(lapply(results_raw, as.data.frame))
+
+# report any sample_ids missing from results (should match failed_idx above)
+missing_ids <- setdiff(seq_len(n_samples), results$sample_id)
+if (length(missing_ids) > 0) {
+  message(sprintf("[%s] %d sample_ids absent from results table: %s",
+                  Sys.time(), length(missing_ids),
+                  paste(missing_ids, collapse = ", ")))
+}
 
 # ---- save --------------------------------------------------------------------
 
