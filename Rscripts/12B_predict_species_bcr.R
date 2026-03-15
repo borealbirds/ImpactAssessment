@@ -119,8 +119,7 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, sector_name
                                     biotic_continuous_vars)
 
     missing_bf <- biotic_cont_shared[
-      !(paste0(biotic_cont_shared, "_mean")    %in% names(stack_bf) &
-        paste0(biotic_cont_shared, "_draw_001") %in% names(stack_bf))]
+      !paste0(biotic_cont_shared, "_draw_001") %in% names(stack_bf)]
     if (length(missing_bf) > 0) {
       message(Sys.time(), " | ", species, " ", bcr_code,
               " | missing backfilled cont vars: ", paste(missing_bf, collapse = ", "))

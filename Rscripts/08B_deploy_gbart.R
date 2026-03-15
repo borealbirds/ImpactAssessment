@@ -37,7 +37,6 @@ deploy_gbart <- function(
     
     b_mean_deg <- mean(y[-holdout_idx])
     df_backfill[[b]] <- b_mean_deg
-    out_layers[[paste0(b, "_mean")]] <- rep(b_mean_deg, nrow(df_backfill))
     draw_val <- log1p(b_mean_deg)
     for (d in seq_len(100L)) {
       out_layers[[paste0(b, "_draw_", sprintf("%03d", d))]] <- rep(draw_val, nrow(df_backfill))
@@ -60,7 +59,6 @@ deploy_gbart <- function(
     b_logmean <- mean(log1p(y_tr))
 
     df_backfill[[b]] <- b_mean
-    out_layers[[paste0(b, "_mean")]] <- b_mean
     for (d in seq_len(100L)) {
       out_layers[[paste0(b, "_draw_", sprintf("%03d", d))]] <- b_logmean
     }
@@ -93,15 +91,14 @@ deploy_gbart <- function(
   # yhat.test: posterior draws [ndpost x n_px]; rows = draws, columns = pixels (log1p scale).
   # Sample 100 random draws and store them as {cov}_draw_001…100 layers.
   # 12B resamples from these draws directly, avoiding the Gaussian normality assumption.
-  # Original-scale mean is kept as {cov}_mean for the biotic hierarchy cascade (08A).
+  # b_mean is used in-memory for the biotic hierarchy cascade (08A) but not written to disk.
   b_mean   <- colMeans(expm1(fit$yhat.test))  # original scale; used by cascade
   n_draws  <- 100L
   draw_idx <- sample(nrow(fit$yhat.test), n_draws)
   draw_mat <- fit$yhat.test[draw_idx, , drop = FALSE]  # [100 x n_px] in log1p space
 
-  # replace backfilled b in backfilling dataset for using in next iteration (following `neworder`), and for outputs
+  # replace backfilled b in backfilling dataset for use in next iteration (following `neworder`)
   df_backfill[[b]] <- b_mean
-  out_layers[[paste0(b, "_mean")]] <- b_mean
   for (d in seq_len(n_draws)) {
     out_layers[[paste0(b, "_draw_", sprintf("%03d", d))]] <- draw_mat[d, ]
   }
