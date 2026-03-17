@@ -54,6 +54,11 @@ canHF_path  <- file.path(hirsh_dir, "CanHF_1km_morethan1.tif")
 sector_files <- list.files(hirsh_dir, pattern = "\\.tif$", full.names = FALSE)
 sector_files <- sector_files[!grepl("^CanHF", sector_files)]
 sector_names <- tools::file_path_sans_ext(sector_files)
+
+# exclude sectors not in goodsectors (not meaningfully backfilled; see 12B sector_mask logic)
+not_goodsectors <- c("forestry_harvest", "night_lights", "population_density", "nav_water")
+sector_names <- sector_names[!sector_names %in% not_goodsectors]
+
 message("Sectors (", length(sector_names), "): ", paste(sector_names, collapse = ", "))
 
 # ---- Load hydrobasins --------------------------------------------------------
