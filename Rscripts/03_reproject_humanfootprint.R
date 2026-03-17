@@ -78,3 +78,34 @@ terra::writeRaster(goodsectors_mask,
                    file.path(ia_dir, "hirshpearson", "CanHF_1km_morethan1_goodsectors.tif"),
                    overwrite = TRUE)
 
+
+
+# ----------------------------------------------
+# per-sector connected-component (queen's case) patch summary
+# mirrors the sector_mask logic in 15B / 12B
+
+patch_summary <- do.call(rbind, lapply(good_sectors, function(sec) {
+
+  sector_r  <- terra::project(
+                 terra::rast(file.path(ia_dir, "hirshpearson", paste0(sec, ".tif"))),
+                 CanHF_1km, method = "near")
+  sector_mask <- terra::ifel((sector_r > 0) & (CanHF_1km >= 1), 1, NA)
+
+  patches_r <- terra::patches(sector_mask, directions = 8, zeroAsNA = TRUE)
+
+  area_r    <- terra::cellSize(sector_mask, unit = "km")
+  patch_areas <- terra::zonal(area_r, patches_r, fun = "sum", na.rm = TRUE)
+
+  data.frame(
+    sector        = sec,
+    n_patches     = nrow(patch_areas),
+    total_area_km2 = sum(patch_areas[, 2]),
+    mean_area_km2  = mean(patch_areas[, 2]),
+    median_area_km2 = median(patch_areas[, 2]),
+    min_area_km2   = min(patch_areas[, 2]),
+    max_area_km2   = max(patch_areas[, 2])
+  )
+}))
+
+print(patch_summary)
+
