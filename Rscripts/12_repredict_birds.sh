@@ -3,10 +3,10 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=24G
-#SBATCH --time=12:00:00
+#SBATCH --mem=128G
+#SBATCH --time=80:00:00
 #SBATCH --job-name=cawa_repredict_mar3
-#SBATCH --array=1-1
+#SBATCH --array=1-2
 #SBATCH --mail-user=mannfred@ualberta.ca
 
 module load StdEnv/2023
