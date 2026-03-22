@@ -142,6 +142,20 @@ data/
 
 Large spatial files (`.tif`, `.gpkg`, `.shp`) and most `.rds` files are gitignored. Versioned outputs are the CSV accuracy/confusion matrices in `data/derived_data/rds_files/`.
 
+## Open Limitations (logged 2026-03-17)
+
+### Conceptual
+
+1. **Abiotic overlap / extrapolation risk**: Industry placement is non-random — mines, forestry, and roads target specific abiotic conditions. High-HF pixels may be systematically out-of-distribution relative to the low-HF training pixels within the same subbasin. Diagnostic: compare abiotic covariate distributions of low-HF vs. high-HF pixels within subbasins; flag subbasins with large distributional gaps.
+
+2. **Sector impacts are not additive**: Removing one sector at a time is a one-at-a-time sensitivity analysis, not a proper decomposition. Sectors share ecological effects and their combined impact ≠ sum of individual impacts. Shapley values (cooperative game theory) would give a principled additive decomposition, at the cost of 2^n sector model runs.
+
+3. **No spatial spillover**: The formula `cf = obs_on_non_sector + backfilled_on_sector` assumes removing a sector's footprint only affects birds on that sector's pixels. Edge effects, area sensitivity, and functional connectivity mean impacts extend beyond the footprint boundary (especially important for linear features like roads and seismic lines).
+
+### Computational
+
+4. **Uncertainty combination is ad hoc**: BRT bootstrap uncertainty and BART posterior uncertainty are summed as independent variances post-hoc. They are not truly independent (backfilled covariates feed the BRT), and ideally would be combined within a single sampling loop.
+
 ## Instructions from Masa
 1.Always ignore the directory /Rscripts/misc when thinking. It's not immediately relevant to the project.
 2.Note that population estimates made by boosted regression trees via `gbm` predict bird density at the hectare scale.
