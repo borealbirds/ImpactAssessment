@@ -6,7 +6,26 @@
       "Bash(ls:*)",
       "Bash(mkdir:*)",
       "Bash(python3 -c \" import sys, json lines = sys.stdin.read\\(\\).strip\\(\\).split\\(''\\\\n''\\) for line in lines[-20:]: try: obj = json.loads\\(line\\) role = obj.get\\(''role'', obj.get\\(''type'',''''\\)\\) if role == ''user'': content = obj.get\\(''content'',''''\\) if isinstance\\(content, list\\): for c in content: if isinstance\\(c, dict\\) and c.get\\(''type''\\) == ''text'': print\\(''USER:'', c[''text''][:500]\\) elif isinstance\\(content, str\\): print\\(''USER:'', content[:500]\\) elif role == ''assistant'': content = obj.get\\(''content'',''''\\) if isinstance\\(content, list\\): for c in content: if isinstance\\(c, dict\\) and c.get\\(''type''\\) == ''text'': print\\(''ASST:'', c[''text''][:500]\\) elif isinstance\\(content, str\\): print\\(''ASST:'', content[:500]\\) except: pass \")",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(Rscript -e \":*)",
+      "Bash(py --version)",
+      "Bash(py -m pip --version)",
+      "Bash(pip --version)",
+      "Bash(py:*)",
+      "Bash(/c/Users/mannf/AppData/Local/Python/pythoncore-3.14-64/Scripts/globus.exe --version 2>&1)",
+      "Bash(/c/Users/mannf/AppData/Local/Python/pythoncore-3.14-64/Scripts/globus.exe version:*)",
+      "Bash(/c/Users/mannf/AppData/Local/Python/pythoncore-3.14-64/Scripts/globus.exe login:*)",
+      "Bash(/c/Users/mannf/AppData/Local/Python/pythoncore-3.14-64/Scripts/globus.exe whoami:*)",
+      "Bash(/c/Users/mannf/AppData/Local/Python/pythoncore-3.14-64/Scripts/globus.exe endpoint:*)",
+      "Bash(/c/Users/mannf/AppData/Local/Python/pythoncore-3.14-64/Scripts/globus.exe ls:*)",
+      "Bash(/c/Users/mannf/AppData/Local/Python/pythoncore-3.14-64/Scripts/globus.exe session:*)",
+      "Bash(/c/Users/mannf/AppData/Local/Python/pythoncore-3.14-64/Scripts/globus.exe transfer:*)",
+      "Bash(/c/Users/mannf/AppData/Local/Python/pythoncore-3.14-64/Scripts/globus.exe task:*)",
+      "Bash(GLOBUS=\"/c/Users/mannf/AppData/Local/Python/pythoncore-3.14-64/Scripts/globus.exe\")",
+      "Bash(LOCAL=\"a7878ccc-747b-11ef-b4b8-8fef73a45f39\")",
+      "Bash(CLUSTER=\"8dec4129-9ab4-451d-a45f-5b4b8471f7a3\")",
+      "Bash(SRC=\"/C/Users/mannf/Drive/boreal_avian_modelling_project/ImpactAssessment/Rscripts\")",
+      "Bash(DST=\"/home/mannfred/scratch/impact_assessment/Rscripts\")"
     ]
   }
 }
