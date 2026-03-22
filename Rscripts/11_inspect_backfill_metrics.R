@@ -44,7 +44,7 @@ continuous_holdout_metrics |>
   geom_jitter(width = 0.2, alpha = 0.2, size = 1, shape = 16) +
   scale_fill_manual(values = rep_len(c("#999999", "#E69F00", "#56B4E9"), length(unique(continuous_holdout_metrics$covariate)))) +
   scale_colour_manual(values = rep_len(c("#999999", "#E69F00", "#56B4E9"), length(unique(continuous_holdout_metrics$covariate)))) +
-  coord_cartesian(ylim = c(-3, 1)) + 
+  coord_cartesian(ylim = c(0, 1)) +
   theme_classic() +
   labs(
     x = "landscape feature",

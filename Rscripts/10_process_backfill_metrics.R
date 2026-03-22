@@ -52,19 +52,52 @@ names(confusion_matrices) <- categorical_responses
 #saveRDS(confusion_matrices, file.path(getwd(), "data/derived_data/rds_files/confusion_matrices.rds"))
 #confusion_matrices <- readRDS(file.path(getwd(), "data/derived_data/rds_files/confusion_matrices.rds"))
 
-# write each confusion matrix as a CSV
-for (nm in names(confusion_matrices)) {
-  write.csv(confusion_matrices[[nm]], file.path(getwd(), "data/derived_data/rds_files/", paste0(nm, ".csv")), row.names = TRUE)
-}
-
 # create companion matrices that give row-normalized prediction accuracy
 accuracy_matrices <- lapply(confusion_matrices, function(cm) {
-  sweep(cm, 1, rowSums(cm), "/") *100
+  sweep(cm, 1, rowSums(cm), "/") * 100
 })
 
-# write each accuracy matrix as a CSV
-for (nm in names(accuracy_matrices)) {
-  write.csv(accuracy_matrices[[nm]], file.path(getwd(), "data/derived_data/rds_files/", paste0(nm, ".csv")), row.names = TRUE)
+# write one xlsx per categorical covariate:
+# cells show "n (x.x%)", header row + header column + diagonal in bold
+library(openxlsx)
+
+for (nm in names(confusion_matrices)) {
+  cm  <- confusion_matrices[[nm]]
+  acc <- accuracy_matrices[[nm]]
+
+  lvls <- rownames(cm)
+  n_lvl <- length(lvls)
+
+  # build combined data frame: row names as first column, then combined cells
+  combined <- as.data.frame(matrix(NA_character_, nrow = n_lvl, ncol = n_lvl + 1))
+  colnames(combined) <- c("actual \\ predicted", lvls)
+  combined[, 1] <- lvls
+  for (r in seq_len(n_lvl)) {
+    for (c in seq_len(n_lvl)) {
+      combined[r, c + 1] <- if (cm[r, c] == 0) "0" else sprintf("%d (%.1f%%)", cm[r, c], acc[r, c])
+    }
+  }
+
+  wb <- createWorkbook()
+  addWorksheet(wb, nm)
+  writeData(wb, nm, combined, rowNames = FALSE)
+
+  # styles
+  bold_style      <- createStyle(textDecoration = "bold")
+  bold_style_diag <- createStyle(textDecoration = "bold")
+
+  # bold header row (row 1)
+  addStyle(wb, nm, bold_style, rows = 1, cols = seq_len(n_lvl + 1), gridExpand = TRUE)
+
+  # bold header column (col 1, data rows)
+  addStyle(wb, nm, bold_style, rows = seq(2, n_lvl + 1), cols = 1, gridExpand = TRUE)
+
+  # bold diagonal cells (offset by 1 for header col and 1 for header row)
+  for (d in seq_len(n_lvl)) {
+    addStyle(wb, nm, bold_style_diag, rows = d + 1, cols = d + 1)
+  }
+
+  saveWorkbook(wb, file.path(getwd(), "output_tables", paste0(nm, "_confusion.xlsx")), overwrite = TRUE)
 }
 
 # -------------------------------------------------------
@@ -135,9 +168,11 @@ test <-
   filter(continuous_holdout_metrics) |> 
   mutate(ratio = rmse/mae)
 
-ggplot(test, aes(x = ratio)) + 
+ggplot(test, aes(x = ratio)) +
   geom_histogram(binwidth = 0.05, fill="#69b3a2", color="#69b3a2", alpha=1) +
   geom_vline(aes(xintercept = mean(ratio, na.rm = TRUE))) +
+  geom_vline(aes(xintercept = mean(ratio, na.rm = TRUE) - sd(ratio, na.rm = TRUE)), linetype = "dotted") +
+  geom_vline(aes(xintercept = mean(ratio, na.rm = TRUE) + sd(ratio, na.rm = TRUE)), linetype = "dotted") +
   scale_y_continuous(expand = c(0, 0)) +
   scale_x_continuous(expand = c(0, 0)) +
   xlim(c(0.7,11)) +
