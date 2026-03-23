@@ -1,0 +1,194 @@
+# ---
+# title: Impact Assessment: process and synthesize model metrics for "inspect_backfill_metrics.R"
+# author: Mannfred Boehm
+# created: December 15, 2025
+# ---
+
+library(terra)
+library(tidyverse)
+
+cc    <- FALSE   # TRUE = Compute Canada cluster
+local <- TRUE    # TRUE = local RProject machine
+
+if (cc)            { ia_dir <- "/home/mannfred/scratch/impact_assessment" }
+if (!cc && local)  { ia_dir <- getwd() }
+if (!cc && !local) { ia_dir <- file.path("G:/Shared drives/BAM_NationalModels5", "data", "Extras", "sandbox_data", "impactassessment_sandbox") }
+
+# -------------------------------------------------------
+# inspect and synthesize confusion matrices
+
+import_matrix <- function(i, year){
+  readRDS(file.path(ia_dir, "data", "derived_data", "bart_models", year, sprintf("subbasin_%d/subbasin_%d_confusion.rds", i, i)))
+}
+
+# merge confusion tables across subbasins
+subbasin_indices <- c(1:674)
+confusion_tables <- lapply(X = subbasin_indices, FUN = import_matrix, year = 2020)
+names(confusion_tables) <- paste("subbasin_", subbasin_indices)
+confusion_tables_merged <- do.call(rbind, unlist(confusion_tables, recursive = FALSE))
+
+# for every categorical covariate: 
+# pool results and create a confusion matrix
+categorical_responses = c("ABoVE_1km", "NLCD_1km","MODISLCC_1km", "MODISLCC_5x5","SCANFI_1km","VLCE_1km")
+
+confusion_matrices <- list()
+
+create_cm <- function(cat){
+  
+  merged_tables <- 
+    confusion_tables_merged |> 
+    dplyr::filter(covariate == cat)
+  
+  all_levels <- sort(unique(c(merged_tables$actual, merged_tables$predicted)))
+  
+  confusion_matrices[[cat]] <- 
+    table(factor(merged_tables$actual, levels = all_levels),
+          factor(merged_tables$predicted, levels = all_levels))
+}
+
+confusion_matrices <- lapply(X = categorical_responses, FUN = create_cm)
+names(confusion_matrices) <- categorical_responses
+
+#saveRDS(confusion_matrices, file.path(getwd(), "data/derived_data/rds_files/confusion_matrices.rds"))
+#confusion_matrices <- readRDS(file.path(getwd(), "data/derived_data/rds_files/confusion_matrices.rds"))
+
+# create companion matrices that give row-normalized prediction accuracy
+accuracy_matrices <- lapply(confusion_matrices, function(cm) {
+  sweep(cm, 1, rowSums(cm), "/") * 100
+})
+
+# write one xlsx per categorical covariate:
+# cells show "n (x.x%)", header row + header column + diagonal in bold
+library(openxlsx)
+
+for (nm in names(confusion_matrices)) {
+  cm  <- confusion_matrices[[nm]]
+  acc <- accuracy_matrices[[nm]]
+
+  lvls <- rownames(cm)
+  n_lvl <- length(lvls)
+
+  # build combined data frame: row names as first column, then combined cells
+  combined <- as.data.frame(matrix(NA_character_, nrow = n_lvl, ncol = n_lvl + 1))
+  colnames(combined) <- c("actual \\ predicted", lvls)
+  combined[, 1] <- lvls
+  for (r in seq_len(n_lvl)) {
+    for (c in seq_len(n_lvl)) {
+      combined[r, c + 1] <- if (cm[r, c] == 0) "0" else sprintf("%d (%.1f%%)", cm[r, c], acc[r, c])
+    }
+  }
+
+  wb <- createWorkbook()
+  addWorksheet(wb, nm)
+  writeData(wb, nm, combined, rowNames = FALSE)
+
+  # styles
+  bold_style      <- createStyle(textDecoration = "bold")
+  bold_style_diag <- createStyle(textDecoration = "bold")
+
+  # bold header row (row 1)
+  addStyle(wb, nm, bold_style, rows = 1, cols = seq_len(n_lvl + 1), gridExpand = TRUE)
+
+  # bold header column (col 1, data rows)
+  addStyle(wb, nm, bold_style, rows = seq(2, n_lvl + 1), cols = 1, gridExpand = TRUE)
+
+  # bold diagonal cells (offset by 1 for header col and 1 for header row)
+  for (d in seq_len(n_lvl)) {
+    addStyle(wb, nm, bold_style_diag, rows = d + 1, cols = d + 1)
+  }
+
+  saveWorkbook(wb, file.path(getwd(), "output_tables", paste0(nm, "_confusion.xlsx")), overwrite = TRUE)
+}
+
+# -------------------------------------------------------
+# inspect and synthesize holdout metrics 
+
+categorical_responses = c("ABoVE_1km", "NLCD_1km","MODISLCC_1km", "MODISLCC_5x5","SCANFI_1km","VLCE_1km")
+
+import_metrics <- function(i, year){
+  readRDS(file.path(ia_dir, "data", "derived_data", "bart_models", year, sprintf("subbasin_%d/subbasin_%d_metrics.rds", i, i)))
+}
+
+# every RDS file is a list of dataframes containing subbasin metrics
+subbasin_indices <- c(1:674)
+metrics <- lapply(X = subbasin_indices, FUN = import_metrics, year = 2020)
+names(metrics) <- paste("subbasin_", subbasin_indices)
+
+metrics_merged <- tibble(dplyr::bind_rows(metrics))
+
+continuous_train_metrics <- 
+  metrics_merged |> 
+  dplyr::filter(!(covariate %in% categorical_responses) & split == "train") |> 
+  dplyr::select(1:14)
+saveRDS(continuous_train_metrics, file.path(getwd(), "data/derived_data/rds_files/model_metrics/continuous_train_metrics.rds"))
+
+continuous_holdout_metrics <-
+  metrics_merged |> 
+  dplyr::filter(!(covariate %in% categorical_responses) & split == "holdout") |> 
+  dplyr::select(1:3,5:6,13:16)
+saveRDS(continuous_holdout_metrics, file.path(getwd(), "data/derived_data/rds_files/model_metrics/continuous_holdout_metrics.rds"))
+
+categorical_train_metrics <-
+  metrics_merged |> 
+  dplyr::filter((covariate %in% categorical_responses) & split == "train") |> 
+  dplyr::select(1:3,13:15,17:18)
+saveRDS(categorical_train_metrics, file.path(getwd(), "data/derived_data/rds_files/model_metrics/categorical_train_metrics.rds"))
+
+categorical_holdout_metrics <-
+  metrics_merged |> 
+  dplyr::filter((covariate %in% categorical_responses) & split == "holdout") |> 
+  dplyr::select(1:3,13:15,17:18)
+saveRDS(categorical_holdout_metrics, file.path(getwd(), "data/derived_data/rds_files/model_metrics/categorical_holdout_metrics.rds"))
+
+
+
+
+# -------------------------------------------------------
+# inspect continuous holdout metrics
+
+# how many models have R^2 above some threshold?
+continuous_holdout_metrics |> 
+  summarise(
+    n_total = n(),
+    n_above = sum(r2 >= 0.7),
+    prop_above = mean(r2 >= 0.7)
+  )
+
+# how many models have a rmse/mae <= 1.5?
+continuous_holdout_metrics |> 
+  filter(r2 >= 0.7) |> 
+  summarise(
+    n_total = n(),
+    mean_ratio = mean(rmse/mae),
+    sd_ratio = sd(rmse/mae)
+    )
+
+# visualize distribution of rmse/mae
+test <- 
+  filter(continuous_holdout_metrics) |> 
+  mutate(ratio = rmse/mae)
+
+p_rmse_mae <-
+  ggplot(test, aes(x = ratio)) +
+  geom_histogram(binwidth = 0.05, fill="#69b3a2", color="#69b3a2", alpha=1) +
+  geom_vline(aes(xintercept = mean(ratio, na.rm = TRUE))) +
+  geom_vline(aes(xintercept = mean(ratio, na.rm = TRUE) - sd(ratio, na.rm = TRUE)), linetype = "dotted") +
+  geom_vline(aes(xintercept = mean(ratio, na.rm = TRUE) + sd(ratio, na.rm = TRUE)), linetype = "dotted") +
+  scale_y_continuous(expand = c(0, 0)) +
+  scale_x_continuous(expand = c(0, 0), breaks = 0:11, limits = c(0.7, 11)) +
+  labs(x = "RMSE/MAE") +
+  theme_classic()
+
+ggsave(file.path(ia_dir, "output_figures", "rmse_mae_ratio.png"), p_rmse_mae, width = 8, height = 5)
+
+
+# -------------------------------------------------------
+# inspect categorical holdout metrics
+
+
+categorical_holdout_metrics |> 
+  group_by(covariate) |> 
+  summarise(
+    mean_accuracy = mean(accuracy),
+    sd_accuracy = sd(accuracy)
+  )
