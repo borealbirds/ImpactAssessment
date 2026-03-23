@@ -168,16 +168,18 @@ test <-
   filter(continuous_holdout_metrics) |> 
   mutate(ratio = rmse/mae)
 
-ggplot(test, aes(x = ratio)) +
+p_rmse_mae <-
+  ggplot(test, aes(x = ratio)) +
   geom_histogram(binwidth = 0.05, fill="#69b3a2", color="#69b3a2", alpha=1) +
   geom_vline(aes(xintercept = mean(ratio, na.rm = TRUE))) +
   geom_vline(aes(xintercept = mean(ratio, na.rm = TRUE) - sd(ratio, na.rm = TRUE)), linetype = "dotted") +
   geom_vline(aes(xintercept = mean(ratio, na.rm = TRUE) + sd(ratio, na.rm = TRUE)), linetype = "dotted") +
   scale_y_continuous(expand = c(0, 0)) +
-  scale_x_continuous(expand = c(0, 0)) +
-  xlim(c(0.7,11)) +
-  labs(x = "RMSE/MAE") + 
+  scale_x_continuous(expand = c(0, 0), breaks = 0:11, limits = c(0.7, 11)) +
+  labs(x = "RMSE/MAE") +
   theme_classic()
+
+ggsave(file.path(ia_dir, "output_figures", "rmse_mae_ratio.png"), p_rmse_mae, width = 8, height = 5)
 
 
 # -------------------------------------------------------
