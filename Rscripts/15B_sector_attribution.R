@@ -1,31 +1,28 @@
 # ---
-# title: Isolated sector attribution of bird population impacts
+# title: Shapley value sector attribution of bird population impacts
 # author: Mannfred Boehm
 # ---
-# For each sector, 12A/12B was re-run with biotic covariates backfilled only at
-# that sector's pixels (sector > 0 AND CanHF >= 1). The resulting backfilled
-# raster differs from the observed raster ONLY at those pixels, giving an
-# isolated sector counterfactual.
+# Computes exact Shapley values for each sector's contribution to the total
+# industrial footprint impact on bird populations.  Shapley values sum exactly
+# to the total HF impact v(N) = cf(all sectors) - observed.
 #
-# This script reads the per-sector prediction rasters and computes % impact at
-# four spatial scales:
+# Architecture:
+#   - Reads coalition density tables (one per coalition x species x year)
+#     produced by 12A/12B.
+#   - For each coalition, computes v(S) = cf(S) - obs at subbasin level.
+#   - Applies the Shapley formula per sector per subbasin.
+#   - Aggregates bottom-up: subbasin -> BCR -> national.
+#   - Optionally filters by abiotic extrapolation flags.
 #
-#   BCR      - (sum(bf - obs) * area) / (sum(obs) * area) * 100  over BCR
-#   national - same numerator summed across BCRs / national obs total
-#   subbasin - per-subbasin version of BCR formula
-#   footprint- per-connected-component (8-connectivity) of sector pixels
-#              denominator = observed population within that footprint
-#
-# Uncertainty (SD) is propagated via standard error propagation.
-# Only the "mean" backfill scenario is used (backfilled_mean_mean.tif).
-#
-# Outputs (data/derived_data/rds_files/):
-#   sector_bcr.csv, sector_national.csv, sector_subbasin.csv, sector_footprint.csv
+# Outputs (data/derived_data/sector_effects/):
+#   shapley_subbasin.csv  — per-sector Shapley values at each subbasin
+#   shapley_bcr.csv       — aggregated to BCR
+#   shapley_national.csv  — aggregated to national
 # ---
 
 suppressPackageStartupMessages({
-  library(terra)
   library(dplyr)
+  library(tidyr)
 })
 
 # ---- Execution context -------------------------------------------------------
@@ -38,307 +35,273 @@ if (!cc && local)  { ia_dir <- getwd() }
 if (!cc && !local) { ia_dir <- file.path("G:/Shared drives/BAM_NationalModels5", "data", "Extras",
                                           "sandbox_data", "impactassessment_sandbox") }
 
-# ---- Paths ------------------------------------------------------------------
+# ---- Source utilities --------------------------------------------------------
 
-hirsh_dir   <- file.path(ia_dir, "data/raw_data/hirshpearson")
-obs_root    <- file.path(ia_dir, "data/derived_data/predictions")
-bf_root     <- file.path(ia_dir, "data/derived_data/predictions_sectors")
-basin_path  <- file.path(ia_dir, "data/raw_data/hydrobasins_masked_merged_subset.gpkg")
-out_dir     <- file.path(ia_dir, "data/derived_data/sector_effects")
+source(file.path(ia_dir, "Rscripts", "shapley_utils.R"))
+
+# ---- Paths -------------------------------------------------------------------
+
+dt_dir     <- file.path(ia_dir, "data/derived_data/density_tables")
+basin_path <- file.path(ia_dir, "data/raw_data/hydrobasins_masked_merged_subset.gpkg")
+flag_path  <- file.path(ia_dir, "data/derived_data/rds_files/extrapolation_flags.csv")
+out_dir    <- file.path(ia_dir, "data/derived_data/sector_effects")
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
-
-canHF_path  <- file.path(hirsh_dir, "CanHF_1km_morethan1.tif")
-
-# ---- Load sector names -------------------------------------------------------
-
-sector_files <- list.files(hirsh_dir, pattern = "\\.tif$", full.names = FALSE)
-sector_files <- sector_files[!grepl("^CanHF", sector_files)]
-sector_names <- tools::file_path_sans_ext(sector_files)
-
-# exclude sectors not in goodsectors (not meaningfully backfilled; see 12B sector_mask logic)
-not_goodsectors <- c("forestry_harvest", "night_lights", "population_density", "nav_water")
-sector_names <- sector_names[!sector_names %in% not_goodsectors]
-
-message("Sectors (", length(sector_names), "): ", paste(sector_names, collapse = ", "))
 
 # ---- Load hydrobasins --------------------------------------------------------
 
-hydrobasins <- vect(basin_path)
+hydrobasins <- terra::vect(basin_path)
 
-# discover valid sector x species x BCR x year combinations --------------
-# A combination is valid if backfilled_mean_mean.tif exists and the matching
-# observed_mean.tif exists in the shared predictions/ directory.
-# `combos` is a dataframe where rows are unique sector x species x BCR x year tuples
+# ---- Load extrapolation flags (optional) -------------------------------------
 
-combos <- do.call(rbind, Filter(Negate(is.null), lapply(sector_names, function(sec) {
-  sec_dir <- file.path(bf_root, sec)
-  if (!dir.exists(sec_dir)) return(NULL)
-  do.call(rbind, Filter(Negate(is.null), lapply(
-    list.dirs(sec_dir, full.names = FALSE, recursive = FALSE), function(sp) {
-      do.call(rbind, Filter(Negate(is.null), lapply(
-        list.dirs(file.path(sec_dir, sp), full.names = FALSE, recursive = FALSE), function(bcr) {
-          do.call(rbind, Filter(Negate(is.null), lapply(
-            list.dirs(file.path(sec_dir, sp, bcr), full.names = FALSE, recursive = FALSE), function(yr) {
-              bf_f  <- file.path(bf_root,  sec, sp, bcr, yr, "backfilled_mean_mean.tif")
-              obs_f <- file.path(obs_root, sp,  bcr, yr,     "observed_mean.tif")
-              if (file.exists(bf_f) && file.exists(obs_f)) {
-                data.frame(sector = sec, species = sp, bcr = bcr, year = yr,
-                           stringsAsFactors = FALSE)
-              }
-            })))
-        })))
-    })))
-})))
+extrap_flags <- NULL
+if (file.exists(flag_path)) {
+  extrap_flags <- read.csv(flag_path, stringsAsFactors = FALSE)
+  message("Loaded extrapolation flags for ", nrow(extrap_flags), " subbasins (",
+          sum(extrap_flags$flag, na.rm = TRUE), " flagged)")
+}
 
-if (is.null(combos) || nrow(combos) == 0) stop("No valid sector x species x BCR x year combinations found.")
-message("found ", nrow(combos), "unique sector x species x BCR x year tuples")
+# ---- Discover available species x year combinations --------------------------
 
-# main processing loop ---------------------------------------------------
-# outer loop: sector x BCR x year  (project sector mask once per BCR grid)
-# inner loop: species
+dt_files <- list.files(dt_dir, pattern = "^.*_coalition_[0-9]+\\.rds$", full.names = TRUE)
+if (length(dt_files) == 0) stop("No coalition density tables found in ", dt_dir)
 
-bcr_year_sector_combos <- unique(combos[, c("sector", "bcr", "year")])
+# parse filenames: {species}_{year}_coalition_{id}.rds
+parsed <- regmatches(basename(dt_files),
+  regexec("^(.+)_([0-9]{4})_coalition_([0-9]+)\\.rds$", basename(dt_files)))
+parsed <- do.call(rbind, lapply(parsed, function(x) x[2:4]))
+dt_index <- data.frame(
+  path         = dt_files,
+  species      = parsed[, 1],
+  year         = parsed[, 2],
+  coalition_id = as.integer(parsed[, 3]),
+  stringsAsFactors = FALSE
+)
 
-bcr_rows      <- vector("list", nrow(combos))
-subbasin_rows <- vector("list", nrow(combos))
-footprint_rows <- vector("list", nrow(combos))
-result_idx    <- 1
+species_years <- unique(dt_index[, c("species", "year")])
+message("Found ", nrow(species_years), " species x year combinations, ",
+        nrow(dt_index), " coalition files total")
 
-for (i in seq_len(nrow(bcr_year_sector_combos))) {
+sectors <- canonical_sectors()
+n_sectors <- length(sectors)
+n_coal    <- n_coalitions(sectors)
 
-  cur_sector <- bcr_year_sector_combos$sector[i]
-  cur_bcr    <- bcr_year_sector_combos$bcr[i]
-  cur_year   <- bcr_year_sector_combos$year[i]
-  sp_list    <- combos$species[combos$sector == cur_sector &
-                               combos$bcr    == cur_bcr    &
-                               combos$year   == cur_year]
+# ---- Main processing: one species x year at a time ---------------------------
 
-  message("sector=", cur_sector, " BCR=", cur_bcr, " year=", cur_year,
-          " (", length(sp_list), " species)")
+shapley_sub_rows <- vector("list", nrow(species_years))
+shapley_bcr_rows <- vector("list", nrow(species_years))
 
-  # use first species as spatial template (observed grid is identical across species)
-  template_r <- rast(file.path(obs_root, sp_list[1], cur_bcr, cur_year, "observed_mean.tif"))
-  area_r     <- cellSize(template_r, unit = "ha")
+for (sy in seq_len(nrow(species_years))) {
 
-  # sector mask on BCR grid
-  sector_r  <- project(rast(file.path(hirsh_dir, paste0(cur_sector, ".tif"))),
-                       template_r, method = "near")
-  canHF_r   <- project(rast(canHF_path), template_r, method = "near")
-  sector_mask <- ifel((sector_r > 0) & (canHF_r >= 1), 1, NA)
+  sp  <- species_years$species[sy]
+  yr  <- species_years$year[sy]
 
-  # connected-component patches for footprint scale
-  patches_r <- patches(sector_mask, directions = 8, zeroAsNA = TRUE)
+  message("\n=== ", sp, " ", yr, " ===")
 
-  for (sp in sp_list) {
+  # find all coalition files for this species x year
+  idx <- dt_index$species == sp & dt_index$year == yr
+  avail_ids <- dt_index$coalition_id[idx]
+  avail_paths <- dt_index$path[idx]
 
-    message("  ", sp)
+  # check completeness (need all 2^N - 1 non-empty coalitions; ID 1 = empty, v=0)
+  expected_ids <- 2:n_coal
+  missing_ids  <- setdiff(expected_ids, avail_ids)
+  if (length(missing_ids) > 0) {
+    message("  WARNING: missing ", length(missing_ids), " coalitions: ",
+            paste(head(missing_ids, 10), collapse = ", "),
+            if (length(missing_ids) > 10) "..." else "")
+    message("  Shapley values will be approximate (missing coalitions treated as v=0)")
+  }
 
-    # ---- Load 12B density tables ---------------------------------------------
-    # Per-subbasin bootstrap-aggregated population counts: SDs here reflect
-    # the actual bootstrap distribution (32 boots x 3 scenarios), not pixel-level
-    # independence assumptions.
-    dt_path <- file.path(ia_dir, "data/derived_data/density_tables",
-                         paste0(sp, "_", cur_year, "_", cur_sector, ".rds"))
-    dt_all_hf_path <- file.path(ia_dir, "data/derived_data/density_tables",
-                                paste0(sp, "_", cur_year, "_all_hf.rds"))
+  # read all coalition density tables into a list keyed by coalition_id
+  dt_list <- setNames(
+    lapply(seq_along(avail_ids), function(i) readRDS(avail_paths[i])),
+    as.character(avail_ids)
+  )
 
-    if (!file.exists(dt_path) || !file.exists(dt_all_hf_path)) {
-      message("  density table missing for ", sp, " — skipping")
-      result_idx <- result_idx + 1
-      next
+  # get the set of all BCRs x subbasins across coalitions
+  all_rows <- bind_rows(dt_list, .id = "coal_id")
+  bcr_sub_ref <- distinct(all_rows, bcr, subbasin)
+
+  # ---- Compute v(S) = cf(S) - obs per subbasin per coalition ----
+  # v(S) = (obs - obs_on_coalition + bf_on_coalition) - obs
+  #       = bf_on_coalition - obs_on_coalition
+  # (impact of removing coalition S: positive means more birds without S)
+
+  # build a matrix: rows = subbasin key, columns = coalition IDs, values = v(S) mean
+  # and a parallel matrix for v(S) sd
+  sub_keys <- paste(bcr_sub_ref$bcr, bcr_sub_ref$subbasin, sep = "::")
+  v_mean_mat <- matrix(0, nrow = length(sub_keys), ncol = n_coal,
+                        dimnames = list(sub_keys, as.character(1:n_coal)))
+  v_sd_mat   <- matrix(0, nrow = length(sub_keys), ncol = n_coal,
+                        dimnames = list(sub_keys, as.character(1:n_coal)))
+
+  # also store obs_total per subbasin (from any coalition; should be identical)
+  obs_total_mean <- setNames(numeric(length(sub_keys)), sub_keys)
+  obs_total_sd   <- setNames(numeric(length(sub_keys)), sub_keys)
+  bcr_lookup     <- setNames(bcr_sub_ref$bcr, sub_keys)
+  sub_lookup     <- setNames(bcr_sub_ref$subbasin, sub_keys)
+
+  for (cid_str in names(dt_list)) {
+    dt <- dt_list[[cid_str]]
+    cid <- as.integer(cid_str)
+
+    for (r in seq_len(nrow(dt))) {
+      key <- paste(dt$bcr[r], dt$subbasin[r], sep = "::")
+      if (!key %in% sub_keys) next
+
+      impact_mean <- dt$bf_on_coalition_mean[r] - dt$obs_on_coalition_mean[r]
+      impact_sd   <- sqrt(dt$bf_on_coalition_sd[r]^2 + dt$obs_on_coalition_sd[r]^2)
+
+      v_mean_mat[key, as.character(cid)] <- impact_mean
+      v_sd_mat[key, as.character(cid)]   <- impact_sd
+
+      # store obs_total (same across coalitions; take max to handle rounding)
+      if (obs_total_mean[key] == 0) {
+        obs_total_mean[key] <- dt$obs_total_mean[r]
+        obs_total_sd[key]   <- dt$obs_total_sd[r]
+      }
+    }
+  }
+
+  # coalition 1 (empty set) has v = 0 by definition — already initialized
+
+  # ---- Compute Shapley values per subbasin ----
+
+  shapley_sub <- vector("list", length(sub_keys))
+
+  for (si in seq_along(sub_keys)) {
+    key <- sub_keys[si]
+
+    # named vector of v(S) for all coalitions
+    v_vec <- setNames(v_mean_mat[key, ], as.character(1:n_coal))
+
+    # compute Shapley values
+    phi <- compute_shapley(v_vec, sectors)
+
+    # Shapley SD: propagate from coalition SDs using the Shapley weights
+    # phi_j = sum_S w(S) * [v(S+j) - v(S)]
+    # Var(phi_j) ≈ sum_S w(S)^2 * [Var(v(S+j)) + Var(v(S))]
+    phi_sd <- setNames(numeric(n_sectors), sectors)
+    for (j in seq_len(n_sectors)) {
+      others <- sectors[-j]
+      var_j <- 0
+      for (bits in 0:(2^(n_sectors - 1) - 1)) {
+        S      <- others[which(as.logical(intToBits(bits)[1:(n_sectors - 1)]))]
+        s_size <- length(S)
+        w <- factorial(s_size) * factorial(n_sectors - s_size - 1L) / factorial(n_sectors)
+
+        id_with    <- sectors_to_coalition_id(c(S, sectors[j]), sectors)
+        id_without <- sectors_to_coalition_id(S, sectors)
+
+        var_j <- var_j + w^2 * (v_sd_mat[key, as.character(id_with)]^2 +
+                                 v_sd_mat[key, as.character(id_without)]^2)
+      }
+      phi_sd[j] <- sqrt(var_j)
     }
 
-    dt        <- dplyr::filter(readRDS(dt_path),        bcr == cur_bcr)
-    dt_all_hf <- dplyr::filter(readRDS(dt_all_hf_path), bcr == cur_bcr)
+    # full coalition impact (total HF impact at this subbasin)
+    full_id <- n_coal
+    v_full  <- v_mean_mat[key, as.character(full_id)]
 
-    if (nrow(dt) == 0 || nrow(dt_all_hf) == 0) {
-      message("  no rows for BCR ", cur_bcr, " — skipping")
-      result_idx <- result_idx + 1
-      next
-    }
+    obs_pop <- obs_total_mean[key]
 
-    # ---- BCR scale -----------------------------------------------------------
-    # All BCR-level quantities come directly from the bootstrap x scenario
-    # distributions pre-computed in 12B. Take [1] since BCR-level values are
-    # identical for every subbasin row within a BCR.
-
-    # Use all_hf as canonical obs source: observed landscape is sector-independent,
-    # but each sector SLURM job recomputes obs independently → floating-point drift.
-    # all_hf is a single canonical run, so its obs values are the reference.
-    obs_population_mean <- dt_all_hf$obs_total_bcr_mean[1]
-    obs_population_sd   <- dt_all_hf$obs_total_bcr_sd[1]
-
-    # all-HF counterfactual from the all_hf density table
-    HF_impact_mean     <- dt_all_hf$sector_impact_bcr_mean[1]  # bootstrap + BART posterior SD
-    HF_impact_sd       <- dt_all_hf$sector_impact_bcr_sd[1]
-    cf_population_mean <- dt_all_hf$cf_total_bcr_mean[1]
-    cf_population_sd   <- dt_all_hf$cf_total_bcr_sd[1]
-
-    HF_percent_impact_mean <- HF_impact_mean / obs_population_mean * 100
-    HF_percent_impact_sd   <- 100 * sqrt((HF_impact_sd / obs_population_mean)^2 +
-                                           (HF_impact_mean * obs_population_sd / obs_population_mean^2)^2)
-
-    # sector-specific impact from sector density table (bootstrap + BART posterior SD)
-    sector_impact_mean        <- dt$sector_impact_bcr_mean[1]
-    sector_impact_sd          <- dt$sector_impact_bcr_sd[1]
-    cf_sector_population_mean <- dt$cf_total_bcr_mean[1]
-    cf_sector_population_sd   <- dt$cf_total_bcr_sd[1]
-
-    sector_percent_impact_mean <- sector_impact_mean / obs_population_mean * 100
-    sector_percent_impact_sd   <- 100 * sqrt((sector_impact_sd / obs_population_mean)^2 +
-                                               (sector_impact_mean * obs_population_sd / obs_population_mean^2)^2)
-
-    # BCR-wide footprint populations (bootstrap SD only for obs; bootstrap + posterior for cf)
-    obs_population_on_footprint_mean <- dt$obs_on_sector_bcr_mean[1]
-    obs_population_on_footprint_sd   <- dt$obs_on_sector_bcr_sd[1]
-    cf_population_on_footprint_mean  <- dt$bf_on_sector_bcr_mean[1]
-    cf_population_on_footprint_sd    <- dt$bf_on_sector_bcr_sd[1]
-
-    # Extent: % of BCR birds residing on this sector's footprint
-    footprint_fraction_mean <- obs_population_on_footprint_mean / obs_population_mean * 100
-    footprint_fraction_sd   <- 100 * sqrt(
-      (obs_population_on_footprint_sd  / obs_population_mean)^2 +
-      (obs_population_on_footprint_mean * obs_population_sd / obs_population_mean^2)^2
-    )
-
-    # Intensity: % of footprint birds recovered by removing this sector
-    if (obs_population_on_footprint_mean > 1e-6) {
-      sector_percent_impact_on_footprint_mean <- sector_impact_mean / obs_population_on_footprint_mean * 100
-      sector_percent_impact_on_footprint_sd   <- 100 * sqrt(
-        (sector_impact_sd / obs_population_on_footprint_mean)^2 +
-        (sector_impact_mean * obs_population_on_footprint_sd / obs_population_on_footprint_mean^2)^2
-      )
-    } else {
-      sector_percent_impact_on_footprint_mean <- NA_real_
-      sector_percent_impact_on_footprint_sd   <- NA_real_
-    }
-
-    bcr_rows[[result_idx]] <- data.frame(
-      species                                  = sp,
-      bcr                                      = cur_bcr,
-      year                                     = cur_year,
-      sector                                   = cur_sector,
-      obs_population_mean                      = round(obs_population_mean),
-      obs_population_sd                        = round(obs_population_sd, 1),
-      cf_population_mean                       = round(cf_population_mean),
-      cf_population_sd                         = round(cf_population_sd, 1),
-      HF_impact_mean                           = round(HF_impact_mean),
-      HF_impact_sd                             = round(HF_impact_sd, 1),
-      HF_percent_impact_mean                   = round(HF_percent_impact_mean, 2),
-      HF_percent_impact_sd                     = round(HF_percent_impact_sd, 2),
-      cf_sector_population_mean                = round(cf_sector_population_mean),
-      cf_sector_population_sd                  = round(cf_sector_population_sd, 1),
-      sector_impact_mean                       = round(sector_impact_mean),
-      sector_impact_sd                         = round(sector_impact_sd, 1),
-      sector_percent_impact_mean               = round(sector_percent_impact_mean, 2),
-      sector_percent_impact_sd                 = round(sector_percent_impact_sd, 2),
-      obs_population_on_footprint_mean         = round(obs_population_on_footprint_mean),
-      obs_population_on_footprint_sd           = round(obs_population_on_footprint_sd, 1),
-      cf_population_on_footprint_mean          = round(cf_population_on_footprint_mean),
-      cf_population_on_footprint_sd            = round(cf_population_on_footprint_sd, 1),
-      footprint_fraction_mean                  = round(footprint_fraction_mean, 2),
-      footprint_fraction_sd                    = round(footprint_fraction_sd, 2),
-      sector_percent_impact_on_footprint_mean  = round(sector_percent_impact_on_footprint_mean, 2),
-      sector_percent_impact_on_footprint_sd    = round(sector_percent_impact_on_footprint_sd, 2),
+    shapley_sub[[si]] <- data.frame(
+      species         = sp,
+      bcr             = bcr_lookup[key],
+      year            = yr,
+      subbasin        = sub_lookup[key],
+      HYBAS_ID        = hydrobasins$first_HYBAS_ID[as.integer(sub_lookup[key])],
+      obs_population  = round(obs_pop),
+      total_HF_impact = round(v_full),
+      sector          = sectors,
+      shapley_mean    = round(phi, 2),
+      shapley_sd      = round(phi_sd, 2),
+      shapley_pct     = round(phi / obs_pop * 100, 4),
+      shapley_check   = round(sum(phi), 2),  # should equal v_full
       stringsAsFactors = FALSE
     )
+  }
 
-    # ---- Subbasin scale ------------------------------------------------------
-    # Use density table directly; map subbasin row-index back to HYBAS_ID.
+  shapley_sub_df <- bind_rows(shapley_sub)
 
-    sub_hybas <- hydrobasins$first_HYBAS_ID[dt$subbasin]
-    sect_imp  <- dt$bf_only_mean - dt$obs_on_bf_mean
-    pct_sub   <- sect_imp / dt$obs_total_mean * 100
-    pct_sub[!is.finite(pct_sub) | dt$obs_total_mean < 1e-6] <- NA
+  # attach extrapolation flag if available
+  if (!is.null(extrap_flags)) {
+    shapley_sub_df <- left_join(
+      shapley_sub_df,
+      extrap_flags[, c("subbasin", "flag", "ks_max", "mahal_exceedance")],
+      by = "subbasin"
+    )
+    names(shapley_sub_df)[names(shapley_sub_df) == "flag"] <- "extrapolation_flag"
+  }
 
-    subbasin_rows[[result_idx]] <- data.frame(
-      species                   = sp,
-      bcr                       = cur_bcr,
-      year                      = cur_year,
-      sector                    = cur_sector,
-      subbasin_id               = sub_hybas,
-      obs_population_sub        = round(dt$obs_total_mean),
-      sector_impact_sub         = round(sect_imp),
-      sector_percent_impact_sub = round(pct_sub, 2),
-      stringsAsFactors = FALSE
+  shapley_sub_rows[[sy]] <- shapley_sub_df
+
+  # ---- Aggregate to BCR (sum of subbasin Shapley values) ----
+
+  shapley_bcr <- shapley_sub_df |>
+    group_by(species, bcr, year, sector) |>
+    summarise(
+      obs_population  = round(sum(obs_population)),
+      total_HF_impact = round(sum(total_HF_impact)),
+      shapley_mean    = round(sum(shapley_mean), 2),
+      shapley_sd      = round(sqrt(sum(shapley_sd^2)), 2),
+      shapley_pct     = round(sum(shapley_mean) / sum(obs_population) * 100, 4),
+      n_subbasins     = n(),
+      n_flagged       = if ("extrapolation_flag" %in% names(shapley_sub_df))
+                          sum(extrapolation_flag, na.rm = TRUE) else NA_integer_,
+      .groups = "drop"
     )
 
-    # ---- Footprint scale -----------------------------------------------------
-    # Still raster-based: connected components don't align with subbasins.
+  shapley_bcr_rows[[sy]] <- shapley_bcr
 
-    obs_mean <- rast(file.path(obs_root, sp, cur_bcr, cur_year, "observed_mean.tif"))
-    bf_mean  <- rast(file.path(bf_root, cur_sector, sp, cur_bcr, cur_year, "backfilled_mean_mean.tif"))
-    delta    <- bf_mean - obs_mean
+  message("  ", sp, " ", yr, ": ", nrow(shapley_sub_df), " subbasin rows, ",
+          nrow(shapley_bcr), " BCR rows")
+}
 
-    sector_impact_footprint  <- zonal(delta    * area_r, patches_r, "sum", na.rm = TRUE)
-    obs_population_footprint <- zonal(obs_mean * area_r, patches_r, "sum", na.rm = TRUE)
-    cf_population_footprint  <- zonal(bf_mean  * area_r, patches_r, "sum", na.rm = TRUE)
-    names(sector_impact_footprint)[2]  <- "sector_impact_footprint"
-    names(obs_population_footprint)[2] <- "obs_population_on_footprint"
-    names(cf_population_footprint)[2]  <- "cf_population_on_footprint"
+# ---- Assemble final tables ---------------------------------------------------
 
-    fp_tbl <- merge(obs_population_footprint, cf_population_footprint, by = names(patches_r))
-    fp_tbl <- merge(fp_tbl, sector_impact_footprint, by = names(patches_r))
-    fp_tbl$sector_percent_impact_footprint <- fp_tbl$sector_impact_footprint /
-                                              fp_tbl$obs_population_on_footprint * 100
-    fp_tbl$sector_percent_impact_footprint[!is.finite(fp_tbl$sector_percent_impact_footprint) |
-                                            fp_tbl$obs_population_on_footprint < 1e-6] <- NA
+shapley_sub_all <- bind_rows(shapley_sub_rows)
+shapley_bcr_all <- bind_rows(shapley_bcr_rows)
 
-    footprint_rows[[result_idx]] <- data.frame(
-      species                         = sp,
-      bcr                             = cur_bcr,
-      year                            = cur_year,
-      sector                          = cur_sector,
-      footprint_id                    = fp_tbl[[1]],
-      obs_population_on_footprint     = round(fp_tbl$obs_population_on_footprint),
-      cf_population_on_footprint      = round(fp_tbl$cf_population_on_footprint),
-      sector_impact_footprint         = round(fp_tbl$sector_impact_footprint),
-      sector_percent_impact_footprint = round(fp_tbl$sector_percent_impact_footprint, 2),
-      stringsAsFactors = FALSE
-    )
+# ---- National scale (sum of BCR Shapley values) -----------------------------
 
-    result_idx <- result_idx + 1
-
-  } # close species loop
-} # close outer loop
-
-# ---- Assemble BCR table ------------------------------------------------------
-
-bcr_df <- bind_rows(bcr_rows)
-
-# ---- National scale (derived from BCR) ---------------------------------------
-
-national_df <- bcr_df |>
+shapley_national <- shapley_bcr_all |>
   group_by(species, year, sector) |>
   summarise(
-    obs_population_mean        = round(sum(obs_population_mean)),
-    obs_population_sd          = round(sqrt(sum(obs_population_sd^2)), 1),
-    cf_population_mean         = round(sum(cf_population_mean)),
-    cf_population_sd           = round(sqrt(sum(cf_population_sd^2)), 1),
-    HF_impact_mean             = round(sum(HF_impact_mean)),
-    HF_impact_sd               = round(sqrt(sum(HF_impact_sd^2)), 1),
-    HF_percent_impact_mean     = round(HF_impact_mean / obs_population_mean * 100, 2),
-    HF_percent_impact_sd       = round(100 * sqrt((HF_impact_sd / obs_population_mean)^2 +
-                                         (HF_impact_mean * obs_population_sd / obs_population_mean^2)^2), 2),
-    cf_sector_population_mean  = round(sum(cf_sector_population_mean)),
-    cf_sector_population_sd    = round(sqrt(sum(cf_sector_population_sd^2)), 1),
-    sector_impact_mean         = round(sum(sector_impact_mean)),
-    sector_impact_sd           = round(sqrt(sum(sector_impact_sd^2)), 1),
-    sector_percent_impact_mean = round(sector_impact_mean / obs_population_mean * 100, 2),
-    sector_percent_impact_sd   = round(100 * sqrt((sector_impact_sd / obs_population_mean)^2 +
-                                         (sector_impact_mean * obs_population_sd / obs_population_mean^2)^2), 2),
+    obs_population  = round(sum(obs_population)),
+    total_HF_impact = round(sum(total_HF_impact)),
+    shapley_mean    = round(sum(shapley_mean), 2),
+    shapley_sd      = round(sqrt(sum(shapley_sd^2)), 2),
+    shapley_pct     = round(sum(shapley_mean) / sum(obs_population) * 100, 4),
+    n_bcrs          = n(),
     .groups = "drop"
   )
 
+# ---- Verify additivity -------------------------------------------------------
+
+check <- shapley_national |>
+  group_by(species, year) |>
+  summarise(
+    sum_shapley     = sum(shapley_mean),
+    total_HF_impact = first(total_HF_impact),
+    residual        = sum_shapley - total_HF_impact,
+    .groups = "drop"
+  )
+
+message("\n=== Shapley additivity check ===")
+for (i in seq_len(nrow(check))) {
+  message(sprintf("  %s %s: sum(phi) = %.1f, v(N) = %.1f, residual = %.1f",
+                  check$species[i], check$year[i],
+                  check$sum_shapley[i], check$total_HF_impact[i], check$residual[i]))
+}
+
 # ---- Write outputs -----------------------------------------------------------
 
-write.csv(bcr_df,             file.path(out_dir, "sector_bcr.csv"),       row.names = FALSE)
-write.csv(national_df,        file.path(out_dir, "sector_national.csv"),  row.names = FALSE)
-write.csv(bind_rows(subbasin_rows),  file.path(out_dir, "sector_subbasin.csv"),  row.names = FALSE)
-write.csv(bind_rows(footprint_rows), file.path(out_dir, "sector_footprint.csv"), row.names = FALSE)
+write.csv(shapley_sub_all, file.path(out_dir, "shapley_subbasin.csv"), row.names = FALSE)
+write.csv(shapley_bcr_all, file.path(out_dir, "shapley_bcr.csv"),      row.names = FALSE)
+write.csv(shapley_national, file.path(out_dir, "shapley_national.csv"), row.names = FALSE)
 
-message("writing 4 tables to ", out_dir)
-message("  sector_bcr.csv       : ", nrow(bcr_df), " rows")
-message("  sector_national.csv  : ", nrow(national_df), " rows")
-message("  sector_subbasin.csv  : ", nrow(bind_rows(subbasin_rows)), " rows")
-message("  sector_footprint.csv : ", nrow(bind_rows(footprint_rows)), " rows")
+message("\nWrote 3 tables to ", out_dir)
+message("  shapley_subbasin.csv : ", nrow(shapley_sub_all), " rows")
+message("  shapley_bcr.csv      : ", nrow(shapley_bcr_all), " rows")
+message("  shapley_national.csv : ", nrow(shapley_national), " rows")

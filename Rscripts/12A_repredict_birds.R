@@ -1,7 +1,13 @@
 # ---
-# title: Impact Assessment: re-predict bird densities after backfilling
+# title: Impact Assessment: re-predict bird densities using coalition-based backfilling
 # author: Mannfred Boehm
-# created: September 28, 2025
+# ---
+# Entry point for SLURM array jobs. Each job processes one species for one
+# coalition of sectors (specified by COALITION_ID env var).  The coalition ID
+# maps to a specific subset of sectors via shapley_utils.R.
+#
+# Phase 1: Run 12_observed.R to produce canonical observed bootstraps.
+# Phase 2: Run this script for each coalition x species combination.
 # ---
 
 suppressPackageStartupMessages({
@@ -34,81 +40,25 @@ bam_boundary <- terra::vect(file.path(ia_dir, "data", "raw_data", "Regions", "BA
 all_subbasins_subset <- terra::vect(file.path(ia_dir, "data", "raw_data", "hydrobasins_masked_merged_subset.gpkg"))
 
 # ------------------------------------------------------
-# create a reference table for which subbasins are in which BCRs 
-# some subbasins will be in multiple BCRs, and that's OK because 
+# create a reference table for which subbasins are in which BCRs
+# some subbasins will be in multiple BCRs, and that's OK because
 # we will ultimately crop to the BCR boundary to run the `gbm` model
 
 bcr_subbasins_ref <- {
-  
+
     # logical matrix: rows=subbasins, cols=BCRs
     hits <- terra::relate(all_subbasins_subset, bam_boundary, relation = "intersects")
-    
+
     # row/col indexes of TRUE
     ij <- which(hits, arr.ind = TRUE)
-    
+
     tibble(
-       sub_index = ij[, 1],  
+       sub_index = ij[, 1],
        HYBAS_ID  = all_subbasins_subset$first_HYBAS_ID[ij[, 1]],
        bcr_label = paste(bam_boundary$country[ij[, 2]],
                     bam_boundary$subUnit[ij[, 2]], sep = "_"),
        bcr_code  = gsub("_", "", bcr_label))
 }
-
-# ------------------------------------------------------
-# define helper function:
-# mosaic (backfilled) subbasin stacks into a single BCR-wide stack
-
-mosaic_backfilled_stacks <- function(sub_ids, year) {
-  
-  paths <- file.path(
-    file.path(ia_dir, "data", "derived_data", "bart_models", year),
-    paste0("subbasin_", sub_ids),
-    paste0("subbasin_", sub_ids, "_backfill.tif")
-  )
-  
-  paths <- paths[file.exists(paths)]
-  if (length(paths) == 0) return(NULL)
-  
-  stacks <- lapply(paths, terra::rast)
-
-  # union of all subbasin extents — used to normalise per-variable rasters before stacking
-  full_ext <- Reduce(terra::union, lapply(stacks, terra::ext))
-
-  vars <- sort(unique(unlist(lapply(stacks, names))))
-  var_list <- lapply(vars, function(v) {
-    available <- lapply(stacks, function(r) if (v %in% names(r)) r[[v]] else NULL)
-    available <- Filter(Negate(is.null), available)
-    if (length(available) == 0) return(NULL)
-    # terra::merge unions extents across subbasins; extend to full_ext so all
-    # layers share an identical extent before being combined with terra::rast()
-    terra::extend(Reduce(terra::merge, available), full_ext)
-  })
-
-  keep <- !sapply(var_list, is.null)
-  out  <- terra::rast(var_list[keep])
-  names(out) <- vars[keep]
-  out
-}
-
-make_counterfactual_stack <- function(stack_obs, replacement_stack, sector_mask) {
-
-    out <- stack_obs
-
-    # overwrite continuous biotic covariates with backfilled values at sector pixels only;
-    # at non-sector pixels retain the observed value if the layer exists in stack_obs,
-    # or NA if the covariate is absent from this BCR's observed stack
-    for (v in names(replacement_stack)) {
-      if (v %in% names(out)) {
-        out[[v]] <- terra::ifel(sector_mask, replacement_stack[[v]], out[[v]])
-      } else {
-        out[[v]] <- terra::ifel(sector_mask, replacement_stack[[v]], NA_real_)
-      }
-    }
-
-    out
-}
-
-
 
 # define covariate types -------------------------------------------------------------
 
@@ -155,8 +105,9 @@ disturbance_vars <-
   dplyr::filter(predictor_class == "Disturbance")
 
 
-# import density prediction script -------------------------------------------------
+# import Shapley utilities and density prediction script -------------------------------------------------
 
+source(file.path(ia_dir, "Rscripts", "shapley_utils.R"))
 source(file.path(ia_dir, "Rscripts", "12B_predict_species_bcr.R"))
 
 
@@ -164,7 +115,7 @@ source(file.path(ia_dir, "Rscripts", "12B_predict_species_bcr.R"))
 # run one species on one core ------------------------------------------------------
 
 species_vec <- c("CAWA", "OSFL")
-# species_vec <- sort(list.dirs(file.path(nm_root, "output/06_bootstraps"), full.names = FALSE, recursive = FALSE))[4]
+# species_vec <- sort(list.dirs(file.path(nm_root, "output/06_bootstraps"), full.names = FALSE, recursive = FALSE))
 year <- 2020
 
 # get species index from SLURM
@@ -172,17 +123,30 @@ task_id <- as.integer(Sys.getenv("SLURM_ARRAY_TASK_ID"))
 species <- species_vec[task_id]
 message("running species: ", species)
 
-# get sector from environment — required
-sector_name <- Sys.getenv("SECTOR")
-if (nchar(sector_name) == 0) stop("SECTOR env var must be set (e.g. export SECTOR=mines)")
-message("Sector: ", sector_name)
+# get coalition ID from environment — required
+coalition_id <- Sys.getenv("COALITION_ID")
+if (nchar(coalition_id) == 0) stop("COALITION_ID env var must be set (e.g. export COALITION_ID=42)")
+coalition_id <- as.integer(coalition_id)
+
+# map coalition ID to sector names
+sectors  <- canonical_sectors()
+coalition <- coalition_id_to_sectors(coalition_id, sectors)
+message("Coalition ID: ", coalition_id, " = {",
+        if (length(coalition) == 0) "empty" else paste(coalition, collapse = ", "), "}")
+
+# skip empty coalition (v = 0 by definition)
+if (length(coalition) == 0) {
+  message("Empty coalition — nothing to compute. Exiting.")
+  quit(save = "no", status = 0)
+}
 
 hirsh_dir <- file.path(ia_dir, "data", "raw_data", "hirshpearson")
 
 res <- predict_species_bcr(species, year = year, all_subbasins_subset = all_subbasins_subset,
-                           sector_name = sector_name, hirsh_dir = hirsh_dir)
+                           coalition = coalition, coalition_id = coalition_id,
+                           hirsh_dir = hirsh_dir)
+
 dir.create(file.path(ia_dir, "data", "derived_data", "density_tables"), showWarnings = FALSE)
 saveRDS(res, file = file.path(ia_dir, "data", "derived_data", "density_tables",
-                              paste0(species, "_", year, "_", sector_name, ".rds")))
+                              paste0(species, "_", year, "_coalition_", coalition_id, ".rds")))
 message(Sys.time(), " nice.")
-
