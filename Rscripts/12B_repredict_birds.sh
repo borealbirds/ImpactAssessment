@@ -12,7 +12,7 @@
 # Two-phase submission:
 #
 #   Phase 1: Canonical observed predictions (run once per species)
-#     sbatch 12_observed.sh
+#     sbatch 12A_observed.sh
 #
 #   Phase 2: Coalition counterfactual predictions (one job per coalition)
 #     Run as:  bash 12_repredict_birds.sh
@@ -20,12 +20,12 @@
 #     with a dependency on the Phase 1 job.
 #
 # To submit Phase 2 with dependency on a Phase 1 job:
-#   OBS_JOB_ID=$(sbatch --parsable 12_observed.sh)
+#   OBS_JOB_ID=$(sbatch --parsable 12A_observed.sh)
 #   bash 12_repredict_birds.sh $OBS_JOB_ID
 #
 # To submit just a subset of coalitions (e.g. single-sector coalitions only):
 #   for CID in 2 3 5 9 17 33 65 129; do
-#     sbatch --export=ALL,COALITION_ID=$CID 12_repredict_birds.sh
+#     sbatch --export=ALL,COALITION_ID=$CID 12B_repredict_birds.sh
 #   done
 
 # if run as `bash 12_repredict_birds.sh [OBS_JOB_ID]` on login node,
@@ -50,4 +50,4 @@ module load gdal/3.9.1
 module load udunits/2.2.28
 module load r/4.4.0
 
-Rscript --vanilla 12A_repredict_birds.R
+Rscript --vanilla 12B_repredict_birds.R

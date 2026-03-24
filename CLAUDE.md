@@ -29,7 +29,7 @@ The cluster and local RProject share the same subdirectory layout (see **Data Di
 `/home/mannfred/projects/def-ecknight/NationalModels` for BRT bootstrap models and BCR
 covariate stacks. This path is cluster-only and must not be changed.
 
-Most prep scripts (01–06) run locally. Compute-heavy scripts (07, 12A) run on the cluster via SLURM array jobs.
+Most prep scripts (01–06) run locally. Compute-heavy scripts (07, 12B) run on the cluster via SLURM array jobs.
 
 ## Pipeline
 
@@ -54,9 +54,9 @@ Scripts are numbered in execution order:
 | `10C_abiotic_extrapolation_diagnostics.R` | cluster | Flag subbasins where BART may be extrapolating (KS + Mahalanobis diagnostics) → `extrapolation_flags.csv` |
 | `11_inspect_backfill_metrics.R` | local | Inspect and visualize model accuracy |
 | `11_premosaic_backfilled_stacks.R` + `.sh` | cluster | Mosaic per-subbasin BART backfill rasters into BCR-wide stacks (run before 12) |
-| `12_observed.R` + `.sh` | cluster | Phase 1: canonical observed-landscape BRT predictions (one job per species, run BEFORE coalition jobs) |
-| `12A_repredict_birds.R` + `.sh` | cluster | Phase 2: re-predict bird densities for a given coalition of sectors (SLURM array over species, one job per coalition) |
-| `12B_predict_species_bcr.R` | sourced | `predict_species_bcr()`: reads canonical observed bootstraps, builds coalition mask, runs joint BRT×BART sampling, returns subbasin-level density tables |
+| `12A_observed.R` + `.sh` | cluster | Phase 1: canonical observed-landscape BRT predictions (one job per species, run BEFORE coalition jobs) |
+| `12B_repredict_birds.R` + `.sh` | cluster | Phase 2: re-predict bird densities for a given coalition of sectors (SLURM array over species, one job per coalition) |
+| `12C_predict_species_bcr.R` | sourced | `predict_species_bcr()`: reads canonical observed bootstraps, builds coalition mask, runs joint BRT×BART sampling, returns subbasin-level density tables |
 | `12C_repredict_birds_check.R` | local | Sanity checks on re-prediction outputs (legacy) |
 | `13_importance_of_covs_used_in_counterfactual.R` | cluster | Assess percentile importance of backfilled covariates in V5 bird models |
 | `15B_sector_attribution.R` | local | Reads coalition density tables, computes exact Shapley values per sector, aggregates bottom-up (subbasin → BCR → national) → `sector_effects/shapley_*.csv` |
@@ -74,15 +74,15 @@ sbatch 07_train_and_backfill.sh
 Re-predicting birds (two-phase submission):
 ```bash
 # Phase 1: canonical observed predictions (one array job per species)
-OBS_JOB_ID=$(sbatch --parsable 12_observed.sh)
+OBS_JOB_ID=$(sbatch --parsable 12A_observed.sh)
 
 # Phase 2: coalition counterfactual predictions (255 jobs, one per non-empty coalition)
 # Each coalition job is a SLURM array over species, with dependency on Phase 1
-bash 12_repredict_birds.sh $OBS_JOB_ID
+bash 12B_repredict_birds.sh $OBS_JOB_ID
 
 # To run only single-sector coalitions (equivalent to old one-at-a-time):
 # for CID in 2 3 5 9 17 33 65 129; do
-#   sbatch --export=ALL,COALITION_ID=$CID 12_repredict_birds.sh
+#   sbatch --export=ALL,COALITION_ID=$CID 12B_repredict_birds.sh
 # done
 ```
 
@@ -96,7 +96,7 @@ bash 12_repredict_birds.sh $OBS_JOB_ID
 
 **Output per subbasin**: `data/derived_data/bart_models/{year}/subbasin_{i}/subbasin_{i}_backfill.tif` (mean and SD layers for each covariate), `_metrics.rds`, `_confusion.rds`.
 
-**Re-prediction**: `11_premosaic` mosaics backfilled subbasin rasters into BCR-wide stacks. `12_observed` produces canonical observed bootstrap predictions once per species. `12A/12B` then run coalition-based counterfactual predictions: for a given coalition S of sectors, pixels where any sector in S has footprint (AND CanHF ≥ 1) use backfilled covariates; all other pixels use observed. Joint BART×BRT sampling nests BART posterior draws inside BRT bootstrap iterations.
+**Re-prediction**: `11_premosaic` mosaics backfilled subbasin rasters into BCR-wide stacks. `12A_observed` produces canonical observed bootstrap predictions once per species. `12B/12C` then run coalition-based counterfactual predictions: for a given coalition S of sectors, pixels where any sector in S has footprint (AND CanHF ≥ 1) use backfilled covariates; all other pixels use observed. Joint BART×BRT sampling nests BART posterior draws inside BRT bootstrap iterations.
 
 **Shapley attribution**: 8 sectors → 256 coalitions (2^8). Each coalition is a SLURM job. `15B` computes exact Shapley values from the 256 coalition density tables. Shapley values sum exactly to the total HF impact. `shapley_utils.R` provides coalition enumeration and the Shapley formula.
 
@@ -170,13 +170,13 @@ Large spatial files (`.tif`, `.gpkg`, `.shp`) and most `.rds` files are gitignor
 
 1. ~~**Abiotic overlap / extrapolation risk**~~: **Addressed** by `10C_abiotic_extrapolation_diagnostics.R`. Per-subbasin KS and Mahalanobis diagnostics flag subbasins where BART extrapolates. Flags are annotated in 15B output. Remaining gap: diagnostics are post-hoc; they don't correct the extrapolation, only flag it.
 
-2. ~~**Sector impacts are not additive**~~: **Addressed** by Shapley value attribution. 12A/12B now run all 2^8 = 256 sector coalitions. 15B computes exact Shapley values that sum to total HF impact. Remaining gap: Shapley values assume the coalition value function v(S) is well-estimated for all S; coalitions with large combined footprints may have more extrapolation risk.
+2. ~~**Sector impacts are not additive**~~: **Addressed** by Shapley value attribution. 12B/12C now run all 2^8 = 256 sector coalitions. 15B computes exact Shapley values that sum to total HF impact. Remaining gap: Shapley values assume the coalition value function v(S) is well-estimated for all S; coalitions with large combined footprints may have more extrapolation risk.
 
 3. **No spatial spillover**: The formula `cf = obs_on_non_coalition + backfilled_on_coalition` assumes removing a coalition's footprint only affects birds on those pixels. Edge effects, area sensitivity, and functional connectivity mean impacts extend beyond the footprint boundary (especially important for linear features like roads and seismic lines).
 
 ### Computational
 
-4. ~~**Uncertainty combination is ad hoc**~~: **Addressed** by joint sampling in 12B. Each (bootstrap, scenario) pair draws a fresh BART posterior realization inside the BRT bootstrap loop, capturing the covariance between BART and BRT uncertainty naturally. No post-hoc variance combination.
+4. ~~**Uncertainty combination is ad hoc**~~: **Addressed** by joint sampling in 12C. Each (bootstrap, scenario) pair draws a fresh BART posterior realization inside the BRT bootstrap loop, capturing the covariance between BART and BRT uncertainty naturally. No post-hoc variance combination.
 
 ## Instructions from Masa
 1.Always ignore the directory /Rscripts/misc when thinking. It's not immediately relevant to the project.

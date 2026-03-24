@@ -10,7 +10,7 @@
 #SBATCH --mail-user=mannfred@ualberta.ca
 
 # Phase 1: canonical observed-landscape predictions.
-# Run this BEFORE 12_repredict_birds.sh (coalition runs).
+# Run this BEFORE 12B_repredict_birds.sh (coalition runs).
 # Adjust --array to match the number of species.
 
 module load StdEnv/2023
@@ -19,4 +19,4 @@ module load gdal/3.9.1
 module load udunits/2.2.28
 module load r/4.4.0
 
-Rscript --vanilla 12_observed.R
+Rscript --vanilla 12A_observed.R

@@ -6,7 +6,7 @@
 # coalition of sectors (specified by COALITION_ID env var).  The coalition ID
 # maps to a specific subset of sectors via shapley_utils.R.
 #
-# Phase 1: Run 12_observed.R to produce canonical observed bootstraps.
+# Phase 1: Run 12A_observed.R to produce canonical observed bootstraps.
 # Phase 2: Run this script for each coalition x species combination.
 # ---
 
@@ -108,7 +108,7 @@ disturbance_vars <-
 # import Shapley utilities and density prediction script -------------------------------------------------
 
 source(file.path(ia_dir, "Rscripts", "shapley_utils.R"))
-source(file.path(ia_dir, "Rscripts", "12B_predict_species_bcr.R"))
+source(file.path(ia_dir, "Rscripts", "12C_predict_species_bcr.R"))
 
 
 
