@@ -25,7 +25,13 @@
       "Bash(LOCAL=\"a7878ccc-747b-11ef-b4b8-8fef73a45f39\")",
       "Bash(CLUSTER=\"8dec4129-9ab4-451d-a45f-5b4b8471f7a3\")",
       "Bash(SRC=\"/C/Users/mannf/Drive/boreal_avian_modelling_project/ImpactAssessment/Rscripts\")",
-      "Bash(DST=\"/home/mannfred/scratch/impact_assessment/Rscripts\")"
+      "Bash(DST=\"/home/mannfred/scratch/impact_assessment/Rscripts\")",
+      "Bash(\"C:/Users/mannf/AppData/Local/Python/pythoncore-3.14-64/Scripts/globus.exe\" transfer:*)",
+      "Bash(Rscript --vanilla -e \":*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(GLOBUS=\"C:/Users/mannf/AppData/Local/Python/pythoncore-3.14-64/Scripts/globus.exe\")",
+      "Bash(__NEW_LINE_a1ecbcd88e7f4cbb__ \"$GLOBUS\":*)"
     ]
   }
 }
