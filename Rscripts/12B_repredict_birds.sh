@@ -6,7 +6,7 @@
 #SBATCH --mem=256G
 #SBATCH --time=36:00:00
 #SBATCH --job-name=coalition_repredict
-#SBATCH --array=1-2
+#SBATCH --array=1-11
 #SBATCH --mail-user=mannfred@ualberta.ca
 
 # Two-phase submission:
