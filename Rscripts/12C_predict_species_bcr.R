@@ -1,3 +1,20 @@
+# ---
+# title: Impact Assessment: predict bird density for one species x BCR under a given sector coalition
+# author: Mannfred Boehm
+# ---
+# Sourced by 12B_repredict_birds.R. Defines predict_species_bcr(), which performs the core
+# counterfactual prediction for one species across all of its BCRs under a specified coalition.
+#
+# For each BCR the function:
+#   1. Reads the canonical observed bootstraps produced by 12A_observed.R
+#   2. Builds a coalition mask: pixels where any sector in the coalition has footprint
+#      AND CanHF >= 1 receive backfilled covariates; all other pixels use observed covariates
+#   3. Runs joint BRT x BART sampling: for each BRT bootstrap iteration a fresh BART posterior
+#      draw is made, so BART uncertainty is naturally nested inside BRT uncertainty
+#   4. Returns subbasin-level density tables (bootstrap x BART-scenario arrays) that 12B
+#      aggregates up to BCR-wide population totals
+# ---
+
 # define density prediction function ------------------------------------------------------
 predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, coalition_id, hirsh_dir) {
 
