@@ -219,7 +219,7 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
 
       message(Sys.time(), " | ", species, " ", bcr_code, " bootstrap=", i,
               " | finished predict() on backfilled landscape")
-      terra::tmpFiles(remove = TRUE)
+      gc()
     }
 
     # ---- Save backfilled prediction rasters (mean/SD) for optional inspection ----
