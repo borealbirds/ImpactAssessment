@@ -3,8 +3,22 @@
 # author: Mannfred Boehm
 # ---
 # Entry point for SLURM array jobs. Each job processes one species for one
-# coalition of sectors (specified by COALITION_ID env var).  The coalition ID
+# coalition of sectors (specified by COALITION_ID env var). The coalition ID
 # maps to a specific subset of sectors via shapley_utils.R.
+#
+# With 8 sectors there are 2^8 = 256 coalitions (each sector is either in or
+# out: a binary choice). Running all 256 x N_species jobs produces one density
+# table per species per coalition; 15B then reads all 256 tables per species to
+# compute exact Shapley values that partition the total HF impact.
+#
+# For a given species x coalition job:
+#   1. Build the coalition mask: pixels where any sector in the coalition has
+#      footprint AND CanHF >= 1.
+#   2. For each BCR the species occupies: read the canonical observed bootstraps
+#      from 12A, run joint BRT x BART sampling via predict_species_bcr(), and
+#      compute the counterfactual population under the coalition scenario.
+#   3. Save the resulting density table to
+#      density_tables/{species}_{year}_coalition_{id}.rds
 #
 # Phase 1: Run 12A_observed.R to produce canonical observed bootstraps.
 # Phase 2: Run this script for each coalition x species combination.
