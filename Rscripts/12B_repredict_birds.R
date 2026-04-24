@@ -156,11 +156,29 @@ if (length(coalition) == 0) {
 
 hirsh_dir <- file.path(ia_dir, "data", "raw_data", "hirshpearson")
 
+# coalitions for which we save full bootstrap x scenario arrays (for distribution plots):
+# full coalition (all sectors removed) + each of the 8 single-sector coalitions
+target_ids  <- c(
+  sectors_to_coalition_id(sectors, sectors),
+  vapply(sectors, function(s) sectors_to_coalition_id(s, sectors), integer(1L))
+)
+save_arrays <- coalition_id %in% target_ids
+
 res <- predict_species_bcr(species, year = year, all_subbasins_subset = all_subbasins_subset,
                            coalition = coalition, coalition_id = coalition_id,
-                           hirsh_dir = hirsh_dir)
+                           hirsh_dir = hirsh_dir, save_arrays = save_arrays)
 
-dir.create(file.path(ia_dir, "data", "derived_data", "density_tables"), showWarnings = FALSE)
-saveRDS(res, file = file.path(ia_dir, "data", "derived_data", "density_tables",
-                              paste0(species, "_", year, "_coalition_", coalition_id, ".rds")))
+dt_dir <- file.path(ia_dir, "data", "derived_data", "density_tables")
+dir.create(dt_dir, showWarnings = FALSE)
+saveRDS(res$table, file = file.path(dt_dir,
+                                    paste0(species, "_", year, "_coalition_", coalition_id, ".rds")))
+
+if (save_arrays && !is.null(res$national_arrays)) {
+  arr_dir <- file.path(dt_dir, "arrays")
+  dir.create(arr_dir, showWarnings = FALSE)
+  saveRDS(res$national_arrays,
+          file = file.path(arr_dir,
+                           paste0(species, "_", year, "_coalition_", coalition_id, "_arrays.rds")))
+  message(Sys.time(), " | saved national bootstrap arrays for coalition ", coalition_id)
+}
 message(Sys.time(), " nice.")

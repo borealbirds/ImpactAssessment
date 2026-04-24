@@ -16,7 +16,7 @@
 # ---
 
 # define density prediction function ------------------------------------------------------
-predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, coalition_id, hirsh_dir) {
+predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, coalition_id, hirsh_dir, save_arrays = FALSE) {
 
   # communicate
   coalition_label <- if (length(coalition) == 0) "empty" else paste(coalition, collapse = "+")
@@ -95,14 +95,17 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
     if (n_active == 0) {
       message(Sys.time(), " | ", species, " ", bcr_code,
               " | no active pixels — returning zeros")
-      return(tibble(
-        species  = species,
-        subbasin = sub_ids,
-        bcr      = bcr_code,
-        coalition_id = coalition_id,
-        obs_total_mean         = 0, obs_total_sd         = 0,
-        obs_on_coalition_mean  = 0, obs_on_coalition_sd  = 0,
-        bf_on_coalition_mean   = 0, bf_on_coalition_sd   = 0
+      return(list(
+        table = tibble(
+          species  = species,
+          subbasin = sub_ids,
+          bcr      = bcr_code,
+          coalition_id = coalition_id,
+          obs_total_mean         = 0, obs_total_sd         = 0,
+          obs_on_coalition_mean  = 0, obs_on_coalition_sd  = 0,
+          bf_on_coalition_mean   = 0, bf_on_coalition_sd   = 0
+        ),
+        arrays = NULL
       ))
     }
 
@@ -258,7 +261,7 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
             " | estimating population over ", length(sub_ids), " subbasins")
 
     agg <- function(obs_rasters, bf_vecs_list, sub_ids, sector_mask,
-                    subbasin_zone_r, sector_zones) {
+                    subbasin_zone_r, sector_zones, save_arrays = FALSE) {
 
       n_sub  <- length(sub_ids)
       n_boot <- length(obs_rasters)
@@ -309,15 +312,23 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
              sd   = apply(mat, 1, sd, na.rm = TRUE))
       }
 
-      list(
-        pop_obs_total     = combine_stats(pop_obs_total_arr),
-        pop_obs_on_coal   = combine_stats(pop_obs_on_coal_arr),
-        pop_bf_on_coal    = combine_stats(pop_bf_on_coal_arr)
+      out <- list(
+        pop_obs_total   = combine_stats(pop_obs_total_arr),
+        pop_obs_on_coal = combine_stats(pop_obs_on_coal_arr),
+        pop_bf_on_coal  = combine_stats(pop_bf_on_coal_arr)
       )
+
+      if (save_arrays) {
+        out$bcr_obs_total_mat   <- apply(pop_obs_total_arr,   c(2L, 3L), sum, na.rm = TRUE)
+        out$bcr_obs_on_coal_mat <- apply(pop_obs_on_coal_arr, c(2L, 3L), sum, na.rm = TRUE)
+        out$bcr_bf_on_coal_mat  <- apply(pop_bf_on_coal_arr,  c(2L, 3L), sum, na.rm = TRUE)
+      }
+
+      out
     }
 
     pop_lists <- agg(obs_preds, bf_preds, sub_ids, sector_mask,
-                     subbasin_zone_r, sector_zones)
+                     subbasin_zone_r, sector_zones, save_arrays = save_arrays)
 
     rm(obs_preds, bf_preds, stack_obs, stack_bf)
     gc()
@@ -337,8 +348,32 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
     )
 
     message(Sys.time(), " | ", species, " ", bcr_code, " | returning ", nrow(out), " rows")
-    out
+    list(
+      table  = out,
+      arrays = if (save_arrays) list(
+        obs_total_mat   = pop_lists$bcr_obs_total_mat,
+        obs_on_coal_mat = pop_lists$bcr_obs_on_coal_mat,
+        bf_on_coal_mat  = pop_lists$bcr_bf_on_coal_mat
+      ) else NULL
+    )
 
   })
-  dplyr::bind_rows(results)
+
+  results_nonnull <- Filter(Negate(is.null), results)
+
+  national_arrays <- if (save_arrays) {
+    mats <- Filter(Negate(is.null), lapply(results_nonnull, `[[`, "arrays"))
+    if (length(mats) > 0) {
+      list(
+        obs_total_mat   = Reduce("+", lapply(mats, `[[`, "obs_total_mat")),
+        obs_on_coal_mat = Reduce("+", lapply(mats, `[[`, "obs_on_coal_mat")),
+        bf_on_coal_mat  = Reduce("+", lapply(mats, `[[`, "bf_on_coal_mat"))
+      )
+    } else NULL
+  } else NULL
+
+  list(
+    table           = dplyr::bind_rows(lapply(results_nonnull, `[[`, "table")),
+    national_arrays = national_arrays
+  )
 } # close predict_species_bcr()
