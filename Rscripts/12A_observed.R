@@ -98,7 +98,7 @@ for (rdata_path in rdata_files) {
     model <- b.list[[i]]
     obs_preds[[i]] <- terra::predict(X_obs, model, type = "response", n.trees = model$n.trees)
     message(Sys.time(), " | ", bcr_code, " | bootstrap ", i, "/", length(b.list))
-    terra::tmpFiles(remove = TRUE)
+    gc()
   }
 
   # save full bootstrap stack + summary rasters

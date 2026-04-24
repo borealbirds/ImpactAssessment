@@ -29,6 +29,7 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
 
   # this sub-function will work through all model-lists (one per BCR) for a given species
   results <- lapply(rdata_files, function(rdata_path) {
+    on.exit(gc())
 
     message(Sys.time(), " | loading ", basename(rdata_path))
     e <- new.env(parent = emptyenv())
@@ -152,15 +153,19 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
 
     # pre-extract observed covariate values at coalition pixels
     obs_all_vals <- terra::values(stack_obs)                             # n_cells x n_layers
-    X_obs_sector <- as.data.frame(obs_all_vals[sector_cell_idx, , drop = FALSE])
+    X_obs_sector <- as.data.frame(obs_all_vals[sector_cell_idx, , drop = FALSE], check.names = FALSE)
     rm(obs_all_vals); gc()
 
     # pre-extract BART posterior draw values at coalition pixels (expm1-transformed, clamped >= 0)
+    # Non-finite values (Inf from expm1 overflow, NA from edge pixels) are replaced with 0
+    # before they can reach gbm's C prediction code, which cannot handle non-finite inputs.
     draw_vals_sector <- setNames(
       lapply(draw_covs, function(v) {
         sapply(seq_len(n_draws), function(d) {
           lyr_vals <- terra::values(stack_bf[[paste0(v, "_draw_", sprintf("%03d", d))]], mat = FALSE)
-          pmax(expm1(lyr_vals[sector_cell_idx]), 0)
+          vals <- expm1(lyr_vals[sector_cell_idx])
+          vals[!is.finite(vals)] <- 0
+          pmax(vals, 0)
         })
       }),
       draw_covs

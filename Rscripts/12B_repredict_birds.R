@@ -3,12 +3,8 @@
 # author: Mannfred Boehm
 # ---
 # Entry point for SLURM array jobs. Each job processes one species for one
-# coalition of sectors (specified by COALITION_ID env var). The coalition ID
+# coalition of sectors (specified by COALITION_ID env var).  The coalition ID
 # maps to a specific subset of sectors via shapley_utils.R.
-# Sources 12C_predict_species_bcr.R, which defines predict_species_bcr() — the core
-# function that builds the coalition mask, runs joint BRT x BART sampling, and returns
-# subbasin-level density tables. This script then aggregates those tables to BCR-wide
-# population totals and writes density_tables/{species}_{year}_coalition_{id}.rds.
 #
 # Phase 1: Run 12A_observed.R to produce canonical observed bootstraps.
 # Phase 2: Run this script for each coalition x species combination.
