@@ -160,7 +160,7 @@ hirsh_dir <- file.path(ia_dir, "data", "raw_data", "hirshpearson")
 # full coalition (all sectors removed) + each of the 8 single-sector coalitions
 target_ids  <- c(
   sectors_to_coalition_id(sectors, sectors),
-  vapply(sectors, function(s) sectors_to_coalition_id(s, sectors), integer(1L))
+  vapply(sectors, function(s) sectors_to_coalition_id(s, sectors), numeric(1L))
 )
 save_arrays <- coalition_id %in% target_ids
 
