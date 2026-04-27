@@ -75,7 +75,7 @@ industry_rasters <- list.files(file.path(ia_dir, "data", "raw_data", "hirshpears
 industry_names  <- sub(".tif", "", basename(industry_rasters))
 industry_stack  <- setNames(lapply(industry_rasters, terra::rast), industry_names)
 
-source(file.path(ia_dir, "Rscripts", "shapley_utils.R"))
+source(file.path(ia_dir, "Rscripts", "12E_shapley_utils.R"))
 source(file.path(ia_dir, "Rscripts", "12C_predict_species_bcr.R"))
 
 

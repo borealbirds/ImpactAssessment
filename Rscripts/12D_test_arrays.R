@@ -5,7 +5,7 @@
 suppressPackageStartupMessages(library(dplyr))
 suppressPackageStartupMessages(library(tibble))
 
-source(file.path(getwd(), "Rscripts", "shapley_utils.R"))
+source(file.path(getwd(), "Rscripts", "12E_shapley_utils.R"))
 
 pass <- function(msg) cat(sprintf("  PASS  %s\n", msg))
 fail <- function(msg) stop(sprintf("  FAIL  %s", msg))

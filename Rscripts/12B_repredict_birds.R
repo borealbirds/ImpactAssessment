@@ -4,7 +4,7 @@
 # ---
 # Entry point for SLURM array jobs. Each job processes one species for one
 # coalition of sectors (specified by COALITION_ID env var). The coalition ID
-# maps to a specific subset of sectors via shapley_utils.R.
+# maps to a specific subset of sectors via 12E_shapley_utils.R.
 #
 # With 8 sectors there are 2^8 = 256 coalitions (each sector is either in or
 # out: a binary choice). Running all 256 x N_species jobs produces one density
@@ -43,6 +43,14 @@ local <- FALSE   # TRUE = local RProject machine
 if (cc)            { ia_dir <- "/home/mannfred/scratch/impact_assessment" }
 if (!cc && local)  { ia_dir <- getwd() }
 if (!cc && !local) { ia_dir <- file.path("G:/Shared drives/BAM_NationalModels5", "data", "Extras", "sandbox_data", "impactassessment_sandbox") }
+
+.terra_tmp <- file.path(
+  Sys.getenv("SLURM_TMPDIR", unset = tempdir()),
+  paste0("terra_", Sys.getenv("SLURM_JOB_ID", unset = "local"),
+         "_", Sys.getenv("SLURM_ARRAY_TASK_ID", unset = "0"))
+)
+dir.create(.terra_tmp, recursive = TRUE, showWarnings = FALSE)
+terra::terraOptions(tempdir = .terra_tmp)
 
 
 # import data ------------------------------------------------------
@@ -121,7 +129,7 @@ disturbance_vars <-
 
 # import Shapley utilities and density prediction script -------------------------------------------------
 
-source(file.path(ia_dir, "Rscripts", "shapley_utils.R"))
+source(file.path(ia_dir, "Rscripts", "12E_shapley_utils.R"))
 source(file.path(ia_dir, "Rscripts", "12C_predict_species_bcr.R"))
 
 

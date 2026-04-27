@@ -40,7 +40,7 @@ if (!cc && !local) { ia_dir <- file.path("G:/Shared drives/BAM_NationalModels5",
 
 # ---- Source utilities --------------------------------------------------------
 
-source(file.path(ia_dir, "Rscripts", "shapley_utils.R"))
+source(file.path(ia_dir, "Rscripts", "12E_shapley_utils.R"))
 
 # ---- Paths -------------------------------------------------------------------
 
