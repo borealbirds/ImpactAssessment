@@ -1,5 +1,5 @@
 # ---
-# title: 2x2 figure: Detour Lake Mine — satellite + CanHF | SCANFIheight_1km observed + backfilled
+# title: 2x3 figure: Detour Lake Mine — context | satellite | CanHF / observed | backfilled | uncertainty
 # author: Mannfred Boehm
 # ---
 #
@@ -45,6 +45,9 @@ draw_layers  <- grep("^SCANFIheight_1km_draw_", names(backfill_stack), value = T
 biomass_bf   <- app(backfill_stack[[draw_layers]], function(x) mean(expm1(x))) |>
   project(y = cov_stack, method = "bilinear") |>
   crop(y = aoi)
+biomass_sd   <- app(backfill_stack[[draw_layers]], function(x) sd(expm1(x))) |>
+  project(y = cov_stack, method = "bilinear") |>
+  crop(y = aoi)
 
 # --- Backfill-eligible pixels: highhf_mask intersected with subbasin 598 ---
 highhf_mask   <- rast(file.path(ia_dir, "data", "raw_data", "hirshpearson", "CanHF_1km_morethan1.tif"))
@@ -54,106 +57,16 @@ subbasin_598  <- project(all_subbasins[599], cov_stack)
 highhf_proj   <- project(highhf_mask, cov_stack, method = "near")
 highhf_s598   <- crop(mask(highhf_proj, subbasin_598), aoi)  # 1 on eligible pixels, NA elsewhere
 
-# --- Top-left: Satellite imagery ---
-sat <- get_tiles(
-  x        = project(aoi_poly, "EPSG:4326"),
-  provider = "Esri.WorldImagery",
-  zoom     = 13,
-  crop     = TRUE
+# Mask SD to backfill-eligible pixels only
+biomass_sd <- mask(biomass_sd, highhf_s598)
+
+# --- Top-left: Regional context satellite (~2000 km × 2000 km, southern extent ~43°N) ---
+south_pt     <- project(
+  vect(matrix(c(-79.70081, 43.0), nrow = 1, dimnames = list(NULL, c("x", "y"))), crs = "EPSG:4326"),
+  "EPSG:5072"
 )
-sat <- project(sat, "EPSG:5072", method = "near") |> crop(y = aoi)
-
-# --- Top-middle: CanHF_1km (full) ---
-canhf <- cov_stack[["CanHF_1km"]] |> crop(y = aoi)
-
-# --- Bottom panels: SCANFIheight_1km observed and backfilled composite ---
-biomass_obs       <- cov_stack[["SCANFIheight_1km"]] |> crop(y = aoi)
-biomass_composite <- cover(biomass_bf, biomass_obs)  # backfilled on eligible pixels, observed elsewhere
-
-val_range_biomass <- range(c(values(biomass_obs, na.rm = TRUE), values(biomass_composite, na.rm = TRUE)))
-
-# --- Build panels ---
-# Scale bar geometry in EPSG:5072 coordinates (5 km = 5000 m)
-sb_x0  <- cx - 7000
-sb_x1  <- sb_x0 + 5000
-sb_y   <- cy - 6800
-tick_h <- 200
-
-p_sat <- ggplot() +
-  geom_spatraster_rgb(data = sat) +
-  annotate("segment",
-           x = sb_x0, xend = sb_x1, y = sb_y, yend = sb_y,
-           colour = "white", linewidth = 0.8) +
-  annotate("segment",
-           x = sb_x0, xend = sb_x0, y = sb_y - tick_h, yend = sb_y + tick_h,
-           colour = "white", linewidth = 0.8) +
-  annotate("segment",
-           x = sb_x1, xend = sb_x1, y = sb_y - tick_h, yend = sb_y + tick_h,
-           colour = "white", linewidth = 0.8) +
-  annotate("text",
-           x = (sb_x0 + sb_x1) / 2, y = sb_y - 450,
-           label = "5 km", colour = "white", size = 3.2, vjust = 1) +
-  labs(title = "Detour Lake Mine") +
-  coord_sf(crs = "EPSG:5072") +
-  theme_void() +
-  theme(plot.title = element_text(size = 11, hjust = 0.5))
-
-p_hf <- ggplot() +
-  geom_spatraster(data = canhf) +
-  scale_fill_viridis_c(
-    name      = "Human\nfootprint",
-    na.value  = NA,
-    option    = "A",
-    direction = -1
-  ) +
-  labs(title = "CanHF_1km, 2020") +
-  coord_sf(crs = "EPSG:5072") +
-  theme_void() +
-  theme(plot.title      = element_text(size = 11, hjust = 0.5),
-        legend.position = "right")
-
-p_obs <- ggplot() +
-  geom_spatraster(data = biomass_obs) +
-  scale_fill_viridis_c(
-    limits   = val_range_biomass,
-    name     = "prcC\n(%)",
-    na.value = NA,
-    option   = "D",
-    guide    = "none"
-  ) +
-  labs(title = "observed SCANFIheight_1km, 2020") +
-  coord_sf(crs = "EPSG:5072") +
-  theme_void() +
-  theme(plot.title = element_text(size = 11, hjust = 0.5))
-
-p_bf <- ggplot() +
-  geom_spatraster(data = biomass_composite) +
-  scale_fill_viridis_c(
-    limits   = val_range_biomass,
-    name     = "Mean\ntree height (m)",
-    na.value = NA,
-    option   = "D"
-  ) +
-  labs(title = "backfilled SCANFIheight_1km, 2020") +
-  coord_sf(crs = "EPSG:5072") +
-  theme_void() +
-  theme(plot.title      = element_text(size = 11, hjust = 0.5),
-        legend.position = "right")
-
-# --- Assemble 2x2 and save ---
-fig <- (p_sat | p_hf) / (p_obs | p_bf)
-
-ggsave(
-  filename = file.path(ia_dir, "output_figures", "figure_detour_lake_backfill.png"),
-  plot     = fig,
-  width    = 10,
-  height   = 10,
-  dpi      = 300
-)
-
-# --- Context map: ~2000 km × 2000 km centred on Detour Lake Mine ---
-half_ctx     <- 2e6  # 2,000,000 m → 4000 km total span
-aoi_ctx      <- ext(cx - half_ctx, cx + half_ctx, cy - half_ctx, cy + half_ctx)
+sy_ctx       <- crds(south_pt)[, "y"]
+aoi_ctx      <- ext(cx - 1e6, cx + 1e6, sy_ctx, sy_ctx + 2e6)
 aoi_ctx_poly <- as.polygons(aoi_ctx, crs = "EPSG:5072")
 
 sat_ctx <- get_tiles(
@@ -166,11 +79,10 @@ sat_ctx <- project(sat_ctx, "EPSG:5072", method = "near") |> crop(y = aoi_ctx)
 
 mine_pt <- data.frame(x = cx, y = cy)
 
-# Scale bar geometry for context map (500 km = 500,000 m)
-sb_x0_ctx  <- cx - 1750000
+sb_x0_ctx  <- cx - 900000
 sb_x1_ctx  <- sb_x0_ctx + 500000
-sb_y_ctx   <- cy - 1700000
-tick_h_ctx <- 50000
+sb_y_ctx   <- sy_ctx + 275000
+tick_h_ctx <- 25000
 
 p_ctx <- ggplot() +
   geom_spatraster_rgb(data = sat_ctx) +
@@ -186,16 +98,121 @@ p_ctx <- ggplot() +
            x = sb_x1_ctx, xend = sb_x1_ctx, y = sb_y_ctx - tick_h_ctx, yend = sb_y_ctx + tick_h_ctx,
            colour = "white", linewidth = 0.8) +
   annotate("text",
-           x = (sb_x0_ctx + sb_x1_ctx) / 2, y = sb_y_ctx - 112000,
-           label = "500 km", colour = "white", size = 3.2, vjust = 1) +
+           x = (sb_x0_ctx + sb_x1_ctx) / 2, y = sb_y_ctx - 56000,
+           label = "500 km", colour = "white", size = 6.4, vjust = 1) +
+  labs(title = "Detour Lake Mine") +
   coord_sf(crs = "EPSG:5072") +
   theme_void() +
-  theme(plot.title = element_text(size = 13, hjust = 0.5))
+  theme(plot.title = element_text(size = 20, hjust = 0.5))
+
+sat <- get_tiles(
+  x        = project(aoi_poly, "EPSG:4326"),
+  provider = "Esri.WorldImagery",
+  zoom     = 13,
+  crop     = TRUE
+)
+sat <- project(sat, "EPSG:5072", method = "near") |> crop(y = aoi)
+
+canhf <- cov_stack[["CanHF_1km"]] |> crop(y = aoi)
+
+biomass_obs       <- cov_stack[["SCANFIheight_1km"]] |> crop(y = aoi)
+biomass_composite <- cover(biomass_bf, biomass_obs)  # backfilled on eligible pixels, observed elsewhere
+
+val_range_biomass <- range(c(values(biomass_obs, na.rm = TRUE), values(biomass_composite, na.rm = TRUE), values(biomass_sd, na.rm = TRUE)))
+
+# --- Build panels ---
+# Scale bar geometry in EPSG:5072 coordinates (5 km = 5000 m)
+sb_x0  <- cx - 7000
+sb_x1  <- sb_x0 + 5000
+sb_y   <- cy - 5800
+tick_h <- 200
+
+p_sat <- ggplot() +
+  geom_spatraster_rgb(data = sat) +
+  annotate("segment",
+           x = sb_x0, xend = sb_x1, y = sb_y, yend = sb_y,
+           colour = "white", linewidth = 0.8) +
+  annotate("segment",
+           x = sb_x0, xend = sb_x0, y = sb_y - tick_h, yend = sb_y + tick_h,
+           colour = "white", linewidth = 0.8) +
+  annotate("segment",
+           x = sb_x1, xend = sb_x1, y = sb_y - tick_h, yend = sb_y + tick_h,
+           colour = "white", linewidth = 0.8) +
+  annotate("text",
+           x = (sb_x0 + sb_x1) / 2, y = sb_y - 450,
+           label = "5 km", colour = "white", size = 6.4, vjust = 1) +
+  labs(title = "Detour Lake Mine") +
+  coord_sf(crs = "EPSG:5072") +
+  theme_void() +
+  theme(plot.title = element_text(size = 20, hjust = 0.5))
+
+p_hf <- ggplot() +
+  geom_spatraster(data = canhf) +
+  scale_fill_viridis_c(
+    name      = "Human\nfootprint",
+    na.value  = NA,
+    option    = "A",
+    direction = -1
+  ) +
+  labs(title = "Human Footprint Score, 2020") +
+  coord_sf(crs = "EPSG:5072") +
+  theme_void() +
+  theme(plot.title      = element_text(size = 20, hjust = 0.5),
+        legend.position = "right",
+        legend.title    = element_text(size = 14),
+        legend.text     = element_text(size = 12))
+
+p_obs <- ggplot() +
+  geom_spatraster(data = biomass_obs) +
+  scale_fill_viridis_c(
+    limits   = val_range_biomass,
+    name     = "Tree height (m)",
+    na.value = NA,
+    option   = "D",
+    guide    = "none"
+  ) +
+  labs(title = "Observed tree height, 2020") +
+  coord_sf(crs = "EPSG:5072") +
+  theme_void() +
+  theme(plot.title = element_text(size = 20, hjust = 0.5))
+
+p_bf <- ggplot() +
+  geom_spatraster(data = biomass_composite) +
+  scale_fill_viridis_c(
+    limits   = val_range_biomass,
+    name     = "Tree height (m)",
+    na.value = NA,
+    option   = "D",
+    guide    = "none"
+  ) +
+  labs(title = "Backfilled tree height, 2020") +
+  coord_sf(crs = "EPSG:5072") +
+  theme_void() +
+  theme(plot.title = element_text(size = 20, hjust = 0.5))
+
+p_uncert <- ggplot() +
+  geom_spatraster(data = biomass_sd) +
+  scale_fill_viridis_c(
+    limits   = val_range_biomass,
+    name     = "Tree height (m)",
+    na.value = NA,
+    option   = "D"
+  ) +
+  labs(title = "Backfill uncertainty") +
+  coord_sf(crs = "EPSG:5072") +
+  theme_void() +
+  theme(plot.title      = element_text(size = 20, hjust = 0.5),
+        legend.position = "right",
+        legend.title    = element_text(size = 14),
+        legend.text     = element_text(size = 12))
+
+# --- Assemble 2x3 and save ---
+fig <- (p_ctx | p_sat | p_hf) / (p_obs | p_bf | p_uncert)
 
 ggsave(
-  filename = file.path(ia_dir, "output_figures", "figure_detour_lake_context.png"),
-  plot     = p_ctx,
-  width    = 8,
-  height   = 8,
+  filename = file.path(ia_dir, "output_figures", "figure_detour_lake_backfill.png"),
+  plot     = fig,
+  width    = 15,
+  height   = 10,
   dpi      = 300
 )
