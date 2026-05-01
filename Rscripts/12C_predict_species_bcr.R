@@ -105,6 +105,8 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
           obs_on_coalition_mean  = 0, obs_on_coalition_sd  = 0,
           bf_on_coalition_mean   = 0, bf_on_coalition_sd   = 0
         ),
+        n_dropped   = 0L,
+        n_sector_px = 0L,
         arrays = NULL
       ))
     }
@@ -208,6 +210,8 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
     bf_preds <- vector("list", n_boot)
     for (i in seq_len(n_boot)) bf_preds[[i]] <- vector("list", n_scen)
 
+    n_dropped_bcr <- NA_integer_  # captured on first (i=1, k=1) iteration
+
     for (i in seq_along(b.list)) {
       model <- b.list[[i]]
 
@@ -228,6 +232,14 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
         # LandbirdModelsV5/analysis/12.Summarize.R (sum(na.rm=TRUE) excludes
         # NA pixels from population totals).
         complete_rows <- complete.cases(X_k[, model$var.names, drop = FALSE])
+
+        # capture drop count on the first iteration; NA pattern is stable across
+        # (i, k) because NAs come from fixed sources (X_obs_sector non-overwritten
+        # columns; BART draws and categorical values are already clamped/non-NA).
+        if (i == 1L && k == 1L) {
+          n_dropped_bcr <- sum(!complete_rows)
+        }
+
         pred_vec <- rep(NA_real_, nrow(X_k))
         if (any(complete_rows)) {
           pred_vec[complete_rows] <- gbm::predict.gbm(
@@ -241,6 +253,13 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
               " | finished predict() on backfilled landscape")
       gc()
     }
+
+    message(sprintf(
+      "%s | %s %s | incomplete-case pixels dropped: %d / %d (%.1f%%)",
+      Sys.time(), species, bcr_code,
+      n_dropped_bcr, length(sector_cell_idx),
+      100 * n_dropped_bcr / max(length(sector_cell_idx), 1L)
+    ))
 
     # ---- Save backfilled prediction rasters (mean/SD) for optional inspection ----
 
@@ -361,7 +380,9 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
 
     message(Sys.time(), " | ", species, " ", bcr_code, " | returning ", nrow(out), " rows")
     list(
-      table  = out,
+      table       = out,
+      n_dropped   = n_dropped_bcr,
+      n_sector_px = length(sector_cell_idx),
       arrays = if (save_arrays) list(
         obs_total_mat   = pop_lists$bcr_obs_total_mat,
         obs_on_coal_mat = pop_lists$bcr_obs_on_coal_mat,
@@ -372,6 +393,16 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
   })
 
   results_nonnull <- Filter(Negate(is.null), results)
+
+  # species-wide dropped pixel summary (printed at end of each species job)
+  total_dropped   <- sum(vapply(results_nonnull, function(r) if (is.null(r$n_dropped))   0L else r$n_dropped,   integer(1L)))
+  total_sector_px <- sum(vapply(results_nonnull, function(r) if (is.null(r$n_sector_px)) 0L else r$n_sector_px, integer(1L)))
+  message(sprintf(
+    "%s | DROPPED PIXEL SUMMARY | species=%s coalition_id=%d | BCRs=%d | total_coalition_px=%d | dropped=%d (%.1f%%)",
+    Sys.time(), species, coalition_id, length(results_nonnull),
+    total_sector_px, total_dropped,
+    100 * total_dropped / max(total_sector_px, 1L)
+  ))
 
   national_arrays <- if (save_arrays) {
     mats <- Filter(Negate(is.null), lapply(results_nonnull, `[[`, "arrays"))
