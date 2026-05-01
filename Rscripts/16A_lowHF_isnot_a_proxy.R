@@ -207,13 +207,7 @@ for (idx_i in seq_along(subbasin_index)) {
   arrow_df2$pc1s <- arrow_df2$pc1 * max(pca_df$pc1)
   arrow_df2$pc2s <- arrow_df2$pc2 * max(pca_df$pc2)
 
-  # overlap metric 1: mean RF P(high) for high-HF pixels
-  rf_probs_high  <- predict(m2,
-                            data = df_s[df_s$group == "high", setdiff(names(df_s), "group")],
-                            type = "response")$predictions[, "high"]
-  mean_prob_high <- mean(rf_probs_high, na.rm = TRUE)
-
-  # overlap metric 2: fraction of high-HF pixels outside 95th-pctile KDE envelope of low-HF
+  # overlap metric: fraction of high-HF pixels outside 95th-pctile KDE envelope of low-HF
   lo_pcs <- pca_df[pca_df$group == "low",  c("pc1", "pc2")]
   hi_pcs <- pca_df[pca_df$group == "high", c("pc1", "pc2")]
   kde_lo <- MASS::kde2d(lo_pcs$pc1, lo_pcs$pc2, n = 100,
@@ -240,7 +234,6 @@ for (idx_i in seq_along(subbasin_index)) {
     top_vars       = top_vars,
     pca_df         = pca_df,
     arrow_df2      = arrow_df2,
-    mean_prob_high = mean_prob_high,
     frac_outside   = frac_outside
   )
 
@@ -278,14 +271,29 @@ summary_df <- map_df(results, function(res) {
     n_high         = res$n_high,
     n_low          = res$n_low,
     oob_error      = m1$prediction.error,
-    mean_prob_high = res$mean_prob_high,   # mean RF P(high) for high-HF pixels; 0.5 = chance
-    frac_outside   = res$frac_outside      # fraction of high-HF pixels outside 95th-pctile KDE envelope of low-HF
+    frac_outside   = res$frac_outside
   ) %>%
     bind_cols(top_tbl)
 })
 
 saveRDS(summary_df, file.path(getwd(), "data/derived_data/rds_files/rf_summary.rds"))
 write.csv(summary_df, file.path(getwd(), "data/derived_data/rf_summary.csv"), row.names = FALSE)
+
+# manuscript summary statistics
+cat(sprintf("n_low:           %.1f +/- %.1f (range: %d-%d)\n",
+            mean(summary_df$n_low), sd(summary_df$n_low),
+            min(summary_df$n_low),  max(summary_df$n_low)))
+cat(sprintf("n_high:          %.1f +/- %.1f (range: %d-%d)\n",
+            mean(summary_df$n_high), sd(summary_df$n_high),
+            min(summary_df$n_high),  max(summary_df$n_high)))
+cat(sprintf("OOB error:       %.3f +/- %.3f (range: %.3f-%.3f)\n",
+            mean(summary_df$oob_error), sd(summary_df$oob_error),
+            min(summary_df$oob_error),  max(summary_df$oob_error)))
+cat(sprintf("Frac outside:    %.3f +/- %.3f (range: %.3f-%.3f)\n",
+            mean(summary_df$frac_outside), sd(summary_df$frac_outside),
+            min(summary_df$frac_outside),  max(summary_df$frac_outside)))
+cat("\nTop-1 predictor frequency across subbasins:\n")
+print(sort(table(summary_df$top1), decreasing = TRUE))
 
 # ---------------------------------------------------
 # visualize embedding space per subbasin
