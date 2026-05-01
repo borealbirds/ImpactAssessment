@@ -164,12 +164,14 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
     # before they can reach gbm's C prediction code, which cannot handle non-finite inputs.
     draw_vals_sector <- setNames(
       lapply(draw_covs, function(v) {
-        sapply(seq_len(n_draws), function(d) {
-          lyr_vals <- terra::values(stack_bf[[paste0(v, "_draw_", sprintf("%03d", d))]], mat = FALSE)
-          vals <- expm1(lyr_vals[sector_cell_idx])
-          vals[!is.finite(vals)] <- 0
-          pmax(vals, 0)
-        })
+        lyr_names <- paste0(v, "_draw_", sprintf("%03d", seq_len(n_draws)))
+        lyr_names <- intersect(lyr_names, names(stack_bf))
+        mat_raw   <- terra::values(stack_bf[[lyr_names]], mat = TRUE)
+        mat_sec   <- mat_raw[sector_cell_idx, , drop = FALSE]
+        rm(mat_raw)
+        mat_sec   <- expm1(mat_sec)
+        mat_sec[!is.finite(mat_sec)] <- 0
+        pmax(mat_sec, 0)
       }),
       draw_covs
     )
@@ -221,8 +223,18 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
         for (v in cat_vars_shared) { if (v %in% names(X_k)) X_k[[v]] <- cat_vals_sector[[v]] }
         for (v in dist_shared)     { if (v %in% names(X_k)) X_k[[v]] <- 0 }
 
-        bf_preds[[i]][[k]] <- gbm::predict.gbm(
-          model, X_k, n.trees = model$n.trees, type = "response")
+        # Exclude NA rows before prediction: gbm's C code segfaults on NAs.
+        # Consistent with terra::predict() (propagates NAs) and
+        # LandbirdModelsV5/analysis/12.Summarize.R (sum(na.rm=TRUE) excludes
+        # NA pixels from population totals).
+        complete_rows <- complete.cases(X_k[, model$var.names, drop = FALSE])
+        pred_vec <- rep(NA_real_, nrow(X_k))
+        if (any(complete_rows)) {
+          pred_vec[complete_rows] <- gbm::predict.gbm(
+            model, X_k[complete_rows, , drop = FALSE],
+            n.trees = model$n.trees, type = "response")
+        }
+        bf_preds[[i]][[k]] <- pred_vec
       }
 
       message(Sys.time(), " | ", species, " ", bcr_code, " bootstrap=", i,
