@@ -312,9 +312,23 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
       valid_px         <- !is.na(sector_zones)
       sector_zones_flt <- sector_zones[valid_px]
 
+      # Cap per-pixel BRT predictions at the maximum of the packaged mean raster.
+      # Follows LandbirdModelsV5/analysis/12.Summarize.R, which uses the max of
+      # 10.Package.R's cleaned mean layer as a species- and BCR-specific upper bound.
+      # Falls back to Inf (no-op clamp) if the packaged raster is unavailable.
+      pkg_path <- file.path(nm_root, "output", "10_packaged", species, bcr_code,
+                            paste0(species, "_", bcr_code, "_", year, ".tif"))
+      q99 <- if (file.exists(pkg_path)) {
+        terra::global(terra::rast(pkg_path)[["mean"]], max, na.rm = TRUE)[, 1]
+      } else {
+        message("  WARNING: packaged raster not found for ", species, " ", bcr_code,
+                " ", year, " — skipping prediction cap")
+        Inf
+      }
+
       for (i in seq_len(n_boot)) {
 
-        obs_r     <- obs_rasters[[i]] * 100
+        obs_r     <- terra::clamp(obs_rasters[[i]], upper = q99) * 100
         obs_on_fp <- terra::mask(obs_r, sector_mask)
 
         sub_obs_total <- terra::zonal(obs_r,     subbasin_zone_r, "sum", na.rm = TRUE)

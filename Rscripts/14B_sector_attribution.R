@@ -151,6 +151,8 @@ for (sy in seq_len(nrow(species_years))) {
 
       impact_mean <- dt$bf_on_coalition_mean[r] - dt$obs_on_coalition_mean[r]
       impact_sd   <- sqrt(dt$bf_on_coalition_sd[r]^2 + dt$obs_on_coalition_sd[r]^2)
+      if (is.nan(impact_mean)) impact_mean <- 0
+      if (is.nan(impact_sd))   impact_sd   <- 0
 
       v_mean_mat[key, as.character(cid)] <- impact_mean
       v_sd_mat[key, as.character(cid)]   <- impact_sd
