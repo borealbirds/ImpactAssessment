@@ -136,7 +136,8 @@ source(file.path(ia_dir, "Rscripts", "12C_predict_species_bcr.R"))
 
 # run one species on one core ------------------------------------------------------
 
-species_vec <- sort(c("BANS", "BARS", "BOBO", "CAWA", "EAWP", "EVGR", "GCTH", "GRSP", "GWWA", "LEYE", "OSFL"))
+species_vec <- c("CAWA")
+# species_vec <- sort(c("BANS", "BARS", "BOBO", "CAWA", "EAWP", "EVGR", "GCTH", "GRSP", "GWWA", "LEYE", "OSFL"))
 # species_vec <- sort(list.dirs(file.path(nm_root, "output/06_bootstraps"), full.names = FALSE, recursive = FALSE))
 year <- 2020
 

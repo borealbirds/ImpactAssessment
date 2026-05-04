@@ -34,7 +34,8 @@ if (!cc && !local) { ia_dir <- file.path("G:/Shared drives/BAM_NationalModels5",
 
 # ---- Species from SLURM -----------------------------------------------------
 
-species_vec <- sort(c("BANS", "BARS", "BOBO", "CAWA", "EAWP", "EVGR", "GCTH", "GRSP", "GWWA", "LEYE", "OSFL"))
+species_vec <- c("CAWA")
+# species_vec <- sort(c("BANS", "BARS", "BOBO", "CAWA", "EAWP", "EVGR", "GCTH", "GRSP", "GWWA", "LEYE", "OSFL"))
 # species_vec <- sort(list.dirs(file.path(nm_root, "output/06_bootstraps"), full.names = FALSE, recursive = FALSE))
 task_id <- as.integer(Sys.getenv("SLURM_ARRAY_TASK_ID"))
 species <- species_vec[task_id]
