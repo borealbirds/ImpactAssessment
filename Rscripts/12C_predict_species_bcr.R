@@ -23,6 +23,9 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
   message(Sys.time(), " | preparing for species=", species, " year=", year,
           " coalition=", coalition_label)
 
+  qsp <- q.out[q.out$spp == species, ]$q
+  q0  <- l.out[l.out$spp == species, ]$denshthresh
+
   # find all models (BCRs) for the current `species`
   rdata_files <- list.files(file.path(nm_root,"output/06_bootstraps", species), pattern = "can.*\\.Rdata$", full.names = TRUE)
   message(Sys.time(), " | ", species, " | found ", length(rdata_files), " BCR models")
@@ -246,6 +249,7 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
             model, X_k[complete_rows, , drop = FALSE],
             n.trees = model$n.trees, type = "response")
         }
+        pred_vec <- pmin(pred_vec, qsp)
         bf_preds[[i]][[k]] <- pred_vec
       }
 
@@ -280,10 +284,19 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
       bf_sd_r   <- terra::rast(stack_obs[[1]]); terra::values(bf_sd_r)   <- NA_real_
       bf_mean_r[sector_cell_idx] <- bf_m_vec
       bf_sd_r[sector_cell_idx]   <- bf_sd_vec
+      rm(bf_m_vec, bf_sd_vec)
+
+      # secondary cap: 99.9th percentile of coalition-pixel means (step 7 of 10.Package.R)
+      q99_bf    <- terra::global(bf_mean_r, quantile, probs = 0.999, na.rm = TRUE)[1, 1]
+      bf_mean_r <- terra::clamp(bf_mean_r, upper = q99_bf)
+
+      # low threshold: zero pixels below denshthresh (step 9 of 10.Package.R)
+      bf_sd_r   <- terra::ifel(bf_mean_r < q0, 0, bf_sd_r)
+      bf_mean_r <- terra::ifel(bf_mean_r < q0, 0, bf_mean_r)
 
       terra::writeRaster(bf_mean_r, file.path(bf_dir, "backfilled_mean.tif"), overwrite = TRUE)
       terra::writeRaster(bf_sd_r,   file.path(bf_dir, "backfilled_sd.tif"),   overwrite = TRUE)
-      rm(bf_m_vec, bf_sd_vec, bf_mean_r, bf_sd_r); gc()
+      rm(bf_mean_r, bf_sd_r); gc()
     }
 
     # ---- Aggregate populations: subbasin-level (bottom-up) ----
@@ -312,23 +325,10 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
       valid_px         <- !is.na(sector_zones)
       sector_zones_flt <- sector_zones[valid_px]
 
-      # Cap per-pixel BRT predictions at the maximum of the packaged mean raster.
-      # Follows LandbirdModelsV5/analysis/12.Summarize.R, which uses the max of
-      # 10.Package.R's cleaned mean layer as a species- and BCR-specific upper bound.
-      # Falls back to Inf (no-op clamp) if the packaged raster is unavailable.
-      pkg_path <- file.path(nm_root, "output", "10_packaged", species, bcr_code,
-                            paste0(species, "_", bcr_code, "_", year, ".tif"))
-      q99 <- if (file.exists(pkg_path)) {
-        terra::global(terra::rast(pkg_path)[["mean"]], max, na.rm = TRUE)[, 1]
-      } else {
-        message("  WARNING: packaged raster not found for ", species, " ", bcr_code,
-                " ", year, " — skipping prediction cap")
-        Inf
-      }
-
       for (i in seq_len(n_boot)) {
 
-        obs_r     <- terra::clamp(obs_rasters[[i]], upper = q99) * 100
+        # obs_rasters are already qsp-clamped (saved that way by 12A_observed.R)
+        obs_r     <- obs_rasters[[i]] * 100
         obs_on_fp <- terra::mask(obs_r, sector_mask)
 
         sub_obs_total <- terra::zonal(obs_r,     subbasin_zone_r, "sum", na.rm = TRUE)

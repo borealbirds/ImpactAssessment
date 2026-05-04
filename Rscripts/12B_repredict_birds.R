@@ -55,6 +55,9 @@ terra::terraOptions(tempdir = .terra_tmp)
 
 # import data ------------------------------------------------------
 
+# prediction thresholds (q.out = high/qsp, l.out = low/denshthresh)
+load(file.path(ia_dir, "data", "raw_data", "SpeciesPredictionTruncationValues.Rdata"))
+
 # import BCR boundaries
 bam_boundary <- terra::vect(file.path(ia_dir, "data", "raw_data", "Regions", "BAM_BCR_NationalModel_Unbuffered.shp"))
 

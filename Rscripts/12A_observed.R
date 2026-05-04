@@ -32,6 +32,10 @@ if (!cc && local)  { ia_dir <- getwd() }
 if (!cc && !local) { ia_dir <- file.path("G:/Shared drives/BAM_NationalModels5", "data", "Extras",
                                           "sandbox_data", "impactassessment_sandbox") }
 
+# ---- Prediction thresholds --------------------------------------------------
+
+load(file.path(ia_dir, "data", "raw_data", "SpeciesPredictionTruncationValues.Rdata"))
+
 # ---- Species from SLURM -----------------------------------------------------
 
 species_vec <- c("CAWA")
@@ -40,6 +44,8 @@ species_vec <- c("CAWA")
 task_id <- as.integer(Sys.getenv("SLURM_ARRAY_TASK_ID"))
 species <- species_vec[task_id]
 year    <- 2020
+qsp <- q.out[q.out$spp == species, ]$q
+q0  <- l.out[l.out$spp == species, ]$denshthresh
 
 message(Sys.time(), " | observed predictions for species=", species)
 
@@ -48,21 +54,6 @@ message(Sys.time(), " | observed predictions for species=", species)
 rdata_files <- list.files(file.path(nm_root, "output/06_bootstraps", species),
                           pattern = "can.*\\.Rdata$", full.names = TRUE)
 message(Sys.time(), " | found ", length(rdata_files), " BCR models")
-
-# ---- Helper: incremental mean/sd --------------------------------------------
-
-summarize_preds <- function(pred_list) {
-  n <- length(pred_list)
-  mean_r <- pred_list[[1]]
-  m2_r   <- mean_r * 0
-  for (i in seq_len(n)) {
-    x <- pred_list[[i]]
-    delta <- x - mean_r
-    mean_r <- mean_r + delta / i
-    m2_r <- m2_r + delta * (x - mean_r)
-  }
-  list(mean = mean_r, sd = sqrt(m2_r / (n - 1)))
-}
 
 # ---- Loop over BCRs ---------------------------------------------------------
 
@@ -102,30 +93,31 @@ for (rdata_path in rdata_files) {
     gc()
   }
 
-  # Cap per-pixel BRT predictions at the maximum of the packaged mean raster.
-  # Follows LandbirdModelsV5/analysis/12.Summarize.R, which uses the max of
-  # 10.Package.R's cleaned mean layer as a species- and BCR-specific upper bound.
-  pkg_path <- file.path(nm_root, "output", "10_packaged", species, bcr_code,
-                        paste0(species, "_", bcr_code, "_", year, ".tif"))
-  q99 <- if (file.exists(pkg_path)) {
-    terra::global(terra::rast(pkg_path)[["mean"]], max, na.rm = TRUE)[, 1]
-  } else {
-    message("  WARNING: packaged raster not found for ", species, " ", bcr_code,
-            " ", year, " — skipping prediction cap")
-    Inf
-  }
-  obs_preds <- lapply(obs_preds, function(r) terra::clamp(r, upper = q99))
+  # Step 5 of 10.Package.R: clamp each bootstrap at the species-specific quantile
+  obs_preds <- lapply(obs_preds, function(r) terra::clamp(r, upper = qsp))
 
-  # save full bootstrap stack + summary rasters
+  # save bootstrap stack (qsp-clamped; read by 12B/12C)
   dir.create(obs_dir, recursive = TRUE, showWarnings = FALSE)
   terra::writeRaster(rast(obs_preds), obs_boot_path, overwrite = TRUE)
 
-  obs_summary <- summarize_preds(obs_preds)
-  terra::writeRaster(obs_summary$mean, file.path(obs_dir, "observed_mean.tif"), overwrite = TRUE)
-  terra::writeRaster(obs_summary$sd,   file.path(obs_dir, "observed_sd.tif"),   overwrite = TRUE)
+  # Steps 6-7: mean, then secondary cap at 99.9th percentile of mean
+  obs_stack <- terra::rast(obs_preds)
+  mn_r  <- terra::app(obs_stack, mean, na.rm = TRUE)
+  q99_r <- terra::global(mn_r, quantile, probs = 0.999, na.rm = TRUE)[1, 1]
+  mn2_r <- terra::clamp(mn_r, upper = q99_r)
+
+  # Step 8: SD from bootstraps also clamped at q99
+  sd_r  <- terra::app(terra::clamp(obs_stack, upper = q99_r), sd, na.rm = TRUE)
+
+  # Step 9: zero pixels below denshthresh
+  mean_out <- terra::ifel(mn2_r < q0, 0, mn2_r)
+  sd_out   <- terra::ifel(mn2_r < q0, 0, sd_r)
+
+  terra::writeRaster(mean_out, file.path(obs_dir, "observed_mean.tif"), overwrite = TRUE)
+  terra::writeRaster(sd_out,   file.path(obs_dir, "observed_sd.tif"),   overwrite = TRUE)
 
   message(Sys.time(), " | ", bcr_code, " | done")
-  rm(b.list, stack_obs, X_obs, obs_preds, obs_summary, e)
+  rm(b.list, stack_obs, X_obs, obs_preds, obs_stack, mn_r, q99_r, mn2_r, sd_r, mean_out, sd_out, e)
   gc()
 }
 
