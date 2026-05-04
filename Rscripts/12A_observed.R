@@ -101,6 +101,20 @@ for (rdata_path in rdata_files) {
     gc()
   }
 
+  # Cap per-pixel BRT predictions at the maximum of the packaged mean raster.
+  # Follows LandbirdModelsV5/analysis/12.Summarize.R, which uses the max of
+  # 10.Package.R's cleaned mean layer as a species- and BCR-specific upper bound.
+  pkg_path <- file.path(nm_root, "output", "10_packaged", species, bcr_code,
+                        paste0(species, "_", bcr_code, "_", year, ".tif"))
+  q99 <- if (file.exists(pkg_path)) {
+    terra::global(terra::rast(pkg_path)[["mean"]], max, na.rm = TRUE)[, 1]
+  } else {
+    message("  WARNING: packaged raster not found for ", species, " ", bcr_code,
+            " ", year, " — skipping prediction cap")
+    Inf
+  }
+  obs_preds <- lapply(obs_preds, function(r) terra::clamp(r, upper = q99))
+
   # save full bootstrap stack + summary rasters
   dir.create(obs_dir, recursive = TRUE, showWarnings = FALSE)
   terra::writeRaster(rast(obs_preds), obs_boot_path, overwrite = TRUE)
