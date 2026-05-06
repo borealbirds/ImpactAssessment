@@ -3,7 +3,7 @@
 # author: Mannfred Boehm
 # ---
 # Run ONCE per species (SLURM array over species) BEFORE any coalition runs.
-# For each BCR that the species has a BRT model for, read the colleague's
+# For each BCR that the species has a BRT model for, read Elly's
 # pre-computed unclamped 32-bootstrap prediction surfaces from
 #   nm_root/output/07_predictions/{species}/{species}_{bcr_code}_{year}.tif
 # apply the species-specific prediction thresholds (Steps 5-9 of 10.Package.R),
