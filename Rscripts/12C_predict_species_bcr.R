@@ -188,9 +188,19 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
     )
 
     # pre-extract categorical backfilled values at coalition pixels (constant across scenarios)
+    # Fall back to _mean layer when base name absent: subbasins where the categorical var was
+    # constant (only 1 training class) hit the 08A constant branch, which wrote _mean/_sd
+    # instead of the base name that deploy_mbart() would have used.
     cat_vals_sector <- setNames(
-      lapply(cat_vars_shared, function(v)
-        terra::values(stack_bf[[v]], mat = FALSE)[sector_cell_idx]),
+      lapply(cat_vars_shared, function(v) {
+        lyr_name <- if (v %in% names(stack_bf)) v else paste0(v, "_mean")
+        if (!lyr_name %in% names(stack_bf)) {
+          message(Sys.time(), " | WARNING: no backfilled layer found for categorical var ",
+                  v, " — filling with NA")
+          return(rep(NA_integer_, length(sector_cell_idx)))
+        }
+        terra::values(stack_bf[[lyr_name]], mat = FALSE)[sector_cell_idx]
+      }),
       cat_vars_shared
     )
 
@@ -198,17 +208,20 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
     obs_dir <- file.path(ia_dir, "data", "derived_data", "predictions", species, bcr_code, year)
     obs_boot_path <- file.path(obs_dir, "observed_bootstraps.tif")
 
-    if (!file.exists(obs_boot_path)) {
-      stop("Canonical observed bootstraps not found at ", obs_boot_path,
-           "\nRun 12_observed.R first (sbatch 12_observed.sh)")
+    obs_available <- file.exists(obs_boot_path)
+    if (obs_available) {
+      obs_boot_stack <- terra::rast(obs_boot_path)
+      n_boot  <- terra::nlyr(obs_boot_stack)
+      obs_preds <- lapply(seq_len(n_boot), function(i) obs_boot_stack[[i]])
+      rm(obs_boot_stack)
+      message(Sys.time(), " | ", species, " ", bcr_code,
+              " | loaded ", n_boot, " canonical observed bootstraps")
+    } else {
+      obs_preds <- NULL
+      n_boot    <- length(b.list)
+      message(Sys.time(), " | ", species, " ", bcr_code,
+              " | observed bootstraps not found — bf-only mode (run 12D_combine.R after 12A)")
     }
-
-    obs_boot_stack <- terra::rast(obs_boot_path)
-    n_boot <- terra::nlyr(obs_boot_stack)
-    obs_preds <- lapply(seq_len(n_boot), function(i) obs_boot_stack[[i]])
-    rm(obs_boot_stack)
-    message(Sys.time(), " | ", species, " ", bcr_code,
-            " | loaded ", n_boot, " canonical observed bootstraps")
 
     # --- Joint sampling: nest BART posterior scenario inside BRT bootstrap ---
     # Each (bootstrap, scenario) pair draws a fresh BART posterior realization
@@ -322,66 +335,71 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
     agg <- function(obs_rasters, bf_vecs_list, sub_ids, sector_mask,
                     subbasin_zone_r, sector_zones, save_arrays = FALSE) {
 
+      obs_avail <- !is.null(obs_rasters)
       n_sub  <- length(sub_ids)
-      n_boot <- length(obs_rasters)
+      n_boot <- if (obs_avail) length(obs_rasters) else length(bf_vecs_list)
       n_scen <- length(bf_vecs_list[[1]])
 
-      # subbasin-level arrays: dimensions = subbasin x bootstrap x scenario
-      pop_obs_total_arr     <- array(NA, dim = c(n_sub, n_boot, n_scen))
-      pop_obs_on_coal_arr   <- array(NA, dim = c(n_sub, n_boot, n_scen))
-      pop_bf_on_coal_arr    <- array(NA, dim = c(n_sub, n_boot, n_scen))
+      pop_bf_on_coal_arr <- array(NA_real_, dim = c(n_sub, n_boot, n_scen))
+      if (obs_avail) {
+        pop_obs_total_arr   <- array(NA_real_, dim = c(n_sub, n_boot, n_scen))
+        pop_obs_on_coal_arr <- array(NA_real_, dim = c(n_sub, n_boot, n_scen))
+      }
 
-      # precompute zone alignment: zonal() returns zones sorted by value
       zone_ids  <- sort(unique(terra::values(subbasin_zone_r, na.rm = TRUE)))
       hybas_ids <- all_subbasins_subset$first_HYBAS_ID[sub_ids]
       idx       <- match(hybas_ids, zone_ids)
 
-      # pre-filter sector pixels that fall within a subbasin
       valid_px         <- !is.na(sector_zones)
       sector_zones_flt <- sector_zones[valid_px]
 
       for (i in seq_len(n_boot)) {
 
-        # obs_rasters are already qsp-clamped (saved that way by 12A_observed.R)
-        obs_r     <- obs_rasters[[i]] * 100
-        obs_on_fp <- terra::mask(obs_r, sector_mask)
-
-        sub_obs_total <- terra::zonal(obs_r,     subbasin_zone_r, "sum", na.rm = TRUE)
-        sub_obs_on_fp <- terra::zonal(obs_on_fp, subbasin_zone_r, "sum", na.rm = TRUE)
+        if (obs_avail) {
+          obs_r     <- obs_rasters[[i]] * 100
+          obs_on_fp <- terra::mask(obs_r, sector_mask)
+          sub_obs_total <- terra::zonal(obs_r,     subbasin_zone_r, "sum", na.rm = TRUE)
+          sub_obs_on_fp <- terra::zonal(obs_on_fp, subbasin_zone_r, "sum", na.rm = TRUE)
+        }
 
         for (s in seq_len(n_scen)) {
 
           bf_vals <- bf_vecs_list[[i]][[s]] * 100
 
-          # aggregate bf values by subbasin zone using tapply
           bf_by_zone  <- tapply(bf_vals[valid_px], sector_zones_flt, sum, na.rm = TRUE)
           sub_bf_vals <- as.numeric(bf_by_zone[match(hybas_ids, names(bf_by_zone))])
           sub_bf_vals[is.na(sub_bf_vals)] <- 0
 
-          pop_obs_total_arr[, i, s]   <- sub_obs_total[[2]][idx]
-          pop_obs_on_coal_arr[, i, s] <- sub_obs_on_fp[[2]][idx]
-          pop_bf_on_coal_arr[, i, s]  <- sub_bf_vals
+          pop_bf_on_coal_arr[, i, s] <- sub_bf_vals
 
+          if (obs_avail) {
+            pop_obs_total_arr[, i, s]   <- sub_obs_total[[2]][idx]
+            pop_obs_on_coal_arr[, i, s] <- sub_obs_on_fp[[2]][idx]
+          }
         }
       }
 
-      # collapse boot x scenario into mean and SD per subbasin
       combine_stats <- function(x) {
         mat <- matrix(x, nrow = n_sub, ncol = n_boot * n_scen)
         list(mean = rowMeans(mat, na.rm = TRUE),
              sd   = apply(mat, 1, sd, na.rm = TRUE))
       }
 
-      out <- list(
-        pop_obs_total   = combine_stats(pop_obs_total_arr),
-        pop_obs_on_coal = combine_stats(pop_obs_on_coal_arr),
-        pop_bf_on_coal  = combine_stats(pop_bf_on_coal_arr)
-      )
+      out <- list(pop_bf_on_coal = combine_stats(pop_bf_on_coal_arr))
+
+      if (obs_avail) {
+        out$pop_obs_total   <- combine_stats(pop_obs_total_arr)
+        out$pop_obs_on_coal <- combine_stats(pop_obs_on_coal_arr)
+        if (save_arrays) {
+          out$bcr_obs_total_mat   <- apply(pop_obs_total_arr,   c(2L, 3L), sum, na.rm = TRUE)
+          out$bcr_obs_on_coal_mat <- apply(pop_obs_on_coal_arr, c(2L, 3L), sum, na.rm = TRUE)
+        }
+      } else {
+        out$pop_bf_on_coal_arr <- pop_bf_on_coal_arr
+      }
 
       if (save_arrays) {
-        out$bcr_obs_total_mat   <- apply(pop_obs_total_arr,   c(2L, 3L), sum, na.rm = TRUE)
-        out$bcr_obs_on_coal_mat <- apply(pop_obs_on_coal_arr, c(2L, 3L), sum, na.rm = TRUE)
-        out$bcr_bf_on_coal_mat  <- apply(pop_bf_on_coal_arr,  c(2L, 3L), sum, na.rm = TRUE)
+        out$bcr_bf_on_coal_mat <- apply(pop_bf_on_coal_arr, c(2L, 3L), sum, na.rm = TRUE)
       }
 
       out
@@ -393,16 +411,31 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
     rm(obs_preds, bf_preds, stack_obs, stack_bf)
     gc()
 
-    # return subbasin-level tibble (no BCR scalars — 15B aggregates upward)
+    # in bf-only mode, save the raw subbasin array so 12D_combine.R can fill in obs columns
+    if (!obs_available) {
+      bf_arr_dir <- file.path(ia_dir, "data", "derived_data", "bf_arrays",
+                              as.character(coalition_id), species)
+      dir.create(bf_arr_dir, recursive = TRUE, showWarnings = FALSE)
+      saveRDS(
+        list(pop_bf_on_coal_arr = pop_lists$pop_bf_on_coal_arr,
+             sub_ids            = sub_ids,
+             n_dropped_bcr      = n_dropped_bcr,
+             n_sector_px        = length(sector_cell_idx)),
+        file.path(bf_arr_dir, paste0(bcr_code, ".rds"))
+      )
+      message(Sys.time(), " | ", species, " ", bcr_code, " | saved bf_arrays intermediate")
+    }
+
+    # obs columns are NA in bf-only mode; 12D_combine.R fills them after 12A runs
     out <- tibble(
       species  = species,
       subbasin = sub_ids,
       bcr      = bcr_code,
       coalition_id          = coalition_id,
-      obs_total_mean        = pop_lists$pop_obs_total$mean,
-      obs_total_sd          = pop_lists$pop_obs_total$sd,
-      obs_on_coalition_mean = pop_lists$pop_obs_on_coal$mean,
-      obs_on_coalition_sd   = pop_lists$pop_obs_on_coal$sd,
+      obs_total_mean        = if (obs_available) pop_lists$pop_obs_total$mean   else NA_real_,
+      obs_total_sd          = if (obs_available) pop_lists$pop_obs_total$sd     else NA_real_,
+      obs_on_coalition_mean = if (obs_available) pop_lists$pop_obs_on_coal$mean else NA_real_,
+      obs_on_coalition_sd   = if (obs_available) pop_lists$pop_obs_on_coal$sd   else NA_real_,
       bf_on_coalition_mean  = pop_lists$pop_bf_on_coal$mean,
       bf_on_coalition_sd    = pop_lists$pop_bf_on_coal$sd
     )
@@ -412,7 +445,8 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
       table       = out,
       n_dropped   = n_dropped_bcr,
       n_sector_px = length(sector_cell_idx),
-      arrays = if (save_arrays) list(
+      bf_only     = !obs_available,
+      arrays = if (save_arrays && obs_available) list(
         obs_total_mat   = pop_lists$bcr_obs_total_mat,
         obs_on_coal_mat = pop_lists$bcr_obs_on_coal_mat,
         bf_on_coal_mat  = pop_lists$bcr_bf_on_coal_mat
@@ -446,6 +480,7 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
 
   list(
     table           = dplyr::bind_rows(lapply(results_nonnull, `[[`, "table")),
-    national_arrays = national_arrays
+    national_arrays = national_arrays,
+    is_bf_only      = any(vapply(results_nonnull, function(r) isTRUE(r$bf_only), logical(1)))
   )
 } # close predict_species_bcr()

@@ -103,11 +103,18 @@ train_and_backfill_subbasin_s <- function(
       const_val <- unique(df_train[[b]][idx])
       # if idx has no valid rows (empty), define const_val as NA (as it would be in V5 rasters)
       if (length(const_val) == 0) const_val <- NA
-      
-      # fill outputs
+
+      # fill outputs — naming must match deploy_gbart/mbart layer name conventions so that
+      # 11_premosaic and 12C can locate the layers by their expected names
       df_backfill[[b]] <- const_val
-      out_layers[[paste0(b, "_mean")]] <- rep(const_val, nrow(df_backfill))
-      out_layers[[paste0(b, "_sd")]]   <- rep(0,          nrow(df_backfill))  # no uncertainty
+      if (b %in% categorical_responses) {
+        out_layers[[b]]                     <- rep(const_val, nrow(df_backfill))
+        out_layers[[paste0(b, "_maxprob")]] <- rep(1,          nrow(df_backfill))
+        out_layers[[paste0(b, "_entropy")]] <- rep(0,          nrow(df_backfill))
+      } else {
+        out_layers[[paste0(b, "_mean")]] <- rep(const_val, nrow(df_backfill))
+        out_layers[[paste0(b, "_sd")]]   <- rep(0,          nrow(df_backfill))
+      }
       
       logp("[%s] constant in subbasin: backfill raster populated with %s", b, const_val)
       next
