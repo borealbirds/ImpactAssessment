@@ -3,13 +3,16 @@
 # author: Mannfred Boehm
 # ---
 # Run ONCE per species (SLURM array over species) BEFORE any coalition runs.
-# For each BCR that the species has a BRT model for, compute observed bootstrap
-# predictions and save:
-#   predictions/{species}/{bcr_code}/{year}/observed_bootstraps.tif  (32 layers)
+# For each BCR that the species has a BRT model for, read the colleague's
+# pre-computed unclamped 32-bootstrap prediction surfaces from
+#   nm_root/output/07_predictions/{species}/{species}_{bcr_code}_{year}.tif
+# apply the species-specific prediction thresholds (Steps 5-9 of 10.Package.R),
+# and save:
+#   predictions/{species}/{bcr_code}/{year}/observed_bootstraps.tif  (32 layers, qsp-clamped)
 #   predictions/{species}/{bcr_code}/{year}/observed_mean.tif
 #   predictions/{species}/{bcr_code}/{year}/observed_sd.tif
 #
-# Coalition runs (12A/12B) then read these files rather than recomputing them,
+# Coalition runs (12B/12C) then read these files rather than recomputing them,
 # eliminating floating-point drift across parallel SLURM jobs.
 # ---
 
