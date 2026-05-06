@@ -14,8 +14,6 @@
 # ---
 
 suppressPackageStartupMessages({
-  library(BAMexploreR)
-  library(gbm)
   library(terra)
   library(tidyverse)
 })
@@ -38,7 +36,7 @@ load(file.path(ia_dir, "data", "raw_data", "SpeciesPredictionTruncationValues.Rd
 
 # ---- Species from SLURM -----------------------------------------------------
 
-species_vec <- c("CAWA")
+species_vec <- c("CAWA", "OVEN")
 # species_vec <- sort(c("BANS", "BARS", "BOBO", "CAWA", "EAWP", "EVGR", "GCTH", "GRSP", "GWWA", "LEYE", "OSFL"))
 # species_vec <- sort(list.dirs(file.path(nm_root, "output/06_bootstraps"), full.names = FALSE, recursive = FALSE))
 task_id <- as.integer(Sys.getenv("SLURM_ARRAY_TASK_ID"))
@@ -77,21 +75,16 @@ for (rdata_path in rdata_files) {
     next
   }
 
-  message(Sys.time(), " | ", bcr_code, " | predicting observed landscape")
-
-  # load observed covariate stack
-  stack_obs <- rast(file.path(nm_root, "gis/stacks", paste0(bcr_code, "_", year, ".tif")))
-  model_vars <- b.list[[1]]$var.names
-  X_obs <- stack_obs[[intersect(model_vars, names(stack_obs))]]
-
-  # predict for each bootstrap
-  obs_preds <- vector("list", length(b.list))
-  for (i in seq_along(b.list)) {
-    model <- b.list[[i]]
-    obs_preds[[i]] <- terra::predict(X_obs, model, type = "response", n.trees = model$n.trees)
-    message(Sys.time(), " | ", bcr_code, " | bootstrap ", i, "/", length(b.list))
-    gc()
+  # read colleague's pre-computed unclamped bootstrap predictions (nm_root/output/07_predictions)
+  raw_pred_path <- file.path(nm_root, "output/07_predictions", species,
+                             paste0(species, "_", bcr_code, "_", year, ".tif"))
+  if (!file.exists(raw_pred_path)) {
+    message(Sys.time(), " | ", bcr_code, " | no raw predictions found — skipping")
+    next
   }
+  message(Sys.time(), " | ", bcr_code, " | reading pre-computed bootstraps")
+  raw_stack <- terra::rast(raw_pred_path)
+  obs_preds <- lapply(seq_len(terra::nlyr(raw_stack)), function(i) raw_stack[[i]])
 
   # Step 5 of 10.Package.R: clamp each bootstrap at the species-specific quantile
   obs_preds <- lapply(obs_preds, function(r) terra::clamp(r, upper = qsp))
@@ -117,7 +110,7 @@ for (rdata_path in rdata_files) {
   terra::writeRaster(sd_out,   file.path(obs_dir, "observed_sd.tif"),   overwrite = TRUE)
 
   message(Sys.time(), " | ", bcr_code, " | done")
-  rm(b.list, stack_obs, X_obs, obs_preds, obs_stack, mn_r, q99_r, mn2_r, sd_r, mean_out, sd_out, e)
+  rm(b.list, raw_stack, obs_preds, obs_stack, mn_r, q99_r, mn2_r, sd_r, mean_out, sd_out, e)
   gc()
 }
 

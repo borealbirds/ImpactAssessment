@@ -3,8 +3,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=64G
-#SBATCH --time=02:00:00
+#SBATCH --mem=32G
+#SBATCH --time=12:00:00
 #SBATCH --job-name=12B_debug
 #SBATCH --output=/home/mannfred/scratch/impact_assessment/logs/12B_debug_%j.out
 #SBATCH --error=/home/mannfred/scratch/impact_assessment/logs/12B_debug_%j.err

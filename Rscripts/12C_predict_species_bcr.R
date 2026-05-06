@@ -139,6 +139,12 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
     biotic_cont_shared <- intersect(setdiff(model_vars_shared, categorical_responses),
                                     biotic_continuous_vars)
 
+    # precompute factor levels from model (all bootstraps share the same var.levels)
+    cat_levels_shared <- setNames(
+      lapply(cat_vars_shared, function(v) b.list[[1]]$var.levels[[v]]),
+      cat_vars_shared
+    )
+
     missing_bf <- biotic_cont_shared[
       !paste0(biotic_cont_shared, "_draw_001") %in% names(stack_bf)]
     if (length(missing_bf) > 0) {
@@ -229,6 +235,15 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
         for (v in draw_covs)       { if (v %in% names(X_k)) X_k[[v]] <- draw_vals_sector[[v]][, chosen] }
         for (v in cat_vars_shared) { if (v %in% names(X_k)) X_k[[v]] <- cat_vals_sector[[v]] }
         for (v in dist_shared)     { if (v %in% names(X_k)) X_k[[v]] <- 0 }
+
+        # convert categorical columns from raw integers to factors matching model$var.levels;
+        # terra::values() strips RAT metadata so gbm receives integer codes without level context
+        for (v in cat_vars_shared) {
+          if (v %in% names(X_k)) {
+            lvls <- cat_levels_shared[[v]]
+            X_k[[v]] <- factor(lvls[X_k[[v]]], levels = lvls)
+          }
+        }
 
         # Exclude NA rows before prediction: gbm's C code segfaults on NAs.
         # Consistent with terra::predict() (propagates NAs) and

@@ -221,16 +221,17 @@ predict_species_bcr_debug <- function(species, year, all_subbasins_subset,
             "; mem=", round(sum(gc()[, 2])), " MB")
     
     message("CHECKPOINT: about to extract BART draw values (", length(draw_covs),
-            " covs x ", n_draws, " draws)")
+            " covs x ", n_draws, " draws) — batch read per covariate")
     draw_vals_sector <- setNames(
       lapply(draw_covs, function(v) {
-        sapply(seq_len(n_draws), function(d) {
-          lyr_vals <- terra::values(stack_bf[[paste0(v, "_draw_", sprintf("%03d", d))]],
-                                    mat = FALSE)
-          vals <- expm1(lyr_vals[sector_cell_idx])
-          vals[!is.finite(vals)] <- 0
-          pmax(vals, 0)
-        })
+        lyr_names <- paste0(v, "_draw_", sprintf("%03d", seq_len(n_draws)))
+        lyr_names <- intersect(lyr_names, names(stack_bf))
+        mat_raw   <- terra::values(stack_bf[[lyr_names]], mat = TRUE)
+        mat_sec   <- mat_raw[sector_cell_idx, , drop = FALSE]
+        rm(mat_raw)
+        mat_sec   <- expm1(mat_sec)
+        mat_sec[!is.finite(mat_sec)] <- 0
+        pmax(mat_sec, 0)
       }),
       draw_covs
     )
@@ -269,7 +270,36 @@ predict_species_bcr_debug <- function(species, year, all_subbasins_subset,
         for (v in draw_covs)       { if (v %in% names(X_k)) X_k[[v]] <- draw_vals_sector[[v]][, chosen] }
         for (v in cat_vars_shared) { if (v %in% names(X_k)) X_k[[v]] <- cat_vals_sector[[v]] }
         for (v in dist_shared)     { if (v %in% names(X_k)) X_k[[v]] <- 0 }
+
+        # impute sparse NAs: mode for categorical/factor vars, mean for continuous
+        categorical_impute <- c("method", "year", categorical_responses)
+        for (v in names(X_k)) {
+          if (anyNA(X_k[[v]])) {
+            if (v %in% categorical_impute) {
+              non_na <- X_k[[v]][!is.na(X_k[[v]])]
+              mode_val <- if (length(non_na) > 0) {
+                as.integer(names(sort(table(non_na), decreasing = TRUE))[1])
+              } else 0L
+              X_k[[v]][is.na(X_k[[v]])] <- mode_val
+            } else {
+              X_k[[v]][is.na(X_k[[v]])] <- mean(X_k[[v]], na.rm = TRUE)
+            }
+          }
+        }
         
+        if (i == 1 && k == 1) {
+          message("CHECKPOINT: X_k dim=", nrow(X_k), "x", ncol(X_k))
+          missing_vars <- setdiff(model$var.names, names(X_k))
+          message("CHECKPOINT: model expects ", length(model$var.names), " vars; missing from X_k: ",
+                  if (length(missing_vars) == 0) "none" else paste(missing_vars, collapse = ", "))
+          na_cols  <- names(X_k)[vapply(X_k, function(col) anyNA(col),          logical(1))]
+          inf_cols <- names(X_k)[vapply(X_k, function(col) any(is.infinite(col)), logical(1))]
+          message("CHECKPOINT: cols with NA: ",  if (length(na_cols)  == 0) "none" else paste(na_cols,  collapse = ", "))
+          message("CHECKPOINT: cols with Inf: ", if (length(inf_cols) == 0) "none" else paste(inf_cols, collapse = ", "))
+          col_types <- unique(vapply(X_k, class, character(1)))
+          message("CHECKPOINT: X_k column types: ", paste(col_types, collapse = ", "))
+          message("CHECKPOINT: model$n.trees=", model$n.trees)
+        }
         message("CHECKPOINT: about to gbm::predict.gbm; boot=", i, " scen=", k)
         bf_preds[[i]][[k]] <- gbm::predict.gbm(model, X_k,
                                                n.trees = model$n.trees,
