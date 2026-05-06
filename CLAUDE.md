@@ -54,7 +54,7 @@ Scripts are numbered in execution order:
 | `10C_abiotic_extrapolation_diagnostics.R` | cluster | Flag subbasins where BART may be extrapolating (KS + Mahalanobis diagnostics) → `extrapolation_flags.csv` |
 | `11_inspect_backfill_metrics.R` | local | Inspect and visualize model accuracy |
 | `11_premosaic_backfilled_stacks.R` + `.sh` | cluster | Mosaic per-subbasin BART backfill rasters into BCR-wide stacks (run before 12) |
-| `12A_observed.R` + `.sh` | cluster | Phase 1: canonical observed-landscape BRT predictions (one job per species, run BEFORE coalition jobs) |
+| `12A_observed.R` + `.sh` | cluster | Phase 1: reads Elly's pre-computed unclamped 32-bootstrap prediction surfaces (`nm_root/output/07_predictions`), applies species-specific clamping (Steps 5-9 of 10.Package.R), and saves canonical `observed_bootstraps.tif` per species × BCR (run BEFORE coalition jobs) |
 | `12B_repredict_birds.R` + `.sh` | cluster | Phase 2: re-predict bird densities for a given coalition of sectors (SLURM array over species, one job per coalition) |
 | `12C_predict_species_bcr.R` | sourced | `predict_species_bcr()`: reads canonical observed bootstraps, builds coalition mask, runs joint BRT×BART sampling, returns subbasin-level density tables |
 | `12C_repredict_birds_check.R` | local | Sanity checks on re-prediction outputs (legacy) |
@@ -96,7 +96,7 @@ bash 12B_repredict_birds.sh $OBS_JOB_ID
 
 **Output per subbasin**: `data/derived_data/bart_models/{year}/subbasin_{i}/subbasin_{i}_backfill.tif` (mean and SD layers for each covariate), `_metrics.rds`, `_confusion.rds`.
 
-**Re-prediction**: `11_premosaic` mosaics backfilled subbasin rasters into BCR-wide stacks. `12A_observed` produces canonical observed bootstrap predictions once per species. `12B/12C` then run coalition-based counterfactual predictions: for a given coalition S of sectors, pixels where any sector in S has footprint (AND CanHF ≥ 1) use backfilled covariates; all other pixels use observed. Joint BART×BRT sampling nests BART posterior draws inside BRT bootstrap iterations.
+**Re-prediction**: `11_premosaic` mosaics backfilled subbasin rasters into BCR-wide stacks. `12A_observed` reads Elly's pre-computed unclamped bootstrap prediction surfaces (`nm_root/output/07_predictions`) and applies species-specific clamping to produce canonical `observed_bootstraps.tif` files once per species × BCR. `12B/12C` then run coalition-based counterfactual predictions: for a given coalition S of sectors, pixels where any sector in S has footprint (AND CanHF ≥ 1) use backfilled covariates; all other pixels use observed. Joint BART×BRT sampling nests BART posterior draws inside BRT bootstrap iterations.
 
 **Shapley attribution**: 8 sectors → 256 coalitions (2^8). Each coalition is a SLURM job. `15B` computes exact Shapley values from the 256 coalition density tables. Shapley values sum exactly to the total HF impact. `shapley_utils.R` provides coalition enumeration and the Shapley formula.
 
