@@ -250,10 +250,16 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
         for (v in dist_shared)     { if (v %in% names(X_k)) X_k[[v]] <- 0 }
 
         # convert categorical columns from raw integers to factors matching model$var.levels;
-        # terra::values() strips RAT metadata so gbm receives integer codes without level context
+        # terra::values() strips RAT metadata so gbm receives integer codes without level context.
+        # Skip variables where var.levels is NULL — GBM stored them as numeric, not factor.
         for (v in cat_vars_shared) {
           if (v %in% names(X_k)) {
             lvls <- cat_levels_shared[[v]]
+            if (is.null(lvls) || length(lvls) == 0L) {
+              message(Sys.time(), " | WARNING: ", species, " ", bcr_code,
+                      " | var.levels NULL for categorical var '", v, "' — skipping factor conversion")
+              next
+            }
             X_k[[v]] <- factor(lvls[X_k[[v]]], levels = lvls)
           }
         }
