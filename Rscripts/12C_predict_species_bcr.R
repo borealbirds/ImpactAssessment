@@ -321,8 +321,10 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
       rm(bf_m_vec, bf_sd_vec)
 
       # secondary cap: 99.9th percentile of coalition-pixel means (step 7 of 10.Package.R)
-      q99_bf    <- terra::global(bf_mean_r, quantile, probs = 0.999, na.rm = TRUE)[1, 1]
-      bf_mean_r <- terra::clamp(bf_mean_r, upper = q99_bf)
+      q99_bf <- terra::global(bf_mean_r, quantile, probs = 0.999, na.rm = TRUE)[1, 1]
+      if (!is.na(q99_bf) && is.finite(q99_bf)) {
+        bf_mean_r <- terra::clamp(bf_mean_r, upper = q99_bf)
+      }
 
       # low threshold: zero pixels below denshthresh (step 9 of 10.Package.R)
       bf_sd_r   <- terra::ifel(bf_mean_r < q0, 0, bf_sd_r)
