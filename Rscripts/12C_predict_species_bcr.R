@@ -144,6 +144,14 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
       lapply(cat_vars_shared, function(v) b.list[[1]]$var.levels[[v]]),
       cat_vars_shared
     )
+    # warn once per BCR for any categorical vars where the model stored no factor levels
+    null_cat_vars <- names(Filter(is.null, cat_levels_shared))
+    if (length(null_cat_vars) > 0L) {
+      message(Sys.time(), " | WARNING: ", species, " ", bcr_code,
+              " | var.levels NULL for categorical var(s) ",
+              paste(null_cat_vars, collapse = ", "),
+              " — skipping factor conversion (values passed as integer)")
+    }
 
     missing_bf <- biotic_cont_shared[
       !paste0(biotic_cont_shared, "_draw_001") %in% names(stack_bf)]
@@ -251,15 +259,11 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
 
         # convert categorical columns from raw integers to factors matching model$var.levels;
         # terra::values() strips RAT metadata so gbm receives integer codes without level context.
-        # Skip variables where var.levels is NULL — GBM stored them as numeric, not factor.
+        # Skip variables where var.levels is NULL — warned once per BCR above.
         for (v in cat_vars_shared) {
           if (v %in% names(X_k)) {
             lvls <- cat_levels_shared[[v]]
-            if (is.null(lvls) || length(lvls) == 0L) {
-              message(Sys.time(), " | WARNING: ", species, " ", bcr_code,
-                      " | var.levels NULL for categorical var '", v, "' — skipping factor conversion")
-              next
-            }
+            if (is.null(lvls) || length(lvls) == 0L) next
             X_k[[v]] <- factor(lvls[X_k[[v]]], levels = lvls)
           }
         }
