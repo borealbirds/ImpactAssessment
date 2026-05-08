@@ -182,10 +182,14 @@ res <- predict_species_bcr(species, year = year, all_subbasins_subset = all_subb
 
 dt_dir <- file.path(ia_dir, "data", "derived_data", "density_tables")
 dir.create(dt_dir, showWarnings = FALSE)
-saveRDS(res$table, file = file.path(dt_dir,
-                                    paste0(species, "_", year, "_coalition_", coalition_id, ".rds")))
 
-if (save_arrays && !is.null(res$national_arrays)) {
+is_bf_only <- isTRUE(res$is_bf_only)
+suffix     <- if (is_bf_only) "_bf_only" else ""
+saveRDS(res$table, file = file.path(dt_dir,
+                                    paste0(species, "_", year, "_coalition_", coalition_id, suffix, ".rds")))
+if (is_bf_only) message(Sys.time(), " | bf-only table saved — run 12D_combine.R after 12A completes")
+
+if (save_arrays && !is_bf_only && !is.null(res$national_arrays)) {
   arr_dir <- file.path(dt_dir, "arrays")
   dir.create(arr_dir, showWarnings = FALSE)
   saveRDS(res$national_arrays,

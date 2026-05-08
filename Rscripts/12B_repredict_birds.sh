@@ -3,8 +3,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=256G
-#SBATCH --time=36:00:00
+#SBATCH --mem=32G
+#SBATCH --time=06:00:00
 #SBATCH --job-name=coalition_repredict
 #SBATCH --array=1-2
 #SBATCH --mail-user=mannfred@ualberta.ca
