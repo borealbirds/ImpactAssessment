@@ -58,9 +58,10 @@ Scripts are numbered in execution order:
 | `12B_repredict_birds.R` + `.sh` | cluster | Phase 2: re-predict bird densities for a given coalition of sectors (SLURM array over species, one job per coalition) |
 | `12C_predict_species_bcr.R` | sourced | `predict_species_bcr()`: reads canonical observed bootstraps, builds coalition mask, runs joint BRT×BART sampling, returns subbasin-level density tables |
 | `12C_repredict_birds_check.R` | local | Sanity checks on re-prediction outputs (legacy) |
+| `12D_combine.R` + `.sh` | cluster | Phase 3: fills obs columns into `*_bf_only.rds` tables after 12A completes (run with `--dependency=afterok:$OBS_JOB_ID`) |
 | `13_importance_of_covs_used_in_counterfactual.R` | cluster | Assess percentile importance of backfilled covariates in V5 bird models |
 | `15B_sector_attribution.R` | local | Reads coalition density tables, computes exact Shapley values per sector, aggregates bottom-up (subbasin → BCR → national) → `sector_effects/shapley_*.csv` |
-| `shapley_utils.R` | sourced | Coalition enumeration, Shapley value computation utilities |
+| `12E_shapley_utils.R` | sourced | Coalition enumeration, Shapley value computation utilities |
 | `misc/` | local | Downstream analysis: population summaries, visualization, vegetation vs. mines comparisons |
 
 ## Submitting Cluster Jobs
@@ -71,7 +72,7 @@ sbatch 07_train_and_backfill.sh
 # --array=1-674 for full run; set specific indices to rerun failures
 ```
 
-Re-predicting birds (two-phase submission):
+Re-predicting birds (three-phase submission):
 ```bash
 # Phase 1: canonical observed predictions (one array job per species)
 OBS_JOB_ID=$(sbatch --parsable 12A_observed.sh)
@@ -79,6 +80,10 @@ OBS_JOB_ID=$(sbatch --parsable 12A_observed.sh)
 # Phase 2: coalition counterfactual predictions (255 jobs, one per non-empty coalition)
 # Each coalition job is a SLURM array over species, with dependency on Phase 1
 bash 12B_repredict_birds.sh $OBS_JOB_ID
+
+# Phase 3 (if needed): fill obs columns into any *_bf_only.rds tables that were
+# written by Phase 2 jobs that completed before Phase 1 finished
+sbatch --dependency=afterok:$OBS_JOB_ID 12D_combine.sh
 
 # To run only single-sector coalitions (equivalent to old one-at-a-time):
 # for CID in 2 3 5 9 17 33 65 129; do
@@ -98,7 +103,7 @@ bash 12B_repredict_birds.sh $OBS_JOB_ID
 
 **Re-prediction**: `11_premosaic` mosaics backfilled subbasin rasters into BCR-wide stacks. `12A_observed` reads Elly's pre-computed unclamped bootstrap prediction surfaces (`nm_root/output/07_predictions`) and applies species-specific clamping to produce canonical `observed_bootstraps.tif` files once per species × BCR. `12B/12C` then run coalition-based counterfactual predictions: for a given coalition S of sectors, pixels where any sector in S has footprint (AND CanHF ≥ 1) use backfilled covariates; all other pixels use observed. Joint BART×BRT sampling nests BART posterior draws inside BRT bootstrap iterations.
 
-**Shapley attribution**: 8 sectors → 256 coalitions (2^8). Each coalition is a SLURM job. `15B` computes exact Shapley values from the 256 coalition density tables. Shapley values sum exactly to the total HF impact. `shapley_utils.R` provides coalition enumeration and the Shapley formula.
+**Shapley attribution**: 8 sectors → 256 coalitions (2^8). Each coalition is a SLURM job. `15B` computes exact Shapley values from the 256 coalition density tables. Shapley values sum exactly to the total HF impact. `12E_shapley_utils.R` provides coalition enumeration and the Shapley formula.
 
 **Bottom-up aggregation**: The subbasin is the atomic spatial unit. BCR totals = sum of subbasin values within the BCR. National totals = sum of BCR values. Uncertainty propagates under subbasin independence within BCR and BCR independence nationally.
 
