@@ -47,9 +47,24 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
     # loads b.list (32 boots) for some spp x bcr
     b.list <- e$b.list
 
+    # TEST_N_BOOT: truncate bootstraps for fast smoke testing (unset = run all)
+    test_n_boot <- as.integer(Sys.getenv("TEST_N_BOOT", "0"))
+    if (test_n_boot > 0L) {
+      b.list <- b.list[seq_len(min(test_n_boot, length(b.list)))]
+      message(Sys.time(), " | TEST_N_BOOT=", test_n_boot,
+              " — truncating to ", length(b.list), " bootstrap(s)")
+    }
+
     # get current bcr
     bcr_code <- attr(b.list[[1]], "bcr")
     message(Sys.time(), " | working on species=", species, " BCR=", bcr_code)
+
+    # TEST_BCR: comma-separated allowlist for targeted testing (unset = run all BCRs)
+    test_bcr_env <- Sys.getenv("TEST_BCR", "")
+    if (nchar(test_bcr_env) > 0 && !bcr_code %in% strsplit(test_bcr_env, ",")[[1]]) {
+      message(Sys.time(), " | TEST_BCR=", test_bcr_env, " — skipping ", bcr_code)
+      return(NULL)
+    }
 
     # find subbasins in current BCR
     sub_ids <-
@@ -222,6 +237,8 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
       n_boot  <- terra::nlyr(obs_boot_stack)
       obs_preds <- lapply(seq_len(n_boot), function(i) obs_boot_stack[[i]])
       rm(obs_boot_stack)
+      if (test_n_boot > 0L) obs_preds <- obs_preds[seq_len(min(test_n_boot, length(obs_preds)))]
+      n_boot <- length(obs_preds)
       message(Sys.time(), " | ", species, " ", bcr_code,
               " | loaded ", n_boot, " canonical observed bootstraps")
     } else {
@@ -236,51 +253,44 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
     # and predicts bird density, capturing the covariance between BART and BRT
     # uncertainty naturally.
 
-    # containers: bf_preds[[boot]][[scen]] = vector of sector-pixel predictions
-    bf_preds <- vector("list", n_boot)
-    for (i in seq_len(n_boot)) bf_preds[[i]] <- vector("list", n_scen)
+    # NA pattern is stable across (i, k): NAs originate only from X_obs_sector
+    # columns that are never overwritten by BART draws, categorical fills, or
+    # disturbance zeros — so compute once before the parallel loop.
+    n_dropped_bcr <- sum(!complete.cases(
+      X_obs_sector[, intersect(b.list[[1]]$var.names, names(X_obs_sector)), drop = FALSE]))
 
-    n_dropped_bcr <- NA_integer_  # captured on first (i=1, k=1) iteration
+    n_cores <- max(1L, as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", "1")))
+    message(Sys.time(), " | ", species, " ", bcr_code,
+            " | running ", n_boot, " bootstraps on ", n_cores, " core(s)")
 
-    for (i in seq_along(b.list)) {
+    # Each worker handles one bootstrap iteration independently.
+    # X_k allocation fix: one deep copy of X_obs_sector per worker (triggered by
+    # the first column assignment), not one per scenario. Constant overrides
+    # (categorical fills, disturbance zeros, factor conversion) are applied once
+    # per worker; only the scenario-varying BART draw columns are reset each k.
+    bf_preds <- parallel::mclapply(seq_along(b.list), function(i) {
       model <- b.list[[i]]
 
+      X_k <- X_obs_sector
+      for (v in cat_vars_shared) { if (v %in% names(X_k)) X_k[[v]] <- cat_vals_sector[[v]] }
+      for (v in dist_shared)     { if (v %in% names(X_k)) X_k[[v]] <- 0 }
+      for (v in cat_vars_shared) {
+        if (v %in% names(X_k)) {
+          lvls <- cat_levels_shared[[v]]
+          if (is.null(lvls) || length(lvls) == 0L) next
+          X_k[[v]] <- factor(lvls[X_k[[v]]], levels = lvls)
+        }
+      }
+
+      scen_list <- vector("list", n_scen)
       for (k in seq_len(n_scen)) {
-        # deterministic seed per (species, bcr, boot, scen) for reproducibility
         set.seed((sum(utf8ToInt(paste0(species, bcr_code))) + i * 1000L + k) %%
                    .Machine$integer.max)
         chosen <- sample(n_draws, 1)
 
-        # build scenario data frame: start from observed, overwrite biotic/disturbance
-        X_k <- X_obs_sector
-        for (v in draw_covs)       { if (v %in% names(X_k)) X_k[[v]] <- draw_vals_sector[[v]][, chosen] }
-        for (v in cat_vars_shared) { if (v %in% names(X_k)) X_k[[v]] <- cat_vals_sector[[v]] }
-        for (v in dist_shared)     { if (v %in% names(X_k)) X_k[[v]] <- 0 }
+        for (v in draw_covs) { if (v %in% names(X_k)) X_k[[v]] <- draw_vals_sector[[v]][, chosen] }
 
-        # convert categorical columns from raw integers to factors matching model$var.levels;
-        # terra::values() strips RAT metadata so gbm receives integer codes without level context.
-        # Skip variables where var.levels is NULL — warned once per BCR above.
-        for (v in cat_vars_shared) {
-          if (v %in% names(X_k)) {
-            lvls <- cat_levels_shared[[v]]
-            if (is.null(lvls) || length(lvls) == 0L) next
-            X_k[[v]] <- factor(lvls[X_k[[v]]], levels = lvls)
-          }
-        }
-
-        # Exclude NA rows before prediction: gbm's C code segfaults on NAs.
-        # Consistent with terra::predict() (propagates NAs) and
-        # LandbirdModelsV5/analysis/12.Summarize.R (sum(na.rm=TRUE) excludes
-        # NA pixels from population totals).
         complete_rows <- complete.cases(X_k[, model$var.names, drop = FALSE])
-
-        # capture drop count on the first iteration; NA pattern is stable across
-        # (i, k) because NAs come from fixed sources (X_obs_sector non-overwritten
-        # columns; BART draws and categorical values are already clamped/non-NA).
-        if (i == 1L && k == 1L) {
-          n_dropped_bcr <- sum(!complete_rows)
-        }
-
         pred_vec <- rep(NA_real_, nrow(X_k))
         if (any(complete_rows)) {
           pred_vec[complete_rows] <- gbm::predict.gbm(
@@ -288,13 +298,17 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
             n.trees = model$n.trees, type = "response")
         }
         pred_vec <- pmin(pred_vec, qsp)
-        bf_preds[[i]][[k]] <- pred_vec
+        scen_list[[k]] <- pred_vec
       }
 
       message(Sys.time(), " | ", species, " ", bcr_code, " bootstrap=", i,
               " | finished predict() on backfilled landscape")
-      gc()
-    }
+      scen_list
+    }, mc.cores = n_cores)
+
+    failed <- vapply(bf_preds, inherits, logical(1L), "try-error")
+    if (any(failed)) stop(sprintf("%s %s | %d/%d bootstrap workers failed",
+                                  species, bcr_code, sum(failed), length(failed)))
 
     message(sprintf(
       "%s | %s %s | incomplete-case pixels dropped: %d / %d (%.1f%%)",
