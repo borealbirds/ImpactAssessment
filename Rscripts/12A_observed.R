@@ -2,15 +2,18 @@
 # title: Impact Assessment: canonical observed-landscape bird predictions
 # author: Mannfred Boehm
 # ---
-# Run ONCE per species (SLURM array over species) BEFORE any coalition runs.
-# For each BCR that the species has a BRT model for, read Elly's
+# Run ONCE per species LOCALLY (not on cluster).
+# For each Canadian BCR that the species has a BRT model for, read Elly's
 # pre-computed unclamped 32-bootstrap prediction surfaces from
-#   nm_root/output/07_predictions/{species}/{species}_{bcr_code}_{year}.tif
+#   G:/Shared drives/BAM_NationalModels5/output/07_predictions/{species}/{species}_{bcr_code}_{year}.tif
 # apply the species-specific prediction thresholds (Steps 5-9 of 10.Package.R),
-# and save:
-#   predictions/{species}/{bcr_code}/{year}/observed_bootstraps.tif  (32 layers, qsp-clamped)
-#   predictions/{species}/{bcr_code}/{year}/observed_mean.tif
-#   predictions/{species}/{bcr_code}/{year}/observed_sd.tif
+# and save to ia_dir/data/derived_data/predictions/{species}/{bcr_code}/{year}/:
+#   observed_bootstraps.tif  (32 layers, qsp-clamped)
+#   observed_mean.tif
+#   observed_sd.tif
+#
+# After running locally, Globus-transfer the observed_bootstraps.tif files to
+# the cluster at the same relative path under ia_dir so 12D_combine can read them.
 #
 # Coalition runs (12B/12C) then read these files rather than recomputing them,
 # eliminating floating-point drift across parallel SLURM jobs.
@@ -25,13 +28,16 @@ suppressPackageStartupMessages({
 
 nm_root <- "/home/mannfred/projects/def-ecknight/NationalModels"
 
-cc    <- TRUE
-local <- FALSE
+cc    <- FALSE
+local <- TRUE
 
 if (cc)            { ia_dir <- "/home/mannfred/scratch/impact_assessment" }
 if (!cc && local)  { ia_dir <- getwd() }
 if (!cc && !local) { ia_dir <- file.path("G:/Shared drives/BAM_NationalModels5", "data", "Extras",
                                           "sandbox_data", "impactassessment_sandbox") }
+
+# when running locally, BRT bootstrap models and raw prediction tifs are on G:
+if (!cc) { nm_root <- "G:/Shared drives/BAM_NationalModels5" }
 
 # ---- Prediction thresholds --------------------------------------------------
 
@@ -78,7 +84,7 @@ for (rdata_path in rdata_files) {
     next
   }
 
-  # read colleague's pre-computed unclamped bootstrap predictions (nm_root/output/07_predictions)
+  # read Elly's unclamped bootstrap predictions — nm_root points to G: when local, cluster path when cc=TRUE
   raw_pred_path <- file.path(nm_root, "output/07_predictions", species,
                              paste0(species, "_", bcr_code, "_", year, ".tif"))
   if (!file.exists(raw_pred_path)) {
