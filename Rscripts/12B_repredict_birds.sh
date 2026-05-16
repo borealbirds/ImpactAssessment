@@ -3,7 +3,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=64G
+#SBATCH --mem=192G
 #SBATCH --time=12:00:00
 #SBATCH --job-name=coalition_repredict
 #SBATCH --array=1-2

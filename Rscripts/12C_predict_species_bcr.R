@@ -46,6 +46,7 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
 
     # loads b.list (32 boots) for some spp x bcr
     b.list <- e$b.list
+    rm(e)
 
     # TEST_N_BOOT: truncate bootstraps for fast smoke testing (unset = run all)
     test_n_boot <- as.integer(Sys.getenv("TEST_N_BOOT", "0"))
@@ -309,6 +310,9 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
     failed <- vapply(bf_preds, inherits, logical(1L), "try-error")
     if (any(failed)) stop(sprintf("%s %s | %d/%d bootstrap workers failed",
                                   species, bcr_code, sum(failed), length(failed)))
+
+    rm(b.list, draw_vals_sector, X_obs_sector, cat_vals_sector, cat_levels_shared)
+    gc()
 
     message(sprintf(
       "%s | %s %s | incomplete-case pixels dropped: %d / %d (%.1f%%)",

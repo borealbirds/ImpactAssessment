@@ -65,7 +65,24 @@
       "Bash(curl *)",
       "PowerShell(& \"C:\\\\Users\\\\mannf\\\\AppData\\\\Local\\\\Python\\\\pythoncore-3.14-64\\\\Scripts\\\\globus.exe\" task show 5b5f47d3-480a-11f1-96b0-0afffe4617ab)",
       "PowerShell(& \"C:\\\\Users\\\\mannf\\\\AppData\\\\Local\\\\Python\\\\pythoncore-3.14-64\\\\Scripts\\\\globus.exe\" task event-list 5b5f47d3-480a-11f1-96b0-0afffe4617ab)",
-      "PowerShell(& \"C:\\\\Users\\\\mannf\\\\AppData\\\\Local\\\\Python\\\\pythoncore-3.14-64\\\\Scripts\\\\globus.exe\" task event-list 0f9d443a-480c-11f1-b6c1-0afffe4617ab --limit 5)"
+      "PowerShell(& \"C:\\\\Users\\\\mannf\\\\AppData\\\\Local\\\\Python\\\\pythoncore-3.14-64\\\\Scripts\\\\globus.exe\" task event-list 0f9d443a-480c-11f1-b6c1-0afffe4617ab --limit 5)",
+      "WebFetch(domain:geohack.toolforge.org)",
+      "WebFetch(domain:www.arcgis.com)",
+      "Bash(echo \"319 exit: $?\")",
+      "Bash(echo \"363 exit: $?\")",
+      "PowerShell(& \"C:\\\\Users\\\\mannf\\\\AppData\\\\Local\\\\Python\\\\pythoncore-3.14-64\\\\Scripts\\\\globus.exe\" whoami)",
+      "WebFetch(domain:docs.alliancecan.ca)",
+      "WebSearch",
+      "WebFetch(domain:www.alliancecan.ca)",
+      "WebFetch(domain:nf-co.re)",
+      "WebFetch(domain:www.khanlab.ca)",
+      "Bash(scp *)",
+      "Bash(ssh *)",
+      "Bash(ssh-add -l)",
+      "Read(//c/Users/mannf/.ssh/**)",
+      "Bash(powershell *)",
+      "Bash(SLURM_ARRAY_TASK_ID=1 Rscript Rscripts/12A_observed.R)",
+      "Bash(SLURM_ARRAY_TASK_ID=2 Rscript Rscripts/12A_observed.R)"
     ]
   }
 }
