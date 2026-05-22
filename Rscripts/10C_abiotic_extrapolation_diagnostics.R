@@ -126,7 +126,9 @@ for (s in seq_len(n_sub)) {
   # remove columns with zero variance or all-NA in either set
   good_cols <- vapply(avail, function(v) {
     lo_v <- lo_mat[, v]; hi_v <- hi_mat[, v]
-    !all(is.na(lo_v)) && !all(is.na(hi_v)) && sd(lo_v, na.rm = TRUE) > 0
+    if (all(is.na(lo_v)) || all(is.na(hi_v))) return(FALSE)
+    s <- sd(lo_v, na.rm = TRUE)
+    isTRUE(s > 0)
   }, logical(1))
   good_avail <- avail[good_cols]
 

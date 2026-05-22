@@ -2,7 +2,7 @@
 DENSITY_DIR="$HOME/scratch/impact_assessment/data/derived_data/density_tables"
 
 completed=$(ls "$DENSITY_DIR" | grep '_coalition_' | \
-  sed 's/.*_coalition_\([0-9]*\)_bf_only\.rds$/\1/' | sort -n)
+  sed -E 's/.*_coalition_([0-9]+)(_bf_only)?\.rds$/\1/' | sort -n)
 
 # coal_{cid} named jobs — CID is in the job name
 coal_running=$(squeue --me -h -o "%j" | grep -E '^coal_[0-9]+$' | \

@@ -155,16 +155,22 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
     biotic_cont_shared <- intersect(setdiff(model_vars_shared, categorical_responses),
                                     biotic_continuous_vars)
 
-    # precompute factor levels from model (all bootstraps share the same var.levels)
+    # precompute factor levels from model (all bootstraps share the same var.levels).
+    # gbm's $var.levels is an UNNAMED list aligned by predictor position, so it
+    # must be indexed via match() against var.names. Indexing it by name silently
+    # returns NULL, which would skip factor conversion and pass raw class codes to
+    # gbm — corrupting categorical splits.
     cat_levels_shared <- setNames(
-      lapply(cat_vars_shared, function(v) b.list[[1]]$var.levels[[v]]),
+      lapply(cat_vars_shared, function(v)
+        as.character(b.list[[1]]$var.levels[[match(v, model_vars_shared)]])),
       cat_vars_shared
     )
     # warn once per BCR for any categorical vars where the model stored no factor levels
-    null_cat_vars <- names(Filter(is.null, cat_levels_shared))
+    null_cat_vars <- names(Filter(function(x) is.null(x) || length(x) == 0L,
+                                  cat_levels_shared))
     if (length(null_cat_vars) > 0L) {
       message(Sys.time(), " | WARNING: ", species, " ", bcr_code,
-              " | var.levels NULL for categorical var(s) ",
+              " | var.levels empty for categorical var(s) ",
               paste(null_cat_vars, collapse = ", "),
               " — skipping factor conversion (values passed as integer)")
     }
@@ -279,7 +285,10 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
         if (v %in% names(X_k)) {
           lvls <- cat_levels_shared[[v]]
           if (is.null(lvls) || length(lvls) == 0L) next
-          X_k[[v]] <- factor(lvls[X_k[[v]]], levels = lvls)
+          # backfilled categorical rasters store actual class values (e.g. VLCE
+          # 20,33,...,230), not 1-based indices — refactor onto the model's
+          # training levels so gbm sees the factor it was trained with.
+          X_k[[v]] <- factor(as.character(X_k[[v]]), levels = lvls)
         }
       }
 

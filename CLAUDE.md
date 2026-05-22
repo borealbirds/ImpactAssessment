@@ -101,27 +101,27 @@ Re-predicting birds:
 # 12B is designed to run freely without those files: it writes *_bf_only.rds when they
 # are absent. This is normal. 12D_combine fills obs columns once the tifs are on the cluster.
 
-# Submit all 255 coalition jobs (one array job per coalition, array over species):
-# >=4-sector coalitions need --mem=500G; use cat|sbatch to avoid Lustre read hang:
-for cid in $(seq 52 256); do
-  n=$((cid-1)); bits=0
-  while [ $n -gt 0 ]; do bits=$((bits+n%2)); n=$((n/2)); done
-  if [ $bits -ge 4 ]; then
-    cat 12B_repredict_birds.sh | sbatch --account=def-bayne --mem=500G \
-      --export=ALL,COALITION_ID=$cid --job-name=coal_${cid}
-  fi
-done
-# <=3-sector coalitions (192G sufficient) use the self-submitting loop:
-bash 12B_repredict_birds.sh
+# Submit all 255 coalition jobs via 12B_submit_tiered.sh, which sets per-coalition
+# --mem/--time from a 3-tier scheme keyed on sector membership (resource cost
+# tracks sector footprint, not coalition size -- see the script header):
+#   HEAVY  contains roads                       -> 512G / 24:00:00
+#   MID    no roads; built/crop or >=4 sectors  -> 320G / 16:00:00
+#   LIGHT  otherwise                            -> 224G / 08:00:00
+# The script is re-runnable: it resubmits only coalitions/species still missing
+# a density table.
+#
+# For a FRESH full re-run, delete stale density tables first so the skip-guard
+# only sees new output (skip this when merely mopping up failed jobs):
+rm -f ../data/derived_data/density_tables/*.rds
+DRYRUN=1 bash 12B_submit_tiered.sh    # preview: HEAVY=128 MID=102 LIGHT=25
+bash 12B_submit_tiered.sh             # submit
+
+# Tiers were profiled with collect_seff.sh (cluster) -> analyze_seff.R (local);
+# re-run those on the clean jobs afterward to tighten the tier values.
 
 # After Globus-transferring observed_bootstraps.tif files (produced by local 12A run) to
 # data/derived_data/predictions/{species}/{bcr_code}/{year}/ on the cluster, run:
 sbatch 12D_combine.sh
-
-# To run only single-sector coalitions (equivalent to old one-at-a-time):
-# for CID in 2 3 5 9 17 33 65 129; do
-#   sbatch --export=ALL,COALITION_ID=$CID 12B_repredict_birds.sh
-# done
 ```
 
 ## Fir Cluster Specifications
