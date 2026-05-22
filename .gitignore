@@ -63,3 +63,15 @@ rsconnect/
 *.pptx
 *.svg
 *.png
+
+# Cluster logs and slurm job output
+logs/
+
+# Generated output tables (data artifacts, not versioned)
+output_tables/
+
+# Raster sidecar metadata
+*.aux.xml
+
+# Local Claude Code settings (per-machine)
+.claude/settings.local.json
