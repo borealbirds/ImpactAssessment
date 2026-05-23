@@ -44,12 +44,14 @@ annotated in the Shapley output.
 
 ![Backfilling vegetation at Detour Lake Mine](output_figures/BART_diagrams/figure_detour_lake_backfill.png)
 
-**Figure.** Illustration of the backfilling procedure at the Detour Lake gold
+Illustration of the backfilling procedure at the Detour Lake gold
 mine in northern Ontario. *Top row:* mine location, satellite imagery, and the
-Hirsh–Pearson human footprint score for 2020. *Bottom row:* observed tree
-height in 2020 (showing the cleared mine footprint), the BART-backfilled tree
+human footprint score for 2020 ([Hirsh-Pearson et al, 2020](https://doi.org/10.1139/facets-2021-0063)). 
+*Bottom row:* observed tree
+height in 2020 ([Guindon et al 2024](https://doi.org/10.1139/cjfr-2023-0118)), 
+the BART-backfilled tree
 height predicted from abiotic covariates and surrounding low-HF pixels, and
-the per-pixel backfill uncertainty (posterior SD). The backfilled surface
+the per-pixel backfill uncertainty (posterior standard deviation). The backfilled surface
 reconstructs the boreal forest canopy that would plausibly occupy these pixels
 in the absence of mining activity; bird models are then re-predicted on this
 counterfactual landscape.
