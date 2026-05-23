@@ -201,8 +201,14 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
     rm(obs_all_vals); gc()
 
     # pre-extract BART posterior draw values at coalition pixels (expm1-transformed, clamped >= 0)
-    # Non-finite values (Inf from expm1 overflow, NA from edge pixels) are replaced with 0
-    # before they can reach gbm's C prediction code, which cannot handle non-finite inputs.
+    # Non-finite values (Inf from expm1 overflow on mis-scaled draws, NA from
+    # uncovered/edge pixels) are set to NA — NOT 0. Setting them to 0 fabricates a
+    # "barren ground" covariate that gbm scores as a near-zero-density pixel,
+    # silently collapsing bf_on_coalition wherever the backfill mosaic is gappy or
+    # mis-scaled. As NA they instead make the pixel an incomplete case, dropped
+    # from BOTH the bf and (post-fix) the obs aggregation — the honest outcome
+    # when a pixel has no usable backfill. gbm never sees the NA: the worker
+    # predicts only on complete_mask rows.
     draw_vals_sector <- setNames(
       lapply(draw_covs, function(v) {
         lyr_names <- paste0(v, "_draw_", sprintf("%03d", seq_len(n_draws)))
@@ -211,7 +217,7 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
         mat_sec   <- mat_raw[sector_cell_idx, , drop = FALSE]
         rm(mat_raw)
         mat_sec   <- expm1(mat_sec)
-        mat_sec[!is.finite(mat_sec)] <- 0
+        mat_sec[!is.finite(mat_sec)] <- NA_real_
         pmax(mat_sec, 0)
       }),
       draw_covs
@@ -260,11 +266,42 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
     # and predicts bird density, capturing the covariance between BART and BRT
     # uncertainty naturally.
 
-    # NA pattern is stable across (i, k): NAs originate only from X_obs_sector
-    # columns that are never overwritten by BART draws, categorical fills, or
-    # disturbance zeros — so compute once before the parallel loop.
-    n_dropped_bcr <- sum(!complete.cases(
-      X_obs_sector[, intersect(b.list[[1]]$var.names, names(X_obs_sector)), drop = FALSE]))
+    # ---- Complete-case mask for the BACKFILLED design matrix X_k ----
+    # A coalition pixel is usable only if its full backfilled design matrix is
+    # complete. NA enters X_k from (a) abiotic columns NA in the observed stack,
+    # (b) NA-valued categorical backfill, and (c) NA backfill draws (mosaic gaps
+    # or expm1 overflow on mis-scaled draws — see draw_vals_sector above). The
+    # previous check looked only at X_obs_sector and silently missed (b) and (c),
+    # under-reporting the true drop count.
+    #
+    # The mask is stable across (bootstrap i, scenario k): abiotic and categorical
+    # columns are fixed, and a mosaic cell's draws are finite (or not) for all 100
+    # draw indices together — so build it ONCE from a representative X_k (draw 1)
+    # that replicates the worker's column overwrites exactly.
+    X_rep <- X_obs_sector
+    for (v in cat_vars_shared) if (v %in% names(X_rep)) X_rep[[v]] <- cat_vals_sector[[v]]
+    for (v in dist_shared)     if (v %in% names(X_rep)) X_rep[[v]] <- 0
+    for (v in cat_vars_shared) {
+      if (v %in% names(X_rep)) {
+        lvls <- cat_levels_shared[[v]]
+        if (!is.null(lvls) && length(lvls) > 0L)
+          X_rep[[v]] <- factor(as.character(X_rep[[v]]), levels = lvls)
+      }
+    }
+    for (v in draw_covs) if (v %in% names(X_rep)) X_rep[[v]] <- draw_vals_sector[[v]][, 1L]
+
+    complete_mask <- stats::complete.cases(X_rep[, model_vars_shared, drop = FALSE])
+    n_dropped_bcr <- sum(!complete_mask)
+    rm(X_rep)
+
+    # surface degenerate BCRs loudly instead of silently aggregating near-zero bf
+    frac_complete <- mean(complete_mask)
+    if (frac_complete < 0.25) {
+      message(Sys.time(), " | WARNING: ", species, " ", bcr_code,
+              " | only ", round(100 * frac_complete, 1), "% of coalition pixels",
+              " have a complete backfilled design matrix — backfill mosaic likely",
+              " degenerate or uncovered here; bf_on_coalition will be unreliable")
+    }
 
     n_cores <- max(1L, as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", "1")))
     message(Sys.time(), " | ", species, " ", bcr_code,
@@ -300,11 +337,13 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
 
         for (v in draw_covs) { if (v %in% names(X_k)) X_k[[v]] <- draw_vals_sector[[v]][, chosen] }
 
-        complete_rows <- complete.cases(X_k[, model$var.names, drop = FALSE])
+        # complete_mask (BCR-wide, built once above) is the shared complete-case
+        # pixel set; predicting on exactly this set guarantees bf_on_coalition and
+        # obs_on_coalition are aggregated over an identical set of pixels.
         pred_vec <- rep(NA_real_, nrow(X_k))
-        if (any(complete_rows)) {
-          pred_vec[complete_rows] <- gbm::predict.gbm(
-            model, X_k[complete_rows, , drop = FALSE],
+        if (any(complete_mask)) {
+          pred_vec[complete_mask] <- gbm::predict.gbm(
+            model, X_k[complete_mask, , drop = FALSE],
             n.trees = model$n.trees, type = "response")
         }
         pred_vec <- pmin(pred_vec, qsp)
@@ -372,7 +411,7 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
             " | estimating population over ", length(sub_ids), " subbasins")
 
     agg <- function(obs_rasters, bf_vecs_list, sub_ids, sector_mask,
-                    subbasin_zone_r, sector_zones, save_arrays = FALSE) {
+                    subbasin_zone_r, sector_zones, complete_mask, save_arrays = FALSE) {
 
       obs_avail <- !is.null(obs_rasters)
       n_sub  <- length(sub_ids)
@@ -392,11 +431,20 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
       valid_px         <- !is.na(sector_zones)
       sector_zones_flt <- sector_zones[valid_px]
 
+      # keep_mask: 1 only at coalition pixels with a complete backfilled design
+      # matrix. obs_on_coalition is summed over THIS set — the identical set
+      # bf_on_coalition uses — so incomplete-case pixels are excluded from both
+      # sums (contributing 0 to v(S): observed-unchanged) instead of injecting a
+      # spurious -obs term into bf - obs.
+      keep_mask <- terra::rast(sector_mask)
+      terra::values(keep_mask) <- NA_integer_
+      keep_mask[sector_cell_idx[complete_mask]] <- 1L
+
       for (i in seq_len(n_boot)) {
 
         if (obs_avail) {
           obs_r     <- obs_rasters[[i]] * 100
-          obs_on_fp <- terra::mask(obs_r, sector_mask)
+          obs_on_fp <- terra::mask(obs_r, keep_mask)   # complete-case footprint only
           sub_obs_total <- terra::zonal(obs_r,     subbasin_zone_r, "sum", na.rm = TRUE)
           sub_obs_on_fp <- terra::zonal(obs_on_fp, subbasin_zone_r, "sum", na.rm = TRUE)
         }
@@ -445,7 +493,8 @@ predict_species_bcr <- function(species, year, all_subbasins_subset, coalition, 
     }
 
     pop_lists <- agg(obs_preds, bf_preds, sub_ids, sector_mask,
-                     subbasin_zone_r, sector_zones, save_arrays = save_arrays)
+                     subbasin_zone_r, sector_zones, complete_mask,
+                     save_arrays = save_arrays)
 
     rm(obs_preds, bf_preds, stack_obs, stack_bf)
     gc()
