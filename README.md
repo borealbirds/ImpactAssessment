@@ -6,8 +6,8 @@ The goal of this project is to quantify the effect of industrial human footprint
 on boreal bird populations (Western hemisphere) to better inform biodiversity management and
 decision making. 
 
-Our goal is to answer *how many birds would there be on a landscape 
-restored with naturally-occurring vegetation altered the landscape?* 
+Our goal is to answer *how many birds would there be on a landscape if industrial footprints were
+replaced with naturally-occurring vegetation?* 
 
 We are approaching this problem by calculating the difference between observed and counterfactual bird 
 populations, partitioned by industrial sector (e.g. forestry,mines, roads, oil and gas).
@@ -40,21 +40,6 @@ exceedance) flag subbasins where the abiotic distributions of low- and high-HF
 pixels diverge enough that BART may be extrapolating; flagged subbasins are
 annotated in the Shapley output.
 
-### Example: Detour Lake Mine
-
-![Backfilling vegetation at Detour Lake Mine](output_figures/BART_diagrams/figure_detour_lake_backfill.png)
-
-Illustration of the backfilling procedure at the Detour Lake gold
-mine in northern Ontario. *Top row:* mine location, satellite imagery, and the
-human footprint score for 2020 ([Hirsh-Pearson et al, 2020](https://doi.org/10.1139/facets-2021-0063)). 
-*Bottom row:* observed tree
-height in 2020 ([Guindon et al 2024](https://doi.org/10.1139/cjfr-2023-0118)), 
-the BART-backfilled tree
-height predicted from abiotic covariates and surrounding low-HF pixels, and
-the per-pixel backfill uncertainty (posterior standard deviation). The backfilled surface
-reconstructs the boreal forest canopy that would plausibly occupy these pixels
-in the absence of mining activity; bird models are then re-predicted on this
-counterfactual landscape.
 
 ### Results To Date
 
@@ -80,6 +65,6 @@ not final until the accompanying manuscript has been published.
 
 ### Collaborating Institutions
 
-- **University of Alberta**
-- **Boreal Avian Modelling Centre (BAM)**
-- **Environment and Climate Change Canada (ECCC)**
+- University of Alberta
+- [Boreal Avian Modelling Centre (BAM)](https://borealbirds.ca/)
+- Environment and Climate Change Canada (ECCC)
