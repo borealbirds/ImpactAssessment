@@ -41,16 +41,6 @@ pixels diverge enough that BART may be extrapolating; flagged subbasins are
 annotated in the Shapley output.
 
 
-### Results To Date
-
-- Backfilling and re-prediction pipelines are operational at the national
-  scale (~674 subbasins, 2020 covariate year).
-- All 256 sector coalitions have been re-predicted for pilot species
-  (e.g. Canada Warbler, Ovenbird), enabling exact Shapley attribution.
-- Subbasin-, BCR-, and national-level Shapley tables quantify each sector's
-  contribution to population change, with bootstrap + posterior uncertainty
-  propagated end-to-end.
-
 ### Repository Layout
 
 Numbered R scripts in `Rscripts/` run in execution order (01 → 15). See
