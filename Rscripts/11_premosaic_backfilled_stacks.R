@@ -115,7 +115,18 @@ mosaic_backfilled_stacks <- function(sub_ids, year, ref) {
     r_full <- terra::rast(m$path)
     r_c    <- terra::crop(r_full, e_int)
     pth    <- file.path(rs_dir, sprintf("sub_%04d.tif", mi))
-    terra::resample(r_c, ref1, method = "near", filename = pth, overwrite = TRUE)
+    # INTERLEAVE=BAND so the per-variable inner loop (which reads one named
+    # band per subbasin per var, 2546 vars x 80 subbasins) does contiguous
+    # band reads instead of a full-file scan per access. GDAL's default
+    # PLANARCONFIG_CONTIG (BIP) made v3 effectively unusable: ~23 min/var,
+    # >900h projected to flush all 2546 vars. BSQ collapses that to seconds
+    # per band-read.
+    terra::resample(r_c, ref1, method = "near",
+                    filename = pth, overwrite = TRUE,
+                    wopt = list(gdal = c("INTERLEAVE=BAND",
+                                         "COMPRESS=DEFLATE",
+                                         "BIGTIFF=YES",
+                                         "TILED=NO")))
     meta[[mi]]$rs_path <- pth
     rm(r_full, r_c)
     gc(verbose = FALSE)
@@ -218,6 +229,14 @@ bam_bcr_codes <- gsub("_", "", paste(bam_boundary$country, bam_boundary$subUnit,
 bcr_poly      <- bam_boundary[bam_bcr_codes == bcr_code, ]
 
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
-terra::mask(stack_bf, bcr_poly, filename = out_path, overwrite = TRUE)
+# INTERLEAVE=BAND on the final mosaic too, so downstream 12B can extract
+# individual covariate bands without scanning the full file (same fix
+# rationale as the pre-resampled tifs above).
+terra::mask(stack_bf, bcr_poly,
+            filename = out_path, overwrite = TRUE,
+            wopt = list(gdal = c("INTERLEAVE=BAND",
+                                 "COMPRESS=DEFLATE",
+                                 "BIGTIFF=YES",
+                                 "TILED=NO")))
 message(Sys.time(), " | ", bcr_code, " | masked and written to ", out_path)
 message(Sys.time(), " | done.")
