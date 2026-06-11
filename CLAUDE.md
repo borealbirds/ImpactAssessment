@@ -57,6 +57,7 @@ Scripts are numbered in execution order:
 | `11_inspect_backfill_metrics.R` | local | Inspect and visualize model accuracy |
 | `11_premosaic_backfilled_stacks.R` + `.sh` | cluster | Mosaic per-subbasin BART backfill rasters into BCR-wide stacks (run before 12) |
 | `12A_observed.R` | local | Run locally (not on cluster). Reads Elly's unclamped 32-bootstrap prediction tifs from `G:/Shared drives/BAM_NationalModels5/output/07_predictions/{species}/` and bootstrap model `.Rdata` files from `G:/Shared drives/BAM_NationalModels5/output/06_bootstraps/{species}/`. Applies species-specific clamping (Steps 5-9 of `10.Package.R`) and writes `observed_bootstraps.tif` (32-layer clamped stack), `observed_mean.tif`, and `observed_sd.tif` to `data/derived_data/predictions/{species}/{bcr_code}/{year}/`. After running, Globus-transfer the `observed_bootstraps.tif` files to the same relative path on the cluster before running 12D_combine. Only Canadian BCRs (`can*`) are processed. |
+| `12A2_build_prediction_weights.R` + `.sh` | cluster | Build per-species×BCR `weight.tif` (= range membership × not-water × inside-data-limit) replicating V5 `10.Truncate` range/water/extent masking. Reads source masks from `data/raw_data/v5_gis/` (no G: access); grid template is the BCR stack. Run ONCE before 12B/12D. 12C and 12D multiply BOTH observed and backfilled density by this weight, preserving obs/bf symmetry (`w·bf − w·obs = w·(bf − obs)`). |
 | `12B_repredict_birds.R` + `.sh` | cluster | Phase 2: re-predict bird densities for a given coalition of sectors (SLURM array over species, one job per coalition). **By design**, 12B runs freely without waiting for observed bootstraps: if `observed_bootstraps.tif` is absent it writes `*_bf_only.rds` (backfilled columns only) and continues. This is normal — `_bf_only` output is not an error or misconfiguration. 12D_combine fills in the obs columns later. |
 | `12C_predict_species_bcr.R` | sourced | `predict_species_bcr()`: reads canonical observed bootstraps, builds coalition mask, runs joint BRT×BART sampling, returns subbasin-level density tables |
 | `12C_repredict_birds_check.R` | local | Sanity checks on re-prediction outputs (legacy) |
@@ -100,6 +101,12 @@ Re-predicting birds:
 # Then Globus-transfer those tifs to the cluster before running 12D_combine.
 # 12B is designed to run freely without those files: it writes *_bf_only.rds when they
 # are absent. This is normal. 12D_combine fills obs columns once the tifs are on the cluster.
+
+# Phase 1b: Build prediction weights ONCE before 12B/12D (range/water/extent masking).
+# Reads data/raw_data/v5_gis (staged from G:); writes weight.tif per species x BCR.
+sbatch 12A2_build_prediction_weights.sh   # --array=1-<n_species>
+# If weight.tif is absent, 12C/12D run UNMASKED (with a warning) — so this is a
+# correctness step, not a hard dependency for the pipeline to execute.
 
 # Submit all 255 coalition jobs via 12B_submit_tiered.sh, which sets per-coalition
 # --mem/--time from a 3-tier scheme keyed on sector membership (resource cost
@@ -195,6 +202,10 @@ data/
 │   │   ├── CanHF_1km_morethan1.tif
 │   │   └── {footprint_type}.tif      # built, crop, forestry_harvest, mines, etc.
 │   ├── hydrobasins_masked_merged_subset.gpkg
+│   ├── v5_gis/                          # V5 masking layers (staged from G:, Canada-only)
+│   │   ├── ranges/{species}.tif         # continuous range-membership rasters (EPSG:3978)
+│   │   ├── WaterMask_Canada.{shp,shx,dbf,prj}
+│   │   └── DataLimitationsMask.{shp,shx,dbf,prj,cpg}
 │   └── Regions/
 │       └── BAM_BCR_NationalModel_Unbuffered.shp
 └── derived_data/
@@ -211,8 +222,9 @@ data/
     │   └── {species}_{year}_coalition_{id}.rds   # subbasin-level population arrays per coalition
     ├── predictions/
     │   └── {species}/{bcr_code}/{year}/
-    │       ├── observed_bootstraps.tif            # canonical 32-layer bootstrap stack
+    │       ├── observed_bootstraps.tif            # canonical 32-layer bootstrap stack (UNweighted)
     │       ├── observed_mean.tif / observed_sd.tif
+    │       └── weight.tif                         # range×water×extent weight (built by 12A2)
     ├── predictions_coalitions/
     │   └── {coalition_id}/{species}/{bcr_code}/{year}/
     │       └── backfilled_mean.tif / backfilled_sd.tif
@@ -248,6 +260,8 @@ Large spatial files (`.tif`, `.gpkg`, `.shp`) and most `.rds` files are gitignor
 ### Computational
 
 4. ~~**Uncertainty combination is ad hoc**~~: **Addressed** by joint sampling in 12C. Each (bootstrap, scenario) pair draws a fresh BART posterior realization inside the BRT bootstrap loop, capturing the covariance between BART and BRT uncertainty naturally. No post-hoc variance combination.
+
+5. **Backfill mosaic coverage is incomplete in some BCRs (UPSTREAM)**: 12B/12C drop footprint pixels whose backfilled design matrix is incomplete (any `_draw_*` covariate NA → `complete.cases` fails). In some BCRs this drops the overwhelming majority of coalition pixels — e.g. CAWA `can10` (verify run 2026-06-10) dropped **98.5–99.7%** of coalition pixels across cid 129/7/256, leaving `bf_on_coalition` based on a tiny remnant and emitting the `backfill mosaic likely degenerate or uncovered` warning. This does **not** affect obs/bf path equivalence (both paths drop the same pixels, so the restructure is still bit-identical), but it makes the counterfactual unreliable wherever coverage is this thin. Root cause is upstream in the backfill/mosaic stages (07 `train_and_backfill`, 08 `deploy_*bart`, 11 `premosaic`) — likely degenerate/flat BART output or uncovered subbasins, not a 12-series bug. Same family as the `12F negative-roads` finding. **Action before trusting per-BCR Shapley numbers**: audit `bart_models_mosaics/{year}/{bcr}_backfilled.tif` coverage (fraction of footprint pixels with a complete `_draw_*` set) per species×BCR; treat BCRs below some coverage floor as flagged. Currently only flagged via the per-BCR runtime warning, not corrected.
 
 ## Instructions from Masa
 1.Always ignore the directory /Rscripts/misc when thinking. It's not immediately relevant to the project.
