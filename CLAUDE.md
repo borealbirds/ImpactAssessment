@@ -56,14 +56,12 @@ Scripts are numbered in execution order:
 | `10C_abiotic_extrapolation_diagnostics.R` | cluster | Flag subbasins where BART may be extrapolating (KS + Mahalanobis diagnostics) → `extrapolation_flags.csv` |
 | `11_inspect_backfill_metrics.R` | local | Inspect and visualize model accuracy |
 | `11_premosaic_backfilled_stacks.R` + `.sh` | cluster | Mosaic per-subbasin BART backfill rasters into BCR-wide stacks (run before 12) |
-| `12A_observed.R` | local | Run locally (not on cluster). Reads Elly's unclamped 32-bootstrap prediction tifs from `G:/Shared drives/BAM_NationalModels5/output/07_predictions/{species}/` and bootstrap model `.Rdata` files from `G:/Shared drives/BAM_NationalModels5/output/06_bootstraps/{species}/`. Applies species-specific clamping (Steps 5-9 of `10.Package.R`) and writes `observed_bootstraps.tif` (32-layer clamped stack), `observed_mean.tif`, and `observed_sd.tif` to `data/derived_data/predictions/{species}/{bcr_code}/{year}/`. After running, Globus-transfer the `observed_bootstraps.tif` files to the same relative path on the cluster before running 12D_combine. Only Canadian BCRs (`can*`) are processed. |
-| `12A2_build_prediction_weights.R` + `.sh` | cluster | Build per-species×BCR `weight.tif` (= range membership × not-water × inside-data-limit) replicating V5 `10.Truncate` range/water/extent masking. Reads source masks from `data/raw_data/v5_gis/` (no G: access); grid template is the BCR stack. Run ONCE before 12B/12D. 12C and 12D multiply BOTH observed and backfilled density by this weight, preserving obs/bf symmetry (`w·bf − w·obs = w·(bf − obs)`). |
-| `12B_repredict_birds.R` + `.sh` | cluster | Phase 2: re-predict bird densities for a given coalition of sectors (SLURM array over species, one job per coalition). **By design**, 12B runs freely without waiting for observed bootstraps: if `observed_bootstraps.tif` is absent it writes `*_bf_only.rds` (backfilled columns only) and continues. This is normal — `_bf_only` output is not an error or misconfiguration. 12D_combine fills in the obs columns later. |
-| `12C_predict_species_bcr.R` | sourced | `predict_species_bcr()`: reads canonical observed bootstraps, builds coalition mask, runs joint BRT×BART sampling, returns subbasin-level density tables |
-| `12C_repredict_birds_check.R` | local | Sanity checks on re-prediction outputs (legacy) |
-| `12D_combine.R` + `.sh` | cluster | Phase 3: once `observed_bootstraps.tif` files (produced by local 12A run and Globus-transferred to the cluster) are in place, run this to fill obs columns into all `*_bf_only.rds` tables produced by Phase 2. |
+| `12A_observed.R` | local | Run locally (not on cluster). Reads Elly's unclamped 32-bootstrap prediction tifs from `G:/Shared drives/BAM_NationalModels5/output/07_predictions/{species}/` and bootstrap model `.Rdata` files from `G:/Shared drives/BAM_NationalModels5/output/06_bootstraps/{species}/`. Applies species-specific clamping (Steps 5-9 of `10.Package.R`) and writes `observed_bootstraps.tif` (32-layer clamped stack), `observed_mean.tif`, and `observed_sd.tif` to `data/derived_data/predictions/{species}/{bcr_code}/{year}/`. After running, Globus-transfer the `observed_bootstraps.tif` files to the same relative path on the cluster before running 12B. Only Canadian BCRs (`can*`) are processed. |
+| `12A2_build_prediction_weights.R` + `.sh` | cluster | Build per-species×BCR `weight.tif` (= range membership × not-water × inside-data-limit) replicating V5 `10.Truncate` range/water/extent masking. Reads source masks from `data/raw_data/v5_gis/` (no G: access); grid template is the BCR stack. Run ONCE before 12B. 12C multiplies BOTH observed and backfilled density by this weight, preserving obs/bf symmetry (`w·bf − w·obs = w·(bf − obs)`). |
+| `12B_repredict_all_coalitions.R` + `.sh` | cluster | Entry point: re-predict bird densities for ALL 255 coalitions in one job (SLURM array, one task per species: 1=CAWA, 2=OVEN). Sources `12C_predict_species_all_coalitions.R`; writes `density_tables/{species}_{year}_coalition_{cid}.rds` (cid 2..256). Requires `observed_bootstraps.tif` present (hard error if missing — observed rasters are now always staged on the cluster). |
+| `12C_predict_species_all_coalitions.R` | sourced | `predict_species_all_coalitions()`: builds the backfilled field ONCE per species×BCR over the all-8-sectors superset, then reduces all 255 coalitions as cheap masked `rowsum`s. Verified bit-identical to the old per-coalition path (since retired). Runs joint BRT×BART sampling; returns subbasin-level density tables. |
 | `13_importance_of_covs_used_in_counterfactual.R` | cluster | Assess percentile importance of backfilled covariates in V5 bird models |
-| `15B_sector_attribution.R` | local | Reads coalition density tables, computes exact Shapley values per sector, aggregates bottom-up (subbasin → BCR → national) → `sector_effects/shapley_*.csv` |
+| `14B_sector_attribution.R` | local | Reads coalition density tables, computes exact Shapley values per sector, aggregates bottom-up (subbasin → BCR → national) → `sector_effects/shapley_*.csv` |
 | `12E_shapley_utils.R` | sourced | Coalition enumeration, Shapley value computation utilities |
 | `misc/` | local | Downstream analysis: population summaries, visualization, vegetation vs. mines comparisons |
 
@@ -81,8 +79,8 @@ Example (one file at a time):
 ```powershell
 $globus = "C:\Users\mannf\AppData\Local\Python\pythoncore-3.14-64\Scripts\globus.exe"
 & $globus transfer `
-  "a7878ccc-747b-11ef-b4b8-8fef73a45f39:/C/Users/mannf/Drive/.../Rscripts/12B_repredict_birds.R" `
-  "8dec4129-9ab4-451d-a45f-5b4b8471f7a3:/home/mannfred/scratch/impact_assessment/Rscripts/12B_repredict_birds.R" `
+  "a7878ccc-747b-11ef-b4b8-8fef73a45f39:/C/Users/mannf/Drive/.../Rscripts/12B_repredict_all_coalitions.R" `
+  "8dec4129-9ab4-451d-a45f-5b4b8471f7a3:/home/mannfred/scratch/impact_assessment/Rscripts/12B_repredict_all_coalitions.R" `
   --label "my file" --sync-level checksum
 ```
 
@@ -98,37 +96,27 @@ Re-predicting birds:
 ```bash
 # Phase 1: Run 12A_observed.R LOCALLY (Rscript Rscripts/12A_observed.R, array task 1 then 2).
 # It reads from G: drive and writes observed_bootstraps.tif to data/derived_data/predictions/.
-# Then Globus-transfer those tifs to the cluster before running 12D_combine.
-# 12B is designed to run freely without those files: it writes *_bf_only.rds when they
-# are absent. This is normal. 12D_combine fills obs columns once the tifs are on the cluster.
+# Globus-transfer those tifs to the cluster BEFORE running 12B — they are now a hard
+# dependency (12C stops with an error if observed_bootstraps.tif is missing).
 
-# Phase 1b: Build prediction weights ONCE before 12B/12D (range/water/extent masking).
+# Phase 1b: Build prediction weights ONCE before 12B (range/water/extent masking).
 # Reads data/raw_data/v5_gis (staged from G:); writes weight.tif per species x BCR.
 sbatch 12A2_build_prediction_weights.sh   # --array=1-<n_species>
-# If weight.tif is absent, 12C/12D run UNMASKED (with a warning) — so this is a
+# If weight.tif is absent, 12C runs UNMASKED (with a warning) — so this is a
 # correctness step, not a hard dependency for the pipeline to execute.
 
-# Submit all 255 coalition jobs via 12B_submit_tiered.sh, which sets per-coalition
-# --mem/--time from a 3-tier scheme keyed on sector membership (resource cost
-# tracks sector footprint, not coalition size -- see the script header):
-#   HEAVY  contains roads                       -> 512G / 24:00:00
-#   MID    no roads; built/crop or >=4 sectors  -> 320G / 16:00:00
-#   LIGHT  otherwise                            -> 224G / 08:00:00
-# The script is re-runnable: it resubmits only coalitions/species still missing
-# a density table.
+# Phase 2: ONE job per species computes ALL 255 coalitions in a single pass
+# (superset restructure — see DESIGN_12C_restructure.md). No per-coalition fan-out,
+# no resource tiers: 12B_repredict_all_coalitions.sh fixes --array=1-2 (1=CAWA, 2=OVEN)
+# at 384G / 24:00:00 each.
 #
-# For a FRESH full re-run, delete stale density tables first so the skip-guard
-# only sees new output (skip this when merely mopping up failed jobs):
+# For a FRESH full re-run, delete stale density tables first (the ~510 pre-2026-06-05
+# tables are UNMASKED and must be overwritten):
 rm -f ../data/derived_data/density_tables/*.rds
-DRYRUN=1 bash 12B_submit_tiered.sh    # preview: HEAVY=128 MID=102 LIGHT=25
-bash 12B_submit_tiered.sh             # submit
+sbatch 12B_repredict_all_coalitions.sh    # writes {species}_{year}_coalition_{cid}.rds, cid 2..256
 
-# Tiers were profiled with collect_seff.sh (cluster) -> analyze_seff.R (local);
-# re-run those on the clean jobs afterward to tighten the tier values.
-
-# After Globus-transferring observed_bootstraps.tif files (produced by local 12A run) to
-# data/derived_data/predictions/{species}/{bcr_code}/{year}/ on the cluster, run:
-sbatch 12D_combine.sh
+# Smoke test (one species, one BCR, 2 bootstraps):
+sbatch --array=1 --time=01:00:00 --mem=192G --export=ALL,TEST_BCR=can60,TEST_N_BOOT=2 12B_repredict_all_coalitions.sh
 ```
 
 ## Fir Cluster Specifications
@@ -174,13 +162,13 @@ sbatch 12D_combine.sh
 
 **Output per subbasin**: `data/derived_data/bart_models/{year}/subbasin_{i}/subbasin_{i}_backfill.tif` (mean and SD layers for each covariate), `_metrics.rds`, `_confusion.rds`.
 
-**Re-prediction**: `11_premosaic` mosaics backfilled subbasin rasters into BCR-wide stacks. `12A_observed.R` runs locally, reading Elly's unclamped 32-bootstrap prediction tifs from `G:/Shared drives/BAM_NationalModels5/output/07_predictions/` and bootstrap model files from `G:/Shared drives/BAM_NationalModels5/output/06_bootstraps/`, applying species-specific clamping (Steps 5-9 of `10.Package.R`), and writing `observed_bootstraps.tif` (32-layer clamped stack) to `data/derived_data/predictions/{species}/{bcr_code}/{year}/`. These are then Globus-transferred to the cluster. `12B/12C` are intentionally designed to run without waiting for those files: when `observed_bootstraps.tif` is absent, 12C writes `*_bf_only.rds` (backfill columns only) and continues normally — this is not an error. Once the tifs are on the cluster, 12D_combine reads each `_bf_only.rds` and fills in the obs columns to produce the complete density table. For a given coalition S of sectors, pixels where any sector in S has footprint (AND CanHF ≥ 1) use backfilled covariates; all other pixels use observed. Joint BART×BRT sampling nests BART posterior draws inside BRT bootstrap iterations.
+**Re-prediction**: `11_premosaic` mosaics backfilled subbasin rasters into BCR-wide stacks. `12A_observed.R` runs locally, reading Elly's unclamped 32-bootstrap prediction tifs from `G:/Shared drives/BAM_NationalModels5/output/07_predictions/` and bootstrap model files from `G:/Shared drives/BAM_NationalModels5/output/06_bootstraps/`, applying species-specific clamping (Steps 5-9 of `10.Package.R`), and writing `observed_bootstraps.tif` (32-layer clamped stack) to `data/derived_data/predictions/{species}/{bcr_code}/{year}/`. These are then Globus-transferred to the cluster, where `observed_bootstraps.tif` is now a hard dependency for `12B/12C` (12C stops with an error if it is missing). `12B_repredict_all_coalitions.R` runs ONE job per species and computes all 255 coalitions in a single pass: it sources `12C_predict_species_all_coalitions.R`, which builds the backfilled field ONCE per species×BCR over the all-8-sectors superset and reduces every coalition as a cheap masked `rowsum`. For a given coalition S of sectors, pixels where any sector in S has footprint (AND CanHF ≥ 1) use backfilled covariates; all other pixels use observed. Joint BART×BRT sampling nests BART posterior draws inside BRT bootstrap iterations. (This superset restructure was verified bit-identical to the older per-coalition `predict_species_bcr()` + `12D_combine` flow, both since retired.)
 
-**Shapley attribution**: 8 sectors → 256 coalitions (2^8). Each coalition is a SLURM job. `15B` computes exact Shapley values from the 256 coalition density tables. Shapley values sum exactly to the total HF impact. `12E_shapley_utils.R` provides coalition enumeration and the Shapley formula.
+**Shapley attribution**: 8 sectors → 256 coalitions (2^8; cid 1 = empty is skipped → 255 computed). All 255 are produced by a single SLURM job per species (12B). `14B_sector_attribution.R` computes exact Shapley values from the coalition density tables. Shapley values sum exactly to the total HF impact. `12E_shapley_utils.R` provides coalition enumeration and the Shapley formula.
 
 **Bottom-up aggregation**: The subbasin is the atomic spatial unit. BCR totals = sum of subbasin values within the BCR. National totals = sum of BCR values. Uncertainty propagates under subbasin independence within BCR and BCR independence nationally.
 
-**Abiotic extrapolation diagnostics**: `10C` computes per-subbasin KS statistics and Mahalanobis exceedance rates comparing low-HF vs high-HF abiotic distributions. Flagged subbasins are annotated in `15B` output.
+**Abiotic extrapolation diagnostics**: `10C` computes per-subbasin KS statistics and Mahalanobis exceedance rates comparing low-HF vs high-HF abiotic distributions. Flagged subbasins are annotated in `14B` output.
 
 ## Key Packages
 
@@ -225,9 +213,6 @@ data/
     │       ├── observed_bootstraps.tif            # canonical 32-layer bootstrap stack (UNweighted)
     │       ├── observed_mean.tif / observed_sd.tif
     │       └── weight.tif                         # range×water×extent weight (built by 12A2)
-    ├── predictions_coalitions/
-    │   └── {coalition_id}/{species}/{bcr_code}/{year}/
-    │       └── backfilled_mean.tif / backfilled_sd.tif
     ├── sector_effects/
     │   ├── shapley_subbasin.csv
     │   ├── shapley_bcr.csv
@@ -251,9 +236,9 @@ Large spatial files (`.tif`, `.gpkg`, `.shp`) and most `.rds` files are gitignor
 
 ### Conceptual
 
-1. ~~**Abiotic overlap / extrapolation risk**~~: **Addressed** by `10C_abiotic_extrapolation_diagnostics.R`. Per-subbasin KS and Mahalanobis diagnostics flag subbasins where BART extrapolates. Flags are annotated in 15B output. Remaining gap: diagnostics are post-hoc; they don't correct the extrapolation, only flag it.
+1. ~~**Abiotic overlap / extrapolation risk**~~: **Addressed** by `10C_abiotic_extrapolation_diagnostics.R`. Per-subbasin KS and Mahalanobis diagnostics flag subbasins where BART extrapolates. Flags are annotated in 14B output. Remaining gap: diagnostics are post-hoc; they don't correct the extrapolation, only flag it.
 
-2. ~~**Sector impacts are not additive**~~: **Addressed** by Shapley value attribution. 12B/12C now run all 2^8 = 256 sector coalitions. 15B computes exact Shapley values that sum to total HF impact. Remaining gap: Shapley values assume the coalition value function v(S) is well-estimated for all S; coalitions with large combined footprints may have more extrapolation risk.
+2. ~~**Sector impacts are not additive**~~: **Addressed** by Shapley value attribution. 12B/12C now run all 2^8 = 256 sector coalitions. 14B computes exact Shapley values that sum to total HF impact. Remaining gap: Shapley values assume the coalition value function v(S) is well-estimated for all S; coalitions with large combined footprints may have more extrapolation risk.
 
 3. **No spatial spillover**: The formula `cf = obs_on_non_coalition + backfilled_on_coalition` assumes removing a coalition's footprint only affects birds on those pixels. Edge effects, area sensitivity, and functional connectivity mean impacts extend beyond the footprint boundary (especially important for linear features like roads and seismic lines).
 

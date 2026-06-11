@@ -70,6 +70,15 @@ logs/
 # Generated output tables (data artifacts, not versioned)
 output_tables/
 
+# Generated figures (regenerable outputs, not versioned)
+figures/
+
+# Staged raw V5 GIS masking layers (large; staged from G:, not versioned)
+data/raw_data/v5_gis/
+
+# Slurm job output pulled to the local tree for inspection
+slurm-*.out
+
 # Raster sidecar metadata
 *.aux.xml
 
