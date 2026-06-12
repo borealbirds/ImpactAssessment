@@ -63,7 +63,7 @@ Scripts are numbered in execution order:
 | `13_importance_of_covs_used_in_counterfactual.R` | cluster | Assess percentile importance of backfilled covariates in V5 bird models |
 | `14B_sector_attribution.R` | local | Reads coalition density tables, computes exact Shapley values per sector, aggregates bottom-up (subbasin → BCR → national) → `sector_effects/shapley_*.csv` |
 | `12E_shapley_utils.R` | sourced | Coalition enumeration, Shapley value computation utilities |
-| `misc/` | local | Downstream analysis: population summaries, visualization, vegetation vs. mines comparisons |
+| `misc/` | local | Downstream analysis (population summaries, visualization, vegetation vs. mines) plus one-off diagnostics/profiling not in the execution-order pipeline (`diag_*`, `analyze_seff`, `check_model_complexity`, `debug_*`, `figure_*`) |
 
 ## Transferring Files to the Cluster (Globus)
 
@@ -106,7 +106,8 @@ sbatch 12A2_build_prediction_weights.sh   # --array=1-<n_species>
 # correctness step, not a hard dependency for the pipeline to execute.
 
 # Phase 2: ONE job per species computes ALL 255 coalitions in a single pass
-# (superset restructure — see DESIGN_12C_restructure.md). No per-coalition fan-out,
+# (superset restructure — see "12C restructure invariants" in Key Architecture
+# Decisions). No per-coalition fan-out,
 # no resource tiers: 12B_repredict_all_coalitions.sh fixes --array=1-2 (1=CAWA, 2=OVEN)
 # at 384G / 24:00:00 each.
 #
@@ -163,6 +164,13 @@ sbatch --array=1 --time=01:00:00 --mem=192G --export=ALL,TEST_BCR=can60,TEST_N_B
 **Output per subbasin**: `data/derived_data/bart_models/{year}/subbasin_{i}/subbasin_{i}_backfill.tif` (mean and SD layers for each covariate), `_metrics.rds`, `_confusion.rds`.
 
 **Re-prediction**: `11_premosaic` mosaics backfilled subbasin rasters into BCR-wide stacks. `12A_observed.R` runs locally, reading Elly's unclamped 32-bootstrap prediction tifs from `G:/Shared drives/BAM_NationalModels5/output/07_predictions/` and bootstrap model files from `G:/Shared drives/BAM_NationalModels5/output/06_bootstraps/`, applying species-specific clamping (Steps 5-9 of `10.Package.R`), and writing `observed_bootstraps.tif` (32-layer clamped stack) to `data/derived_data/predictions/{species}/{bcr_code}/{year}/`. These are then Globus-transferred to the cluster, where `observed_bootstraps.tif` is now a hard dependency for `12B/12C` (12C stops with an error if it is missing). `12B_repredict_all_coalitions.R` runs ONE job per species and computes all 255 coalitions in a single pass: it sources `12C_predict_species_all_coalitions.R`, which builds the backfilled field ONCE per species×BCR over the all-8-sectors superset and reduces every coalition as a cheap masked `rowsum`. For a given coalition S of sectors, pixels where any sector in S has footprint (AND CanHF ≥ 1) use backfilled covariates; all other pixels use observed. Joint BART×BRT sampling nests BART posterior draws inside BRT bootstrap iterations. (This superset restructure was verified bit-identical to the older per-coalition `predict_species_bcr()` + `12D_combine` flow, both since retired.)
+
+**12C restructure invariants**: The joint-sampling seed depends only on species, BCR, bootstrap `i`, and scenario `k` — never the coalition. So for fixed (species, BCR, i, k) the backfilled density field over pixels is identical across all 255 coalitions; the coalition only selects which pixels are masked in, never the backfilled value at a pixel. This is what licenses computing the backfilled field ONCE over the all-8-sectors superset and reducing each coalition as a cheap masked `rowsum`. Correctness constraints that must hold for the restructure to stay bit-identical to the (retired) per-coalition path:
+- The complete-case mask is identical between obs and bf (a single `keep` drives both).
+- BART draws are log1p-scaled → `expm1` before use; non-finite → NA, never 0.
+- Categorical `var.levels` are indexed by `match()` against `var.names`, never by name.
+- The `qsp` per-pixel cap stays in the gbm step (it feeds the density table); q99/q0 caps only ever touched inspection rasters, never the density table.
+- Grouped `_draw_*` reads use INTERLEAVE=BAND (now once per BCR).
 
 **Shapley attribution**: 8 sectors → 256 coalitions (2^8; cid 1 = empty is skipped → 255 computed). All 255 are produced by a single SLURM job per species (12B). `14B_sector_attribution.R` computes exact Shapley values from the coalition density tables. Shapley values sum exactly to the total HF impact. `12E_shapley_utils.R` provides coalition enumeration and the Shapley formula.
 
