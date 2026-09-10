@@ -17,7 +17,7 @@ ia_dir <- file.path(root, "data", "Extras", "sandbox_data", "impactassessment_sa
 # import time of disturbance layer (CAfire) and reproject (takes ~6 hours)
 # note that Hermosilla et al (2016) is in NAD_1983_Lambert_Conformal_Conic
 # downloaded from: https://opendata.nfis.org/mapserver/nfis-change_eng.html
-CAfire <- terra::rast(file.path(ia_dir, "CA_Forest_Fire_1985-2020.tif")) 
+CAfire <- terra::rast(file.path(ia_dir, "CAfire", "CA_Forest_Fire_1985-2020.tif"))
 
 # group every 33 × 33 grid of 30m pixels into one 1000m x 1000m pixel (takes ~5 mins, but saves hours in reprojectiom time)
 # `fact` tells terra how many raster cells to combine together when aggregating
@@ -47,6 +47,11 @@ find_year_since_fire <-
     
     # normalize to c(0,1): recent fires=1, older fires=0
     ysf_norm <- 1 / (ysf + 1)  # +1 avoids division by zero when ysf == 0
+    # unburned-in-record (NA) is the ysf -> Inf limit = 0, a REAL value, not missing.
+    # Filling it stops the 99%-NA cascade that collapses backfill coverage (Open Limitation #5).
+    ysf_norm[is.na(ysf_norm)] <- 0
+    # re-mask so off-study-area stays NA (in-study pixels keep their real 0)
+    ysf_norm <- terra::mask(ysf_norm, bam_boundary)
     names(ysf_norm) <- paste0("CAfire_", current_year)
     return(ysf_norm)
 }
@@ -60,7 +65,7 @@ names(CAfire_rasters) <- paste0("CAfire_", years)
 # save reprojected/cropped/masked time-since-disturbance layer
 purrr::iwalk(CAfire_rasters, ~ {
   terra::writeRaster(.x,
-                     filename = file.path(ia_dir, paste0(.y, "_masked.tif")),
+                     filename = file.path(ia_dir, "CAfire", paste0(.y, "_masked.tif")),
                      overwrite = TRUE)})
 
 
