@@ -1,9 +1,9 @@
 collect_metrics_mbart <- function(fit, X_train, y, 
                                   covariate, subbasin, year, top_var, present) {
   
-  # 1. predict on the training data
+  # predict on the training data
   # continuous BART always computes the latent Gaussian regression function 
-  # for both train and test sets during fitting, not just during prediction.
+  # for both train and test sets during fitting, not just during prediction
   # need to use predict for the multinomial case
   X_train <- X_train[, colnames(fit$varprob[[1]]), drop = FALSE] # drop covariates not used by BART
   pred <- predict(fit, newdata = X_train)   # no type="prob"
