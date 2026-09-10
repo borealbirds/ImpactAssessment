@@ -56,7 +56,7 @@ terra::writeRaster(highhf_mask, file.path(ia_dir, "hirshpearson", "CanHF_1km_mor
 
 
 # ----------------------------------------------
-# create "good sectors" high HF layer:
+# create "good sectors" (ie target sectors) high HF layer:
 # CanHF >= 1 AND at least one target sector present (score > 0)
 # excluded sectors: forestry_harvest, night_lights, population_density, nav_water
 good_sectors <- c("built", "crop", "dam_and_associated_reservoir", "mines",
@@ -82,7 +82,7 @@ terra::writeRaster(goodsectors_mask,
 
 # ----------------------------------------------
 # per-sector connected-component (queen's case) patch summary
-# mirrors the sector_mask logic in 15B / 12B
+# mirrors the sector_mask logic downstream
 
 patch_summary <- do.call(rbind, lapply(good_sectors, function(sec) {
 
