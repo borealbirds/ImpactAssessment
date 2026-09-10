@@ -7,8 +7,8 @@
 library(terra)
 library(tidyverse)
 
-cc    <- FALSE   # TRUE = Compute Canada cluster
-local <- TRUE    # TRUE = local RProject machine
+cc    <- FALSE   
+local <- TRUE    
 
 if (cc)            { ia_dir <- "/home/mannfred/scratch/impact_assessment" }
 if (!cc && local)  { ia_dir <- getwd() }
@@ -60,7 +60,7 @@ continuous_holdout_metrics |>
 
 categorical_holdout_metrics <- readRDS(file.path(getwd(), "data/derived_data/rds_files/model_metrics/categorical_holdout_metrics.rds"))
 
-# get mean abd SD accuracy per categorical covariate
+# get mean and SD accuracy per categorical covariate
 test1 <- categorical_holdout_metrics |>
   group_by(covariate) |>
   summarise(
