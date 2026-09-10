@@ -2,15 +2,16 @@
 # title: Impact Assessment: pre-mosaic backfilled subbasin stacks per BCR
 # author: Mannfred Boehm
 # created: 2026-03-23
-#
-# Purpose: mosaic per-subbasin BART backfill rasters into one BCR-wide stack,
-# resample to the BCR covariate grid, mask to the BCR polygon, and write to
-#   data/derived_data/bart_models_mosaics/{year}/{bcr_code}_backfilled.tif
-#
-# Run as a SLURM array (one task per BCR) before 12A_repredict_birds.R.
-# 12B_predict_species_bcr.R reads these files instead of re-mosaicing per
-# species x sector, which eliminates the dominant ~11h bottleneck per BCR.
 # ---
+#
+# mosaic per-subbasin BART backfill rasters into one BCR-wide stack,
+# resample to the BCR covariate grid, mask to the BCR polygon, and write to
+# data/derived_data/bart_models_mosaics/{year}/{bcr_code}_backfilled.tif
+#
+# run as a SLURM array (one task per BCR) before 12A_repredict_birds.R.
+# 12B_predict_species_bcr.R reads these files instead of re-mosaicing per
+# species x sector, which eliminates the dominant time bottleneck per BCR (~11 hours).
+
 
 suppressPackageStartupMessages({
   library(terra)
@@ -69,29 +70,27 @@ mosaic_backfilled_stacks <- function(sub_ids, year, ref) {
   paths <- paths[file.exists(paths)]
   if (length(paths) == 0) return(NULL)
 
-  # Memory-frugal, IO-frugal mosaic (v3, 2026-05-23).
-  # v2 cut peak memory during the variable loop but OOM-killed afterwards:
-  # 2546 BCR-grid SpatRasters were kept alive in `var_list`, then stitched +
-  # masked + written all at once, which materialized everything in RAM.
-  # v2 was also slow (~14h for can10) because terra::resample was called
+  # memory and IO efficient mosaicing function designed by Claude Opus
+  # previous version had 2546 BCR-grid SpatRasters kept alive in `var_list`, 
+  # then stitched + masked + written all at once, which materialized everything in RAM
+  # previous version was also slow because terra::resample was called
   # once per (variable, subbasin) pair (~200k times for can10).
   #
-  # v3 changes:
-  #   (1) cheap metadata sweep (unchanged from v2),
-  #   (2) PRE-RESAMPLE each subbasin's full stack to the BCR grid ONCE,
-  #       writing to its own tempfile. ~80 resamples instead of ~200k --
-  #       this collapses the dominant walltime cost.
-  #   (3) pre-open lightweight SpatRaster handles to the resampled tifs so
-  #       the inner loop is a cheap name lookup + layer reference,
-  #   (4) per variable, build a cover() chain across subbasin handles and
-  #       FLUSH the accumulator to its own tempfile. The in-memory raster
-  #       is then dropped -- only file paths persist across iterations.
-  #   (5) the returned SpatRaster is file-backed (2546 single-layer tifs);
-  #       downstream mask + writeRaster can stream block-by-block.
+  # here, we cut memory and IO by:
+  # (1) cheap metadata sweep (unchanged from previous version)
+  # (2) pre-sample each subbasin's full stack to the BCR grid once,
+  #     writing to its own tempfile. ~80 resamples instead of ~200k
+  # (3) pre-open lightweight SpatRaster handles to the resampled tifs so
+  #     the inner loop is a cheap name lookup + layer reference,
+  # (4) per variable, build a cover() chain across subbasin handles and
+  #     flush the accumulator to its own tempfile. The in-memory raster
+  #       is then dropped; only file paths persist across iterations.
+  # (5) the returned SpatRaster is file-backed (2546 single-layer tifs);
+  #     downstream mask + writeRaster can stream block-by-block.
   ref1    <- ref[[1]]
   ref_ext <- terra::ext(ref1)
 
-  # (1) cheap metadata sweep -- no pixels read
+  # (1) cheap metadata sweep (no pixels read)
   meta <- lapply(paths, function(p) {
     r <- terra::rast(p)
     list(path = p, names = names(r), ext = terra::ext(r))
@@ -118,9 +117,9 @@ mosaic_backfilled_stacks <- function(sub_ids, year, ref) {
     # INTERLEAVE=BAND so the per-variable inner loop (which reads one named
     # band per subbasin per var, 2546 vars x 80 subbasins) does contiguous
     # band reads instead of a full-file scan per access. GDAL's default
-    # PLANARCONFIG_CONTIG (BIP) made v3 effectively unusable: ~23 min/var,
-    # >900h projected to flush all 2546 vars. BSQ collapses that to seconds
-    # per band-read.
+    # PLANARCONFIG_CONTIG (BIP) made previous versions effectively unusable: 
+    # ~23 min/var and >900h projected to flush all 2546 vars. 
+    # BSQ collapses that to seconds per band-read.
     terra::resample(r_c, ref1, method = "near",
                     filename = pth, overwrite = TRUE,
                     wopt = list(gdal = c("INTERLEAVE=BAND",
@@ -135,7 +134,7 @@ mosaic_backfilled_stacks <- function(sub_ids, year, ref) {
   meta <- Filter(function(m) !is.na(m$rs_path), meta)
   if (length(meta) == 0) return(NULL)
 
-  # (3) pre-open SpatRaster handles (metadata only -- no pixels loaded)
+  # (3) pre-open SpatRaster handles (metadata only, no pixels loaded)
   sub_handles <- lapply(meta, function(m) terra::rast(m$rs_path))
   names_per   <- lapply(sub_handles, names)
 
@@ -220,10 +219,11 @@ message(Sys.time(), " | ", bcr_code, " | mosaic done (already on BCR grid)")
 
 
 # mask + write ------------------------------------------------------
-# Combined into one streaming pass: terra::mask(filename=...) block-processes
-# the file-backed stack so peak memory stays bounded regardless of layer count.
-# Earlier v2 split this into mask -> writeRaster, which materialized all 2546
-# layers in RAM at once and OOM-killed the job at 128G.
+# combined into one streaming pass: 
+# the terra::mask(filename=...) block-processes the file-backed stack 
+# so peak memory stays bounded regardless of layer count.
+# previous versions split this into mask -> writeRaster, 
+# which materialized all 2546 layers in RAM at once and OOM-killed the job at 128G.
 
 bam_bcr_codes <- gsub("_", "", paste(bam_boundary$country, bam_boundary$subUnit, sep = "_"))
 bcr_poly      <- bam_boundary[bam_bcr_codes == bcr_code, ]
