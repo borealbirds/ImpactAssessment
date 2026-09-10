@@ -1,21 +1,23 @@
 # ---
 # title: Abiotic extrapolation diagnostics for BART backfilling
 # author: Mannfred Boehm
+# created: May 19, 2026
 # ---
-# For each subbasin, compare the abiotic covariate distributions of low-HF
-# (training) pixels vs high-HF (backfill) pixels.  Flag subbasins where the
-# BART model is likely extrapolating into abiotic space not represented in
+
+# for each subbasin compare the abiotic covariate distributions of low-HF
+# (training) pixels vs high-HF (backfill) pixels.  
+# flag subbasins where the BART model is likely extrapolating into abiotic space not represented in
 # the training data.
 #
-# Diagnostics per subbasin x abiotic covariate:
+# diagnostics per subbasin x abiotic covariate:
 #   - Kolmogorov-Smirnov D statistic (univariate distributional overlap)
 #
-# Diagnostics per subbasin (multivariate):
+# diagnostics per subbasin (multivariate):
 #   - Fraction of high-HF pixels whose Mahalanobis distance from the low-HF
 #     centroid exceeds the 95th percentile of the low-HF Mahalanobis distribution
 #
-# Output: data/derived_data/rds_files/extrapolation_flags.csv
-# ---
+# output: data/derived_data/rds_files/extrapolation_flags.csv
+
 
 suppressPackageStartupMessages({
   library(terra)
@@ -23,7 +25,7 @@ suppressPackageStartupMessages({
   library(tidyr)
 })
 
-# ---- Execution context -------------------------------------------------------
+# define paths -------------------------------------------------------
 
 cc    <- TRUE
 local <- FALSE
@@ -33,8 +35,6 @@ if (!cc && local)  { ia_dir <- getwd() }
 if (!cc && !local) { ia_dir <- file.path("G:/Shared drives/BAM_NationalModels5", "data", "Extras",
                                           "sandbox_data", "impactassessment_sandbox") }
 
-# ---- Paths -------------------------------------------------------------------
-
 lowhf_path  <- file.path(ia_dir, "data/raw_data/hirshpearson/CanHF_1km_lessthan1.tif")
 highhf_path <- file.path(ia_dir, "data/raw_data/hirshpearson/CanHF_1km_morethan1.tif")
 basin_path  <- file.path(ia_dir, "data/raw_data/hydrobasins_masked_merged_subset.gpkg")
@@ -43,7 +43,7 @@ dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
 year <- 2020
 
-# ---- Load spatial data -------------------------------------------------------
+# load spatial data ---------------------------------------------------
 
 all_subbasins <- vect(basin_path)
 n_sub         <- nrow(all_subbasins)
@@ -54,7 +54,7 @@ highhf_mask <- rast(highhf_path)
 stack_y <- rast(file.path(ia_dir, "data/raw_data/covariates_mosaiced",
                           paste0("covariates_mosaiced_", year, ".tif")))
 
-# ---- Define abiotic covariates -----------------------------------------------
+# define abiotic covariates -------------------------------------------
 
 predictor_metadata <-
   dplyr::tibble(BAMexploreR::predictor_metadata) |>
@@ -78,7 +78,7 @@ abiotic_preds <- intersect(abiotic_preds, names(stack_y))
 message("Abiotic covariates (", length(abiotic_preds), "): ",
         paste(abiotic_preds, collapse = ", "))
 
-# ---- Process each subbasin ---------------------------------------------------
+# process each subbasin ----------------------------------------------
 
 results <- vector("list", n_sub)
 
@@ -110,7 +110,7 @@ for (s in seq_len(n_sub)) {
   lo_mat <- vals_all[lo_idx, , drop = FALSE]
   hi_mat <- vals_all[hi_idx, , drop = FALSE]
 
-  # --- Univariate: KS D statistic per covariate ---
+  # univariate: KS D statistic per covariate
   ks_d <- setNames(numeric(length(avail)), avail)
   for (v in avail) {
     lo_v <- lo_mat[, v]; lo_v <- lo_v[!is.na(lo_v)]
@@ -122,7 +122,7 @@ for (s in seq_len(n_sub)) {
     }
   }
 
-  # --- Multivariate: Mahalanobis exceedance ---
+  # multivariate: Mahalanobis exceedance 
   # remove columns with zero variance or all-NA in either set
   good_cols <- vapply(avail, function(v) {
     lo_v <- lo_mat[, v]; hi_v <- hi_mat[, v]
@@ -144,24 +144,24 @@ for (s in seq_len(n_sub)) {
 
     if (nrow(lo_complete) > ncol(lo_complete) + 1 && nrow(hi_complete) > 0) {
       mu    <- colMeans(lo_complete)
-      Sigma <- cov(lo_complete)
+      sigma <- cov(lo_complete)
 
       # regularize if near-singular
-      Sigma <- Sigma + diag(1e-6, ncol(Sigma))
+      sigma <- sigma + diag(1e-6, ncol(sigma))
 
       tryCatch({
-        Sigma_inv <- solve(Sigma)
+        sigma_inv <- solve(sigma)
 
-        mahal_lo <- mahalanobis(lo_complete, mu, Sigma, inverted = FALSE)
+        mahal_lo <- mahalanobis(lo_complete, mu, sigma, inverted = FALSE)
         q95      <- quantile(mahal_lo, 0.95)
 
-        mahal_hi <- mahalanobis(hi_complete, mu, Sigma, inverted = FALSE)
+        mahal_hi <- mahalanobis(hi_complete, mu, sigma, inverted = FALSE)
         mahal_exceedance <- mean(mahal_hi > q95)
       }, error = function(e) {
         mahal_exceedance <<- NA_real_
       })
-    }
-  }
+    } # close if (nrow(lo_complete)
+  } # close if (length(good_avail) >= 2)
 
   results[[s]] <- data.frame(
     subbasin        = s,
@@ -175,15 +175,16 @@ for (s in seq_len(n_sub)) {
   )
 
   if (s %% 50 == 0) message("  processed ", s, " / ", n_sub, " subbasins")
-}
 
-# ---- Assemble and flag -------------------------------------------------------
+} # close for loop over subbasins
+
+# assemble results and flag areas of extrapolation ----------------------
 
 flags_df <- bind_rows(results)
 
 # flag subbasins where extrapolation risk is elevated:
 #   KS max > 0.5 (large distributional shift in at least one covariate)
-#   OR Mahalanobis exceedance > 0.3 (>30% of backfill pixels outside training 95th pct)
+#   or Mahalanobis exceedance > 0.3 (>30% of backfill pixels outside training 95th pct)
 flags_df$flag <- with(flags_df,
   (ks_max > 0.5) | (!is.na(mahal_exceedance) & mahal_exceedance > 0.3)
 )
@@ -191,5 +192,5 @@ flags_df$flag <- with(flags_df,
 out_path <- file.path(out_dir, "extrapolation_flags.csv")
 write.csv(flags_df, out_path, row.names = FALSE)
 
-message("Wrote ", nrow(flags_df), " subbasins to ", out_path)
-message("  Flagged: ", sum(flags_df$flag, na.rm = TRUE), " / ", nrow(flags_df))
+message("wrote ", nrow(flags_df), " subbasins to ", out_path)
+message("  flagged: ", sum(flags_df$flag, na.rm = TRUE), " / ", nrow(flags_df))
