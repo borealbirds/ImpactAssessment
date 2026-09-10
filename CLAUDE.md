@@ -256,6 +256,26 @@ Large spatial files (`.tif`, `.gpkg`, `.shp`) and most `.rds` files are gitignor
 
 5. **Backfill mosaic coverage is incomplete in some BCRs (UPSTREAM)**: 12B/12C drop footprint pixels whose backfilled design matrix is incomplete (any `_draw_*` covariate NA → `complete.cases` fails). In some BCRs this drops the overwhelming majority of coalition pixels — e.g. CAWA `can10` (verify run 2026-06-10) dropped **98.5–99.7%** of coalition pixels across cid 129/7/256, leaving `bf_on_coalition` based on a tiny remnant and emitting the `backfill mosaic likely degenerate or uncovered` warning. This does **not** affect obs/bf path equivalence (both paths drop the same pixels, so the restructure is still bit-identical), but it makes the counterfactual unreliable wherever coverage is this thin. Root cause is upstream in the backfill/mosaic stages (07 `train_and_backfill`, 08 `deploy_*bart`, 11 `premosaic`) — likely degenerate/flat BART output or uncovered subbasins, not a 12-series bug. Same family as the `12F negative-roads` finding. **Action before trusting per-BCR Shapley numbers**: audit `bart_models_mosaics/{year}/{bcr}_backfilled.tif` coverage (fraction of footprint pixels with a complete `_draw_*` set) per species×BCR; treat BCRs below some coverage floor as flagged. Currently only flagged via the per-BCR runtime warning, not corrected.
 
+   **UPDATE 2026-09-10 — root cause found, fix built + staged, cluster run still pending.** The dropout was
+   NOT degenerate BART output or uncovered subbasins. Two causes, both in our own pipeline (zero V5 parity
+   risk — neither covariate class can enter the bird BRT, see `12C:123` `model_vars_shared`):
+   (a) **`CAfire`** (time-since-disturbance, an IA-only backfill predictor) encodes "unburned in the
+   1985–2020 record" as `NA` — true of ~99% of high-HF pixels. Partial-NA columns survive the all-NA drop
+   at `08A:155`, BART returns `NaN` for any row with an NA predictor, and `08A:124–132` cascades that NaN
+   down the whole biotic hierarchy. **Fixed** by recoding `NA → 0` in `02` (with `1/(ysf+1)`, never-burned
+   is the `ysf → ∞` limit = 0, so 0 is semantically correct) — committed `0bbf2ea`.
+   (b) **Partial-NA V5 covariates** (`StandardGreenup`/`StandardDormancy` phenology on water, soil) were
+   dropped twice: as BART NaN draws, and again at the `12C` `complete.cases` gate — even though V5 itself
+   predicted at 100% of those pixels, because `gbm` tolerates NA via surrogate splits and BART does not.
+   **Fixed** by Fix B (`08A` median-impute + `_isNA` flag, committed) and Fix A (`12C` gates only on
+   backfilled covariates, written but uncommitted). Recoding phenology was rejected — unlike CAfire these
+   ARE V5 covariates.
+   Local validation: `frac_backfillable` 0.8% → ~80% (post-CAfire) → 100% (post-Fix-B) on subbasin 1.
+   **Not yet confirmed at scale** — the cluster re-run (`07` → `11` → `12B`) has not been launched, and
+   Fix A is untested. Treat per-BCR Shapley numbers as unreliable until the `12C` runtime line
+   `complete superset pixels` reports ≫ the old 1–3%. Full execution plan and current state:
+   `HANDOFF_cafire_backfill_fix.md` §0.
+
 ## Instructions from Masa
 1.Always ignore the directory /Rscripts/misc when thinking. It's not immediately relevant to the project.
 2.Note that population estimates made by boosted regression trees via `gbm` predict bird density at the hectare scale.
