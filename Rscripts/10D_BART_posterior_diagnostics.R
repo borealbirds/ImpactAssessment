@@ -1,23 +1,27 @@
 # ---
 # title:   BART posterior draw adequacy diagnostic
 # author:  Mannfred Boehm
-# purpose: Test whether n_draws=100 random draws subsampled from the 700-draw
-#          gbart() posterior adequately represent the full posterior.
-#          12B resamples 1 of 100 stored draws per counterfactual scenario; this
-#          script verifies that 100 draws is enough to cover the posterior's shape
-#          and tails regardless of their distribution.
-#
-#          For each of n_samples random (subbasin, covariate) pairs, fits gbart()
-#          (identical arguments to 08B), then repeats 20 subsamples of 100 draws
-#          and compares their quantiles to the full 700-draw posterior:
-#            (a) mean absolute relative error of q025/q50/q975
-#                (100-draw subsample vs. full 700-draw posterior, per pixel)
-#            (b) SD of the above across the 20 repeated subsamples
-#                (reflects how stable a single stored set of 100 draws is)
-#
-# context: Alliance Canada cluster, single node, multi-core
-# output:  data/derived_data/rds_files/bart_posterior_diagnostics.rds
+# created: March 16, 2026
 # ---
+
+
+# ------------------------------------------------------------------
+# test whether n_draws=100 random draws subsampled from the 700-draw
+# gbart() posterior adequately represent the full posterior.
+#
+# 12B resamples 1 of 100 stored draws per counterfactual scenario; this
+# script verifies that 100 draws is enough to cover the posterior's shape
+# and tails regardless of their distribution.
+#
+# for each of n_samples random (subbasin, covariate) pairs, 
+# this script fits gbart() (identical arguments to 08B), then repeats 20 subsamples of 100 draws
+# and compares their quantiles to the full 700-draw posterior by:
+# 1. mean absolute relative error of q025/q50/q975 and,
+# 2. SD of the above across the 20 repeated subsamples
+# (reflects how stable a single stored set of 100 draws is)
+#
+# output:  data/derived_data/rds_files/bart_posterior_diagnostics.rds
+
 
 suppressPackageStartupMessages({
   library(BART)
@@ -27,7 +31,7 @@ suppressPackageStartupMessages({
   library(parallel)
 })
 
-# ---- settings ----------------------------------------------------------------
+# file paths ----------------------------------------------------------------
 
 ia_dir     <- "/home/mannfred/scratch/impact_assessment"
 year       <- 2020
@@ -38,8 +42,7 @@ set.seed(42)
 n_cores <- as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", unset = "1"))
 message(sprintf("[%s] starting — %d core(s), target %d ok pairs", Sys.time(), n_cores, target_ok))
 
-# ---- file paths (passed by value to workers; avoids terra fork issues) -------
-
+# structred to avoid terra fork issues
 stack_path     <- file.path(ia_dir, "data", "raw_data", "covariates_mosaiced",
                             sprintf("covariates_mosaiced_%d.tif", year))
 lowhf_path     <- file.path(ia_dir, "data", "raw_data", "hirshpearson", "CanHF_1km_lessthan1.tif")
@@ -47,7 +50,7 @@ highhf_path    <- file.path(ia_dir, "data", "raw_data", "hirshpearson", "CanHF_1
 subbasins_path <- file.path(ia_dir, "data", "raw_data", "hydrobasins_masked_merged_subset.gpkg")
 hier_path      <- file.path(ia_dir, "data", "raw_data", "biotic_variable_hierarchy.rds")
 
-# ---- predictor metadata (mirrors 07_train_and_backfill.R) -------------------
+# predictor metadata (mirrors 07_train_and_backfill.R) ----------------------
 
 categorical_responses <- c("ABoVE_1km", "NLCD_1km", "MODISLCC_1km",
                            "MODISLCC_5x5", "SCANFI_1km", "VLCE_1km")
@@ -94,8 +97,8 @@ message(sprintf("[%s] %d continuous biotic covariates in stack", Sys.time(), len
 
 n_subbasins <- nrow(terra::vect(subbasins_path))
 
-# ---- per-pair worker function ------------------------------------------------
-# Everything terra-related is loaded from disk inside this function so that
+# per-pair (100m draws, 700 draws) function -----------------------------------
+# everything terra-related is loaded from disk inside this function so that
 # terra's C++ external pointers are valid within the forked worker process.
 
 test_one_pair <- function(pair,
@@ -113,7 +116,7 @@ test_one_pair <- function(pair,
 
   tryCatch({
 
-    # load and align spatial objects ------------------------------------------
+    # load and align spatial objects 
     stack_y   <- terra::rast(stack_path)
     subbasins <- terra::vect(subbasins_path) |> terra::project(terra::crs(stack_y))
     lowhf     <- terra::rast(lowhf_path)
@@ -126,7 +129,7 @@ test_one_pair <- function(pair,
     lowhf_s  <- terra::resample(lowhf,  cov_s, method = "near") |> terra::mask(poly)
     highhf_s <- terra::resample(highhf, cov_s, method = "near") |> terra::mask(poly)
 
-    # build training and backfill data frames ---------------------------------
+    # build training and backfill data frames 
     df_full     <- terra::as.data.frame(cov_s, xy = TRUE, na.rm = FALSE, cells = TRUE)
     df_train    <- terra::as.data.frame(terra::mask(cov_s, lowhf_s), xy = TRUE, na.rm = FALSE)
     backfill_idx <- which(terra::values(highhf_s) == 1)
@@ -160,7 +163,7 @@ test_one_pair <- function(pair,
                   biotic_cols_cont_local[seq_len(b_pos - 1L)] else character(0)
     predictors <- c(abiotic_cols, b_before, "x", "y")
 
-    # build BART design matrices (mirrors 08A) --------------------------------
+    # build BART design matrices (mirrors 08A) 
     df_tb <- df_train[idx, predictors, drop = FALSE]
     df_tb <- df_tb[, colSums(!is.na(df_tb)) > 0, drop = FALSE]
     sds   <- sapply(df_tb, function(x) sd(as.numeric(x), na.rm = TRUE))
@@ -173,7 +176,7 @@ test_one_pair <- function(pair,
     y <- as.numeric(df_train[[b]][idx])
     if (length(unique(log1p(y))) <= 2) return(modifyList(stub, list(status ="degenerate_logy")))
 
-    # 90/10 holdout split (mirrors 08B_deploy_gbart.R) ------------------------
+    # 90/10 holdout split 
     b_pos_in_biotic <- which(biotic_cols == b)
     if (length(b_pos_in_biotic) == 0) return(modifyList(stub, list(status = "not_in_biotic_cols")))
     set.seed(abs(as.integer(sprintf("%d%03d", sub_idx, b_pos_in_biotic))))
@@ -183,7 +186,7 @@ test_one_pair <- function(pair,
 
     if (length(unique(log1p(y_tr))) <= 2) return(modifyList(stub, list(status ="degenerate_after_split")))
 
-    # fit gbart — identical arguments to 08B_deploy_gbart.R ------------------
+    # fit gbart (see: 08B_deploy_gbart.R 
     fit <- BART::gbart(
       x.train = as.matrix(df_tb),
       y.train = log1p(y_tr),
@@ -201,8 +204,8 @@ test_one_pair <- function(pair,
     # yhat.test is [ndpost x n_px]; each column is one backfill pixel
     n_px <- ncol(fit$yhat.test)
 
-    # ---- draw adequacy: does n_draws=100 represent the full posterior? -------
-    # Reference quantiles from all 700 draws (the "truth").
+    # draw adequacy: does n_draws=100 sufficiently represent the full posterior? 
+    # reference quantiles from all 700 draws
     n_draws_test <- 100L
     n_reps_da    <- 20L   # repeated subsamples to assess stability
     eps          <- 1e-6
@@ -211,7 +214,7 @@ test_one_pair <- function(pair,
     q50_full  <- apply(fit$yhat.test, 2, quantile, probs = 0.50)
     q975_full <- apply(fit$yhat.test, 2, quantile, probs = 0.975)
 
-    # For each rep: subsample n_draws_test rows, compute quantiles, compare to full
+    # for each rep: subsample n_draws_test rows, compute quantiles, compare to full
     rep_stats <- vapply(seq_len(n_reps_da), function(r) {
       idx100 <- sample(nrow(fit$yhat.test), n_draws_test)
       mat100 <- fit$yhat.test[idx100, , drop = FALSE]
@@ -256,7 +259,7 @@ test_one_pair <- function(pair,
   }, error = function(e) modifyList(stub, list(status = paste0("error: ", conditionMessage(e)))))
 }
 
-# ---- dispatch: batch loop until target_ok successful fits -------------------
+# batch loop until target_ok successful fits ---------------------------
 
 all_results <- list()
 ok_count    <- 0L
@@ -312,7 +315,7 @@ while (ok_count < target_ok) {
                   ok_count))
 }
 
-# ---- save --------------------------------------------------------------------
+# save results -----------------------------------------------------------
 
 results  <- dplyr::bind_rows(all_results)
 ok       <- dplyr::filter(results, status == "ok")[seq_len(target_ok), ]  # trim to exactly target_ok
@@ -323,7 +326,7 @@ out_path <- file.path(ia_dir, "data", "derived_data", "rds_files", "bart_posteri
 saveRDS(results, out_path)
 message(sprintf("[%s] saved %d rows → %s", Sys.time(), nrow(results), out_path))
 
-# ---- console summary ---------------------------------------------------------
+# console summary ---------------------------------------------------------
 
 message(sprintf(
   "\n=== Results ===\nok: %d | skipped/errored: %d (across %d batches)\n",
@@ -337,10 +340,10 @@ if (nrow(skip) > 0) {
 if (nrow(ok) > 0) {
   message(sprintf(
 "
-=== DRAW ADEQUACY (100-draw subsample vs. full 700-draw posterior) ===
-    Each metric is the mean across %d pairs; (SD) is SD across 20 subsamples per pair.
+=== draw adequacy (100-draw subsample vs. full 700-draw posterior) ===
+    each metric is the mean across %d pairs; (SD) is SD across 20 subsamples per pair.
 
---- Mean absolute relative error of quantiles (100 draws vs. 700 draws) ---
+--- mean absolute relative error of quantiles (100 draws vs. 700 draws) ---
   q025:  %.4f  (SD %.4f)   (ideal = 0)
   q50:   %.4f  (SD %.4f)   (ideal = 0)
   q975:  %.4f  (SD %.4f)   (ideal = 0)",
