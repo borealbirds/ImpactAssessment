@@ -154,7 +154,41 @@ train_and_backfill_subbasin_s <- function(
     # if it does, remove them from both training and backfill dataframes
     df_backfill_bart <- df_backfill_bart[, colSums(!is.na(df_backfill_bart )) > 0]
     df_train_bart <- df_train_bart[, colnames(df_backfill_bart), drop = FALSE]
+
+    # impute (and flag) partial-NA predictors (mirror gbm's native NA handling)
+    # BART cannot tolerate NA: any row with an NA predictor yields a NaN
+    # posterior draw, which then drops the pixel from the counterfactual entirely. 
+    # for every predictor that still has NAs (e.g. greenup values on lakes, add a binary `<col>_isNA`
+    # indicator and replace the NA with the median value from the training data. 
+    # The indicator lets BART split on "was missing" (preserving informative missingness, e.g. water), while the
+    # fill keeps the row complete so a real posterior draw is produced. 
+    na_cols <- names(df_train_bart)[
+      colSums(is.na(df_train_bart)) > 0L | colSums(is.na(df_backfill_bart)) > 0L]
     
+    na_cols <- setdiff(na_cols, c("x", "y"))   # never flag the scaled coordinates
+    for (cna in na_cols) {
+      fill <- stats::median(df_train_bart[[cna]], na.rm = TRUE)
+      if (!is.finite(fill)) fill <- 0          # guard (every col has >=1 non-NA here)
+      tr_flag <- as.integer(is.na(df_train_bart[[cna]]))
+      bf_flag <- as.integer(is.na(df_backfill_bart[[cna]]))
+      # only keep the indicator if it varies in training (BART needs variance); when the
+      # NA is backfill-only (e.g. phenology on water absent from low-HF training) the flag
+      # carries no training signal, so the fill alone is used. 
+      # these pixels are typically water and are masked downstream by weight.tif.
+      if (length(unique(tr_flag)) > 1L) {
+        flag_name <- paste0(cna, "_isNA")
+        df_train_bart[[flag_name]]    <- tr_flag
+        df_backfill_bart[[flag_name]] <- bf_flag
+      }
+      df_train_bart[[cna]][is.na(df_train_bart[[cna]])]       <- fill
+      df_backfill_bart[[cna]][is.na(df_backfill_bart[[cna]])] <- fill
+    }
+    # keep train/backfill column sets identical and in the same order after additions
+    df_backfill_bart <- df_backfill_bart[, colnames(df_train_bart), drop = FALSE]
+    if (length(na_cols) > 0L)
+      logp("imputed+flagged %d partial-NA predictor(s): %s",
+           length(na_cols), paste(na_cols, collapse = ", "))
+
     # select BART method for a continuous or categorical feature
     if (!(b %in% categorical_responses)){
       
