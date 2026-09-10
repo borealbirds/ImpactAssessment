@@ -1,7 +1,7 @@
 # ---
 # title: Impact Assessment: pre-mosaic backfilled subbasin stacks per BCR
 # author: Mannfred Boehm
-# created: 2026-03-23
+# created: March 23, 2026
 # ---
 #
 # mosaic per-subbasin BART backfill rasters into one BCR-wide stack,

@@ -1,30 +1,31 @@
 # ---
 # title: Impact Assessment: canonical observed-landscape bird predictions
 # author: Mannfred Boehm
+# created: May 15, 2026
 # ---
-# Run ONCE per species LOCALLY (not on cluster).
-# For each Canadian BCR that the species has a BRT model for, read Elly's
+
+# run once per species on local machine
+# for each Canadian BCR that the species has a BRT model for, read Elly's
 # pre-computed unclamped 32-bootstrap prediction surfaces from
 #   G:/Shared drives/BAM_NationalModels5/output/07_predictions/{species}/{species}_{bcr_code}_{year}.tif
-# apply the species-specific prediction thresholds (Steps 5-9 of 10.Package.R),
+# apply the species-specific prediction thresholds (steps 5-9 of 10.Package.R in the NM V5 repo),
 # and save to ia_dir/data/derived_data/predictions/{species}/{bcr_code}/{year}/:
 #   observed_bootstraps.tif  (32 layers, qsp-clamped)
 #   observed_mean.tif
 #   observed_sd.tif
 #
-# After running locally, Globus-transfer the observed_bootstraps.tif files to
-# the cluster at the same relative path under ia_dir so 12D_combine can read them.
-#
-# Coalition runs (12B/12C) then read these files rather than recomputing them,
+# after running locally, globus-transfer the observed_bootstraps.tif files to
+# the cluster at the same relative path under ia_dir. 
+# industry coalition runs then read these files rather than recomputing them,
 # eliminating floating-point drift across parallel SLURM jobs.
-# ---
+
 
 suppressPackageStartupMessages({
   library(terra)
   library(tidyverse)
 })
 
-# ---- Paths -------------------------------------------------------------------
+# paths -------------------------------------------------------------------
 
 nm_root <- "/home/mannfred/projects/def-ecknight/NationalModels"
 
@@ -39,11 +40,11 @@ if (!cc && !local) { ia_dir <- file.path("G:/Shared drives/BAM_NationalModels5",
 # when running locally, BRT bootstrap models and raw prediction tifs are on G:
 if (!cc) { nm_root <- "G:/Shared drives/BAM_NationalModels5" }
 
-# ---- Prediction thresholds --------------------------------------------------
+# prediction thresholds --------------------------------------------------
 
 load(file.path(ia_dir, "data", "raw_data", "SpeciesPredictionTruncationValues.Rdata"))
 
-# ---- Species from SLURM -----------------------------------------------------
+# species from SLURM -----------------------------------------------------
 
 species_vec <- c("CAWA", "OVEN")
 # species_vec <- sort(c("BANS", "BARS", "BOBO", "CAWA", "EAWP", "EVGR", "GCTH", "GRSP", "GWWA", "LEYE", "OSFL"))
@@ -56,13 +57,13 @@ q0  <- l.out[l.out$spp == species, ]$denshthresh
 
 message(Sys.time(), " | observed predictions for species=", species)
 
-# ---- Find BCR models ---------------------------------------------------------
+# find models for relevant BCRs ------------------------------------------
 
 rdata_files <- list.files(file.path(nm_root, "output/06_bootstraps", species),
                           pattern = "can.*\\.Rdata$", full.names = TRUE)
 message(Sys.time(), " | found ", length(rdata_files), " BCR models")
 
-# ---- Loop over BCRs ---------------------------------------------------------
+# make bird density predictions for applicable BCRs ----------------------
 
 for (rdata_path in rdata_files) {
 
@@ -84,7 +85,8 @@ for (rdata_path in rdata_files) {
     next
   }
 
-  # read Elly's unclamped bootstrap predictions — nm_root points to G: when local, cluster path when cc=TRUE
+  # read Elly's unclamped bootstrap predictions
+  # nm_root points to G: when local, cluster path when cc=TRUE
   raw_pred_path <- file.path(nm_root, "output/07_predictions", species,
                              paste0(species, "_", bcr_code, "_", year, ".tif"))
   if (!file.exists(raw_pred_path)) {
@@ -95,20 +97,21 @@ for (rdata_path in rdata_files) {
   raw_stack <- terra::rast(raw_pred_path)
   obs_preds <- lapply(seq_len(terra::nlyr(raw_stack)), function(i) raw_stack[[i]])
 
-  # Step 5 of 10.Package.R: clamp each bootstrap at the species-specific quantile
+  # step 5 from "10.Package.R" in NM V5 repo: 
+  # clamp each bootstrap at the species-specific quantile
   obs_preds <- lapply(obs_preds, function(r) terra::clamp(r, upper = qsp))
 
   # save bootstrap stack (qsp-clamped; read by 12B/12C)
   dir.create(obs_dir, recursive = TRUE, showWarnings = FALSE)
   terra::writeRaster(rast(obs_preds), obs_boot_path, overwrite = TRUE)
 
-  # Steps 6-7: mean, then secondary cap at 99.9th percentile of mean
+  # steps 6-7: mean, then secondary cap at 99.9th percentile of mean
   obs_stack <- terra::rast(obs_preds)
   mn_r  <- terra::app(obs_stack, mean, na.rm = TRUE)
   q99_r <- terra::global(mn_r, quantile, probs = 0.999, na.rm = TRUE)[1, 1]
   mn2_r <- terra::clamp(mn_r, upper = q99_r)
 
-  # Step 8: SD from bootstraps also clamped at q99
+  # step 8: SD from bootstraps also clamped at q99
   sd_r  <- terra::app(terra::clamp(obs_stack, upper = q99_r), sd, na.rm = TRUE)
 
   # Step 9: zero pixels below denshthresh
