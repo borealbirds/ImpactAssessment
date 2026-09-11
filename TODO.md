@@ -7,7 +7,7 @@ memory. (This file replaced `HANDOFF_cafire_backfill_fix.md`, deleted 2026-09-11
 | | workstream | where | state |
 |---|---|---|---|
 | **A** | CAfire / phenology backfill fix (Open Limitation #5) | cluster compute | fixes built; **all scripts staged + cleanup done 2026-09-11 (A3, A4)**; compute never launched |
-| **B** | Conform observed + counterfactual density to current V5 packaging (Open Limitation #6) | local | **B1-B8 + C4 done; G1+G2 passed**; G3/G4 found and fixed the missing BCR cut (Open Limitation #7), 4-17% residual still open |
+| **B** | Conform observed + counterfactual density to current V5 packaging (Open Limitation #6) | local | **DONE - B1-B8, C4 and gates G1-G4 all passed.** G3/G4 found + fixed two `weight.tif` defects (Open Limitation #7); only residual is the deliberate +2.9-3.4% 5072-vs-3978 choice |
 
 **Both edit `12C`. Both must land before the single `12B` run** (2 × 24 h @ 384 G per
 species — doing them in separate passes pays for it twice).
@@ -22,13 +22,14 @@ depends on nothing in B, so it should start first and everything else runs in it
 ```
 cluster:  [cleanup DONE] ─► A5 smoke 07 ─► A6 sbatch 07 ─► sbatch 11 ─┐
           [A2 weight.tif, AFTER re-Globus of 12A2] ─────────┐         ├─► 12B smoke ─► C1 12B ─► C2 14B
-local:    [B1-B8, C4 DONE] ─► G3/G4 residual ──────────────┴─────────┘
+local:    [B1-B8, C4, G1-G4 ALL DONE] ─────────────┴─────────┘
 ```
 
 **A2 changed and now has a prerequisite.** `12A2_build_prediction_weights.R` and
 `12C_predict_species_all_coalitions.R` were both edited 2026-09-11 (BCR cut + version
-stamp + NA audit) and must be re-Globus'd before A2 runs, or A2 rebuilds the same defective
-weights. No `rm` of the old `weight.tif` is needed — the version stamp forces a rebuild.
+stamp + `touches = TRUE` + NA audit) and must be re-Globus'd before A2 runs, or A2
+rebuilds the same defective weights. No `rm` of the old `weight.tif` is needed — the version stamp
+(`weight_v3_touches`) forces a rebuild, and 12C refuses to run against anything older.
 
 Verified 2026-09-11 and NOT a blocker any more:
 - `covariates_mosaiced_2020.tif` is the CAfire-fixed build on **both** ends (local partial-NA
@@ -195,11 +196,52 @@ since `clamp` doesn't commute with projection. The *parameter* is CRS-invariant
       stamp in its band name (`weight_v2_bcrcut`); `12A2` REBUILDS a stale weight instead
       of skipping it, and `12C` refuses to run against one. See Open Limitation #7.
 
-      **Residual, still open.** With the BCR cut the same three pairs land 4-17% above the
-      published numbers (CAWA can10 21,195 vs 19,000; OVEN can10 62,965 vs 54,000; CAWA
-      can71 168,887 vs 162,000). Expected sources are the 5072-vs-3978 crosswalk (~2.3%)
-      and raster-vs-vector mask edges. A decomposition (5072+weight / 5072+V5 vectors /
-      3978+V5 vectors) was run to split those two; finish it and close G3/G4.
+      **Residual, decomposed 2026-09-11.** Ran three configurations on the same
+      `observed_bootstraps.tif` to separate the two candidate causes:
+
+      | pair | A 5072+weight.tif | B 5072+V5 vectors | C 3978+V5 vectors | published |
+      |---|---|---|---|---|
+      | CAWA can10 | 21,195 | 19,956 | **19,389** | 0.019 M |
+      | CAWA can71 | 168,887 | 166,549 | **161,922** | 0.162 M |
+      | OVEN can10 | 62,965 | 55,891 | **54,062** | 0.054 M |
+
+      **C reproduces the published numbers on all three**, and matches the G2 harness
+      figures (0.0194 / 0.1619 / 0.0541 M) — so everything from `observed_bootstraps.tif`
+      onward is sound, and the whole residual lives in the two deliberate production
+      departures.
+
+      - **B->C, the 5072-vs-3978 crosswalk: +2.9%, +2.9%, +3.4%.** Consistent, close to the
+        ~2.3% previously estimated, and an accepted cost of staying in 5072 (documented in
+        `12A0_v5_truncate.R`: `clamp()` does not commute with projection, so projecting
+        would break the superset -> masked-rowsum decomposition).
+      - **A->B, raster-vs-vector masking: +6.2%, +1.4%, +12.7%.** Not uniform, so not a
+        simple edge effect. Isolated per term, and it was a **single root cause**:
+        `terra::rasterize()` defaults to `touches = FALSE` (cell-centre rule), while
+        V5's `mask(vect, inverse = TRUE)` and `crop(vect, mask = TRUE)` both behave as
+        `touches = TRUE`. Per-term ratios (ours / V5): range 1.0000 (control - it is a
+        raster in both paths), data-limit 0.9998, BCR polygon 0.978-0.993, **water
+        1.049-1.077**. Water dominates because it is by far the most fragmented layer -
+        29,545 polygons, mostly thin rivers and small lakes that touch a cell without
+        covering its centre. Setting `touches = TRUE` reproduced V5 **to the digit** on
+        every term (water 874105 vs 874105, 370971 vs 370971).
+
+        A hypothesis that proved WRONG and is worth not re-testing: that `crop_to_grid`
+        was dropping polygons by cropping in the source CRS against a straight-edged
+        projected extent rectangle. It does drop some (36 on OVEN can10, 165 the other
+        way on CAWA can71), but they are outside the grid - the sums agree to 0.01%.
+
+- [x] **G3/G4 PASSED 2026-09-11.** With the BCR cut and `touches = TRUE` both in,
+      `sum(observed x weight x 100)` reproduces V5's own vector masking at
+      **A/B = 1.000011 / 1.000002 / 1.000001** (CAWA can10, CAWA can71, OVEN can10) -
+      float32 noise. The masking half of the conformance work is now validated against
+      the PRODUCTION config (5072 + `weight.tif`), not just the G2 harness.
+
+      Only departure left is the deliberate one: staying in EPSG:5072 costs **+2.9% to
+      +3.4%** vs V5's legacy 3978 delivery projection (previously estimated at 2.3%).
+      That is the documented trade for keeping `clamp()` commutable with the superset ->
+      masked-rowsum decomposition; it applies equally to obs and bf, so it cancels in the
+      contrast. Harness: `Rscripts/misc/verify_weight_vs_v5_masking.R`, which prints all
+      three configurations and is the thing to re-run after any weight change.
 
       Note this defect moved **absolute populations only**. The weight multiplies both
       sides, so `w*bf - w*obs = w*(bf - obs)` held throughout and Shapley *shares* were far

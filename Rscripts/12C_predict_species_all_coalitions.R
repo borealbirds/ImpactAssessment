@@ -227,7 +227,7 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     # pixels from neighbouring subunits into the density tables and double-counts
     # every subbasin straddling a BCR seam (329 of 674 do).
     w_name <- names(weight_r)[1]
-    if (!isTRUE(w_name == "weight_v2_bcrcut"))
+    if (!isTRUE(w_name == "weight_v3_touches"))
       stop(species, " ", bcr_code, ": weight.tif band name is '", w_name,
            "', expected 'weight_v2_bcrcut'. This weight predates the BCR-cut fix ",
            "(2026-09-11). Delete predictions/*/*/*/weight.tif and re-run ",

@@ -17,6 +17,10 @@
 #   - inside data-limit: 1 inside DataLimitationsMask, 0 outside
 #   - inside BCR       : 1 inside this subunit's own polygon, 0 outside.
 #
+# All three vector terms are rasterized with touches = TRUE, which is what V5's
+# mask()/crop() do and is NOT terra::rasterize()'s default -- see the note at the
+# rasterize calls below.
+#
 # ADDED 2026-09-11 -- the BCR term was missing and it is the LARGEST of the four.
 # V5 predicts each subunit on a BUFFERED grid and cuts it back at 10.Truncate.R:146
 # (`crop(vect(sf.i), mask = TRUE)`, sf.i from Subregions_Mosaics_EPSG3978.shp)
@@ -77,7 +81,7 @@ year    <- 2020
 # Version stamp written as the band name of weight.tif and checked on re-runs, so a
 # weight built by an older version of this script is rebuilt instead of skipped.
 # Bump this whenever the weight definition changes.
-WEIGHT_VERSION <- "weight_v2_bcrcut"
+WEIGHT_VERSION <- "weight_v3_touches"
 
 # ---- Species from SLURM ------------------------------------------------------
 
@@ -151,8 +155,21 @@ for (rdata_path in rdata_files) {
   w_range <- terra::classify(w_range, cbind(NA, 0))
 
   # not-water (1 = land) and inside-data-limit (1 = inside)
-  notwater <- 1 - terra::rasterize(crop_to_grid(water, tmpl), tmpl, field = 1, background = 0)
-  inlim    <-     terra::rasterize(crop_to_grid(limit, tmpl), tmpl, field = 1, background = 0)
+  #
+  # touches = TRUE is REQUIRED for V5 parity and is not terra's default. V5 applies
+  # these as terra::mask(vect, inverse = TRUE) and terra::crop(vect, mask = TRUE),
+  # both of which retain/remove any cell the polygon TOUCHES; terra::rasterize()
+  # instead defaults to touches = FALSE (cell-centre rule). The gap is large wherever
+  # the layer is fragmented: WaterMask_Canada has 29,545 polygons, most of them thin
+  # rivers and small lakes that touch a cell without covering its centre, so the
+  # centre rule under-masked water by 4.9-7.7% of total abundance. On the single-blob
+  # BCR polygon the same discrepancy is only 0.7-2.2% (perimeter cells). With
+  # touches = TRUE all three terms reproduce V5's vector masking exactly -- verified
+  # to the digit on OVEN can10 and CAWA can71.
+  notwater <- 1 - terra::rasterize(crop_to_grid(water, tmpl), tmpl, field = 1,
+                                   background = 0, touches = TRUE)
+  inlim    <-     terra::rasterize(crop_to_grid(limit, tmpl), tmpl, field = 1,
+                                   background = 0, touches = TRUE)
 
   # inside this BCR's own polygon (V5 10.Truncate.R:146). The prediction grid is
   # buffered well past the subunit, so this is the dominant exclusion -- see header.
@@ -161,7 +178,7 @@ for (rdata_path in rdata_files) {
     stop("no unbuffered polygon for bcr_code=", bcr_code,
          " in BAM_BCR_NationalModel_Unbuffered.shp")
   inbcr <- terra::rasterize(terra::project(poly_i, terra::crs(tmpl)), tmpl,
-                            field = 1, background = 0)
+                            field = 1, background = 0, touches = TRUE)
 
   weight <- w_range * notwater * inlim * inbcr   # in [0, 1], defined everywhere
 
