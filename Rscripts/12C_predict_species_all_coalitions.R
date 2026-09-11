@@ -222,6 +222,16 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
            "this is the only masking left, so an unmasked run would silently ",
            "over-count water, out-of-range and out-of-extent pixels.")
     weight_r <- terra::rast(weight_path)
+    # Version stamp written by 12A2. Weights built before 2026-09-11 omit V5's
+    # mosaic crop to the BCR's own polygon (10.Truncate.R:146), which lets buffer
+    # pixels from neighbouring subunits into the density tables and double-counts
+    # every subbasin straddling a BCR seam (329 of 674 do).
+    w_name <- names(weight_r)[1]
+    if (!isTRUE(w_name == "weight_v2_bcrcut"))
+      stop(species, " ", bcr_code, ": weight.tif band name is '", w_name,
+           "', expected 'weight_v2_bcrcut'. This weight predates the BCR-cut fix ",
+           "(2026-09-11). Delete predictions/*/*/*/weight.tif and re-run ",
+           "`sbatch 12A2_build_prediction_weights.sh`.")
     if (!isTRUE(terra::compareGeom(weight_r, stack_obs[[1]], stopOnError = FALSE)))
       weight_r <- terra::resample(weight_r, stack_obs[[1]], method = "near")
     weight_super <- terra::values(weight_r, mat = FALSE)[super_idx]
@@ -353,6 +363,25 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     # the observed-side weighting above, so bf - obs stays w*(bf - obs). The bf-only
     # arr stashed below is reshaped from this M, so it inherits the weighting too.
     M <- M * weight_super
+
+    # NA audit on the backfilled side, done ONCE here rather than per coalition.
+    # Two reasons this can bite and the observed side cannot:
+    #   (a) rowsum() at the coalition reduce has no na.rm, so a single NA in a kept
+    #       pixel NA-s out that subbasin's ENTIRE bf total -- while the obs side
+    #       explicitly zeroes its NAs (`Ok[is.na(Ok)] <- 0`). A one-sided loss.
+    #   (b) complete_mask is built from draw column 1 as a proxy for all 100 draws.
+    #       Each scenario k samples a different draw, so a pixel that is complete in
+    #       draw 1 can still be NA in the draw scenario k happened to pick.
+    # Column-at-a-time so we never materialise a copy of M.
+    n_bad <- 0L
+    for (j in seq_len(ncol(M))) n_bad <- n_bad + sum(is.na(M[complete_mask, j]))
+    if (n_bad > 0L)
+      stop(species, " ", bcr_code, ": ", n_bad, " NA cells of M at complete-case ",
+           "pixels (of ", sum(complete_mask) * ncol(M), "). rowsum() has no na.rm, so ",
+           "these would silently zero out whole subbasins on the BACKFILLED side only ",
+           "while the observed side zeroes its NAs. Most likely a BART draw other than ",
+           "draw 1 has thinner coverage than complete_mask assumes -- widen the gate to ",
+           "all draws, or impute, before trusting these tables.")
     # O_super: observed birds/ha at superset pixels, [n_super x n_boot]
     O_super <- vapply(obs_preds, function(r) terra::values(r, mat = FALSE)[super_idx],
                       numeric(length(super_idx)))

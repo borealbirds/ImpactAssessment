@@ -18,6 +18,9 @@
 #   shapley_subbasin.csv  — per-sector Shapley values at each subbasin
 #   shapley_bcr.csv       — aggregated to BCR
 #   shapley_national.csv  — aggregated to national
+#
+# Release filter: BCRs whose models BAM withheld (currently CAWA can40) are
+# dropped here, not upstream — see `withheld_models` below.
 # ---
 
 suppressPackageStartupMessages({
@@ -50,6 +53,31 @@ dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 # ---- Load hydrobasins --------------------------------------------------------
 
 hydrobasins <- terra::vect(basin_path)
+
+# ---- BAM model release filter ------------------------------------------------
+# Our BCR discovery reads 06_bootstraps/{spp}/can*.Rdata, which returns every model
+# BAM FIT — a superset of the models BAM RELEASED. review/ModelReleaseDecisions.xlsx
+# ("remove" tab) withholds CAWA can40 on AUC. 12A/12B deliberately still produce it
+# (the products stay a complete record of what we ran); the release filter belongs
+# here, at the point where numbers are reported.
+#
+# Set DROP_WITHHELD <- FALSE to keep them and inspect the difference.
+#
+# Verified 2026-09-11 against the workbook: the "remove" tab has 662 rows, of which
+# exactly one touches our two species (CAWA can40, AUC = 1; OVEN has none). At the
+# planned ~60-species scale, replace this literal with a read of the workbook —
+# 14B runs locally, so G: is reachable:
+#   readxl::read_excel(file.path(nm_root, "review", "ModelReleaseDecisions.xlsx"),
+#                      sheet = "remove") |> dplyr::select(species = spp, bcr = region)
+
+DROP_WITHHELD <- TRUE
+
+withheld_models <- data.frame(
+  species = "CAWA",
+  bcr     = "can40",
+  reason  = "withheld by BAM (review/ModelReleaseDecisions.xlsx, 'remove' tab; AUC)",
+  stringsAsFactors = FALSE
+)
 
 # ---- Load extrapolation flags (optional) -------------------------------------
 
@@ -112,11 +140,36 @@ for (sy in seq_len(nrow(species_years))) {
     message("  Shapley values will be approximate (missing coalitions treated as v=0)")
   }
 
-  # read all coalition density tables into a list keyed by coalition_id
+  # read all coalition density tables into a list keyed by coalition_id,
+  # dropping any BCR whose model BAM withheld (see withheld_models above)
+  drop_bcrs <- withheld_models$bcr[withheld_models$species == sp]
+  n_dropped <- 0L
   dt_list <- setNames(
-    lapply(seq_along(avail_ids), function(i) readRDS(avail_paths[i])),
+    lapply(seq_along(avail_ids), function(i) {
+      d <- readRDS(avail_paths[i])
+      if (DROP_WITHHELD && length(drop_bcrs) > 0L && "bcr" %in% names(d)) {
+        hit <- d$bcr %in% drop_bcrs
+        n_dropped <<- n_dropped + sum(hit)
+        d <- d[!hit, , drop = FALSE]
+      }
+      d
+    }),
     as.character(avail_ids)
   )
+  if (length(drop_bcrs) > 0L) {
+    if (DROP_WITHHELD) {
+      message("  release filter: dropped ", n_dropped, " subbasin-rows in BCR(s) ",
+              paste(drop_bcrs, collapse = ", "), " — ",
+              paste(unique(withheld_models$reason[withheld_models$species == sp]),
+                    collapse = "; "))
+      if (n_dropped == 0L)
+        message("  NOTE: no rows matched ", paste(drop_bcrs, collapse = ", "),
+                " — either 12B did not produce it, or the BCR code has changed.")
+    } else {
+      message("  release filter DISABLED — withheld BCR(s) ",
+              paste(drop_bcrs, collapse = ", "), " are INCLUDED in these numbers.")
+    }
+  }
 
   # get the set of all BCRs x subbasins across coalitions
   all_rows <- bind_rows(dt_list, .id = "coal_id")

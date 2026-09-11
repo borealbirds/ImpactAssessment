@@ -7,23 +7,28 @@ memory. (This file replaced `HANDOFF_cafire_backfill_fix.md`, deleted 2026-09-11
 | | workstream | where | state |
 |---|---|---|---|
 | **A** | CAfire / phenology backfill fix (Open Limitation #5) | cluster compute | fixes built; **all scripts staged + cleanup done 2026-09-11 (A3, A4)**; compute never launched |
-| **B** | Conform observed + counterfactual density to current V5 packaging (Open Limitation #6) | local | **B1-B5, B7 done; G1+G2 passed**; next G3/G4 (masking), then B6/B8/C4 |
+| **B** | Conform observed + counterfactual density to current V5 packaging (Open Limitation #6) | local | **B1-B8 + C4 done; G1+G2 passed**; G3/G4 found and fixed the missing BCR cut (Open Limitation #7), 4-17% residual still open |
 
 **Both edit `12C`. Both must land before the single `12B` run** (2 × 24 h @ 384 G per
 species — doing them in separate passes pays for it twice).
 
 ---
 
-## Critical path (revised 2026-09-11, after A3 + B7)
+## Critical path (revised 2026-09-11, after B6/B8/C4)
 
 All staging is done except `weight.tif` (A2). `07` (674 array tasks) is the long pole and
 depends on nothing in B, so it should start first and everything else runs in its shadow.
 
 ```
 cluster:  [cleanup DONE] ─► A5 smoke 07 ─► A6 sbatch 07 ─► sbatch 11 ─┐
-          [A2 weight.tif] ──────────────────────────────────┐         ├─► 12B smoke ─► C1 12B ─► C2 14B
-local:    [B1-B5,B7 DONE] ─► G3/G4 masking ─► B6/B8/C4 ─────┴─────────┘
+          [A2 weight.tif, AFTER re-Globus of 12A2] ─────────┐         ├─► 12B smoke ─► C1 12B ─► C2 14B
+local:    [B1-B8, C4 DONE] ─► G3/G4 residual ──────────────┴─────────┘
 ```
+
+**A2 changed and now has a prerequisite.** `12A2_build_prediction_weights.R` and
+`12C_predict_species_all_coalitions.R` were both edited 2026-09-11 (BCR cut + version
+stamp + NA audit) and must be re-Globus'd before A2 runs, or A2 rebuilds the same defective
+weights. No `rm` of the old `weight.tif` is needed — the version stamp forces a rebuild.
 
 Verified 2026-09-11 and NOT a blocker any more:
 - `covariates_mosaiced_2020.tif` is the CAfire-fixed build on **both** ends (local partial-NA
@@ -164,15 +169,42 @@ since `clamp` doesn't commute with projection. The *parameter* is CRS-invariant
       Confirms the transform, the frozen parameters, the x100 hectare->km2 convention, and the
       bootstrap-interval construction, against `output/13_summary/BAMV5-abundance.RData`.
       Caveat: this is the *harness* config (3978 + V5 vector masks), not production — see G3/G4.
-- [ ] **G3/G4 — the masking half is still unvalidated.** G2 exercised the *harness* config
-      (3978 + V5's own vector masks). Production is *5072 + weight.tif*, and nothing yet proves
-      `weight.tif` reproduces V5's range x water x data-limit masking. This matters more than the
-      projection does: on CAWA can10 the masking is a **7.8x** reduction (148,798 birds unmasked
-      vs 19,000 published), so an error there dwarfs the 2.3% projection effect.
-      Check: `sum(observed_bootstraps.tif x weight.tif x 100)` per species x BCR against the
-      published number; the residual after that is the 5072-vs-3978 crosswalk (G3). Needs
-      `weight.tif`, so it runs on the cluster after A2 — or rebuild a couple locally to
-      close it sooner.
+- [~] **G3/G4 — masking: ONE BIG DEFECT FOUND AND FIXED 2026-09-11; residual still open.**
+      Ran the check locally (rebuilding weights on this machine rather than waiting for A2)
+      and it immediately failed — for a reason that was not on the list.
+
+      **`weight.tif` was missing V5's mosaic cut.** V5 predicts each subunit on a grid
+      buffered well past the subunit and crops it back to the subunit polygon at
+      `10.Truncate.R:146` before mosaicking. `12A2` had V5's range / water / data-limit
+      masks but not that crop. On our own staged stacks **59-71% of non-NA pixels** lie
+      outside the subunit's own polygon, carrying **41-84% of the raw density sum**; and
+      because `12B:38` assigns a subbasin to every BCR it intersects (**329 of 674, 59% of
+      area**), every straddling subbasin was summed in full under each of its BCRs.
+      Measured inflation vs the corrected weight:
+
+      | pair | old weight | BCR-cut weight | inflation |
+      |---|---|---|---|
+      | CAWA can10 | 125,000 | 21,195 | **5.90x** |
+      | CAWA can71 | 369,570 | 168,887 | **2.19x** |
+      | OVEN can10 | 918,402 | 62,965 | **14.59x** |
+
+      Fix: `12A2` multiplies in an `inbcr` term from `Regions/BAM_BCR_NationalModel_
+      Unbuffered.shp`, verified to be the same geometry as V5's
+      `Subregions_Mosaics_EPSG3978.shp` (areas agree to <1 km2, IoU = 1.0000 on
+      can10/can11/can60) — so no new Globus staging. `weight.tif` now carries a version
+      stamp in its band name (`weight_v2_bcrcut`); `12A2` REBUILDS a stale weight instead
+      of skipping it, and `12C` refuses to run against one. See Open Limitation #7.
+
+      **Residual, still open.** With the BCR cut the same three pairs land 4-17% above the
+      published numbers (CAWA can10 21,195 vs 19,000; OVEN can10 62,965 vs 54,000; CAWA
+      can71 168,887 vs 162,000). Expected sources are the 5072-vs-3978 crosswalk (~2.3%)
+      and raster-vs-vector mask edges. A decomposition (5072+weight / 5072+V5 vectors /
+      3978+V5 vectors) was run to split those two; finish it and close G3/G4.
+
+      Note this defect moved **absolute populations only**. The weight multiplies both
+      sides, so `w*bf - w*obs = w*(bf - obs)` held throughout and Shapley *shares* were far
+      less distorted than totals — but every per-BCR and national total produced before the
+      fix is wrong.
 - [x] **B4. DONE 2026-09-11.** Updated `12C_predict_species_all_coalitions.R`:
       - `$q` → `$densmax`, behind a schema guard that `stop()`s rather than letting
         `pmin(x, NULL)` return `numeric(0)` silently.
@@ -193,11 +225,27 @@ since `clamp` doesn't commute with projection. The *parameter* is CRS-invariant
 - [x] **B5. DONE 2026-09-11.** Restaged `data/raw_data/SpeciesPredictionTruncationValues.Rdata`
       from `G:/Shared drives/BAM_NationalModels5/data/` (2026-06-04 version). The old file is
       recoverable from git history if the pre-rewrite `$q` values are ever needed.
-- [ ] **B6.** `12A2` — no change needed. `weight = range × notwater × inlimit` already matches
-      `10.Truncate.R:137-148`, and the source GIS layers are unchanged since staging
-      (WaterMask_Canada Apr 23, DataLimitationsMask Jan 16, ranges Apr 22 — all predate
-      our 2026-06-05 copy, byte sizes identical). Check only that our NA→0 handling
-      matches `10.Truncate.R:141`.
+- [x] **B6. DONE 2026-09-11 — and the premise was wrong.** The task assumed "no change
+      needed, check only NA→0". The NA→0 half checked out; the "no change needed" half did not.
+
+      *NA→0 (`10.Truncate.R:141`) — equivalent, no change.* V5 does `mask.i <- truncate2.i *
+      range.i; mask.i[is.na(mask.i)] <- 0`. Ours reaches the same totals by two routes:
+      `weight.tif` is non-NA everywhere by construction (range NA→0 via `classify`, every
+      `rasterize` has `background = 0`), so mask-induced NA becomes a hard 0 exactly as in V5;
+      and prediction-origin NAs are zeroed at aggregation instead (`zonal(..., na.rm = TRUE)`
+      at 12C:363, `Ok[is.na(Ok)] <- 0` at 12C:429). V5's step-8 crops leave NA where we leave
+      literal 0, which is identical under a sum. Added an explicit `stop()` in 12A2 if any
+      weight cell is NA, since that assumption is now load-bearing.
+
+      *What the check actually turned up:* the missing BCR-polygon crop — see G3/G4 above and
+      Open Limitation #7.
+
+      *Third finding, guarded not fixed:* the obs side zeroes its NAs but the bf side's
+      `rowsum(M[keep, ])` has no `na.rm`, so one NA would NA out a whole subbasin on the
+      backfilled side only. And `complete_mask` is built from **draw column 1** as a proxy for
+      all 100 draws, while each scenario samples a different draw — so a pixel complete in
+      draw 1 can be NA in the draw actually used. 12C now audits M column-by-column once per
+      BCR and `stop()`s with the count. If it ever fires, widen the gate to all draws.
 - [x] **B7. DONE 2026-09-11.** Globus'd all 25 regenerated `observed_bootstraps.tif` +
       both `truncation_params.rds` to the cluster, one `globus transfer` call per file
       (never `--batch`). 27/27 SUCCEEDED, 0 faults, and every transferred byte count
@@ -205,10 +253,14 @@ since `clamp` doesn't commute with projection. The *parameter* is CRS-invariant
       0 bytes, i.e. none was a checksum no-op — consistent with all 25 having been
       rewritten in the B3 re-run. `weight.tif` alongside them was untouched, as intended.
 
-- [ ] **B8.** `14B_sector_attribution.R` — exclude or flag **CAWA `can40`**.
-      `review/ModelReleaseDecisions.xlsx` "remove" tab row 47 withholds it (AUC).
-      Our BCR discovery reads `06_bootstraps/{spp}/can*.Rdata`, which yields exactly the
-      release set **plus can40** for CAWA; OVEN matches all 14. One anti-join closes it.
+- [x] **B8. DONE 2026-09-11.** `14B_sector_attribution.R` now drops withheld models at read
+      time via `DROP_WITHHELD` + a `withheld_models` table, with a message reporting the row
+      count (and a distinct warning if nothing matched, which would mean the BCR code changed).
+      Verified against the workbook rather than trusting the note: the "remove" tab has 662
+      rows, of which exactly one touches our species — CAWA can40, AUC = 1; OVEN has none.
+      Kept upstream production of can40 deliberately, so the products stay a complete record
+      of what we ran and only the reported numbers are filtered. Commented the read-from-xlsx
+      one-liner to swap in at the planned ~60-species scale.
 
 ## C. Converge
 
@@ -222,8 +274,12 @@ since `clamp` doesn't commute with projection. The *parameter* is CRS-invariant
       they hit the frozen ceiling more often than observed, which systematically
       **under-estimates impact in the highest-density pixels**. With the cap removing
       4–12 % of abundance, that is not negligible. Headline = conformed; sensitivity = uncapped.
-- [ ] **C4.** Update `CLAUDE.md` (Open Limitation #5; the pre-`12B` wipe instruction should
-      also clear `density_tables/arrays/`; V5 script renumbering) and the memory files.
+- [x] **C4. DONE 2026-09-11.** `CLAUDE.md`: pre-`12B` wipe now also clears
+      `density_tables/arrays/*.rds` (with the `rm -f` not `rm -rf` caveat); the two
+      `10.Package.R` references retargeted to `10.Truncate.R` via `12A0_v5_truncate.R`; the
+      `12A2` row and Phase 1b block rewritten for the four-term, version-stamped weight; new
+      **Open Limitation #7** for the BCR-cut double count; #6 updated to record that the
+      `14B` release filter is now in place. Memory files updated.
 
 ---
 
