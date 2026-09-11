@@ -7,7 +7,7 @@ memory. (This file replaced `HANDOFF_cafire_backfill_fix.md`, deleted 2026-09-11
 | | workstream | where | state |
 |---|---|---|---|
 | **A** | CAfire / phenology backfill fix (Open Limitation #5) | cluster compute | fixes built + staged; **cleanup done 2026-09-11**; compute never launched |
-| **B** | Conform observed + counterfactual density to current V5 packaging (Open Limitation #6) | local | **B1-B5 done; G1+G2 passed**; next B6/B7 (stage to cluster), G3/G4 open |
+| **B** | Conform observed + counterfactual density to current V5 packaging (Open Limitation #6) | local | **B1-B5+B7 done; G1+G2 passed**; next B6/B8, G3/G4 open |
 
 **Both edit `12C`. Both must land before the single `12B` run** (2 × 24 h @ 384 G per
 species — doing them in separate passes pays for it twice).
@@ -192,10 +192,13 @@ since `clamp` doesn't commute with projection. The *parameter* is CRS-invariant
       (WaterMask_Canada Apr 23, DataLimitationsMask Jan 16, ranges Apr 22 — all predate
       our 2026-06-05 copy, byte sizes identical). Check only that our NA→0 handling
       matches `10.Truncate.R:141`.
-- [ ] **B7.** Globus the 25 regenerated `observed_bootstraps.tif` + `truncation_params.rds`
-      to the cluster. One `globus transfer` call per file.
-      **Note:** this overrides the old "`predictions/` — never regenerate" rule. Keep the
-      `weight.tif` files that live in the same directories.
+- [x] **B7. DONE 2026-09-11.** Globus'd all 25 regenerated `observed_bootstraps.tif` +
+      both `truncation_params.rds` to the cluster, one `globus transfer` call per file
+      (never `--batch`). 27/27 SUCCEEDED, 0 faults, and every transferred byte count
+      matches the local file size exactly (1,981,925,510 B ≈ 1.85 GiB). No file reported
+      0 bytes, i.e. none was a checksum no-op — consistent with all 25 having been
+      rewritten in the B3 re-run. `weight.tif` alongside them was untouched, as intended.
+
 - [ ] **B8.** `14B_sector_attribution.R` — exclude or flag **CAWA `can40`**.
       `review/ModelReleaseDecisions.xlsx` "remove" tab row 47 withholds it (AUC).
       Our BCR discovery reads `06_bootstraps/{spp}/can*.Rdata`, which yields exactly the
