@@ -6,38 +6,44 @@ memory. (This file replaced `HANDOFF_cafire_backfill_fix.md`, deleted 2026-09-11
 
 | | workstream | where | state |
 |---|---|---|---|
-| **A** | CAfire / phenology backfill fix (Open Limitation #5) | cluster compute | fixes built + staged; **cleanup done 2026-09-11**; compute never launched |
-| **B** | Conform observed + counterfactual density to current V5 packaging (Open Limitation #6) | local | **B1-B5+B7 done; G1+G2 passed**; next B6/B8, G3/G4 open |
+| **A** | CAfire / phenology backfill fix (Open Limitation #5) | cluster compute | fixes built; **all scripts staged + cleanup done 2026-09-11 (A3, A4)**; compute never launched |
+| **B** | Conform observed + counterfactual density to current V5 packaging (Open Limitation #6) | local | **B1-B5, B7 done; G1+G2 passed**; next G3/G4 (masking), then B6/B8/C4 |
 
 **Both edit `12C`. Both must land before the single `12B` run** (2 × 24 h @ 384 G per
 species — doing them in separate passes pays for it twice).
 
 ---
 
-## Critical path
+## Critical path (revised 2026-09-11, after A3 + B7)
 
-A's cluster compute (`07`: 674 array tasks) is the long pole and depends on nothing in B.
-B is entirely local. **Run them in parallel and converge at `12B`.**
+All staging is done except `weight.tif` (A2). `07` (674 array tasks) is the long pole and
+depends on nothing in B, so it should start first and everything else runs in its shadow.
 
 ```
-cluster:   [cleanup DONE] ──► sbatch 07 ──► sbatch 11 ────────────────────┐
-                                                                          ├──► sbatch 12B ──► validate ──► 14B
-local:     [B1 DONE] ──► B2 rewrite 12A ──► B3 re-run 12A ──► Globus ──────┘
+cluster:  [cleanup DONE] ─► A5 smoke 07 ─► A6 sbatch 07 ─► sbatch 11 ─┐
+          [A2 weight.tif] ──────────────────────────────────┐         ├─► 12B smoke ─► C1 12B ─► C2 14B
+local:    [B1-B5,B7 DONE] ─► G3/G4 masking ─► B6/B8/C4 ─────┴─────────┘
 ```
 
-Blocker for every cluster step: SSH host key verification fails, so cluster commands
-must be run from your own authenticated session. Globus works (one file per call,
-**never** `--batch`).
+Verified 2026-09-11 and NOT a blocker any more:
+- `covariates_mosaiced_2020.tif` is the CAfire-fixed build on **both** ends (local partial-NA
+  0.06 %, and a checksum-sync Globus transfer moved 0 bytes). No `06` re-run needed.
+- All seven changed cluster scripts are staged (A3) — `08A` carrying Fix B among them, which
+  was stale and would have made the `07` re-run reproduce the bug it exists to fix.
+- All 25 observed stacks + both `truncation_params.rds` are staged (B7), byte-exact.
+
+Blocker for every cluster step: SSH is keyboard-interactive (2FA), so cluster commands must be
+run from your own authenticated session. Globus works (one file per call, **never** `--batch`).
 
 ---
 
 ## 0. Commit what's already written
 
-- [ ] Commit Fix A (`12C` — gate `complete.cases` on `backfilled_vars` only) and the
-      `12B` weight.tif preflight. Both are uncommitted in the working tree.
-      `02`/`06`/`08A` are already in (`0bbf2ea`, `4d23436`).
+- [x] **DONE 2026-09-11.** Fix A + the `12B` weight preflight committed (`6455756`); the V5
+      port, truncation conformance and docs followed in `d4b803e`, `7057c91`, `cb573cb`.
 
 ---
+
 
 ## A. CAfire backfill re-run (cluster)
 
