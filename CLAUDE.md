@@ -274,7 +274,19 @@ Large spatial files (`.tif`, `.gpkg`, `.shp`) and most `.rds` files are gitignor
    **Not yet confirmed at scale** — the cluster re-run (`07` → `11` → `12B`) has not been launched, and
    Fix A is untested. Treat per-BCR Shapley numbers as unreliable until the `12C` runtime line
    `complete superset pixels` reports ≫ the old 1–3%. Full execution plan and current state:
-   `HANDOFF_cafire_backfill_fix.md` §0.
+   **`TODO.md`** at repo root.
+
+6. **Density truncation does not match current V5 packaging (UPSTREAM, 2026-09-11)**: V5 commit
+   `f082866` (2026-06-04) split `analysis/10.Package.R` into `10.Truncate.R` + `11.Package.R` and
+   `4e7fc83` rewrote the truncation values. Two consequences. (a) `q.out`'s schema changed from
+   `spp, thresh, countmax, off, q` to `spp, thresh, countmax, densmax` — **there is no `$q` column
+   any more**, and `12A:55`/`12C:34` still read it. `12C:282`'s `pmin(pred_vec, NULL)` returns
+   `numeric(0)` *silently*. (b) Truncation has two stages and we only ever applied the weaker one:
+   on `can10` 2020 the `densmax` cap removes 1.29% (CAWA) / 0.32% (OVEN) of abundance, but the
+   secondary `q99.9` cap removes a further **12.19% / 4.13%** — and our density tables have never
+   applied it. The `denshthresh` low-density step was deleted from V5 entirely. Also: **CAWA
+   `can40` is withheld** by BAM (`review/ModelReleaseDecisions.xlsx`, "remove" tab, AUC), but our
+   BCR discovery still processes it. Plan and design rationale: **`TODO.md`** workstream B.
 
 ## Instructions from Masa
 1.Always ignore the directory /Rscripts/misc when thinking. It's not immediately relevant to the project.
