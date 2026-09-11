@@ -54,8 +54,28 @@ must be run from your own authenticated session. Globus works (one file per call
       on their own. `weight.tif` is now the only masking left, and an unmasked run would be
       quietly wrong rather than obviously broken — a 7.8x over-count on CAWA can10. 12C also
       rejects an all-zero/NA weight, which would zero every density in the BCR.
-- [ ] **A3.** Re-Globus `12B`/`12C` if either changed since the 2026-07-02 staging (they have —
-      see step 0 and B4).
+- [x] **A3. DONE 2026-09-11.** Re-Globus'd every cluster-side script changed since the
+      2026-07-02 staging — **seven files, not the two this item originally named.** All seven
+      transferred non-zero bytes, i.e. all seven were stale on the cluster:
+
+      | file | why it had to go | in `07` path? |
+      |---|---|---|
+      | `08A_train_and_backfill_subbasin_s.R` | **Fix B** (median-impute + `_isNA`) | **yes** — sourced by `07` |
+      | `09_collect_metrics_mbart.R` | sourced by `08B_deploy_mbart` | **yes** |
+      | `11_premosaic_backfilled_stacks.R` | `cc = TRUE`, changed | after `07` |
+      | `12B_repredict_all_coalitions.R` | weight preflight | no |
+      | `12C_predict_species_all_coalitions.R` | Fix A + B4 caps + weight hard-stop | no |
+      | `10C_abiotic_extrapolation_diagnostics.R` | `cc = TRUE`, changed | no |
+      | `10D_BART_posterior_diagnostics.R` | hardcoded cluster path, changed | no |
+
+      **Had A3 been executed as scoped (`12B`/`12C` only), the 674-task `07` run would have
+      used the pre-Fix-B `08A` and reproduced the coverage collapse we are re-running to fix.**
+      Lesson for future stagings: derive the file set from
+      `git log --since=<staging date> --name-only -- Rscripts/` intersected with the sourced-from
+      entry points, rather than from memory of which scripts "are cluster scripts".
+      `12A0_v5_truncate.R` was deliberately NOT staged — `12A` runs locally and nothing on the
+      cluster sources it.
+
 - [x] **A4. DONE 2026-09-11** (run early, not just-before-`07` — strictly safer, nothing left to mix). Cleanup Tier B — ~27 G, run **immediately before** `sbatch 07`:
       `bart_models/2020` + `bart_models_mosaics/2020`, and
       `rm -f density_tables/*.rds density_tables/arrays/*.rds`.
