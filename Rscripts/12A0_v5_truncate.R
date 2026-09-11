@@ -36,6 +36,16 @@
 #             decomposition that 12C relies on. Production runs in 5072; 3978 is
 #             used only to reproduce V5's released product as a verification gate.
 #
+#   `apply_masks` -- set FALSE to stop after step 6 (the two clamps) and skip
+#             steps 7-8. Our pipeline carries V5's range/water/data-limit masking
+#             as a separate precomputed weight.tif (12A2), which 12C multiplies
+#             into BOTH the observed and the backfilled side so the obs/bf
+#             symmetry w*bf - w*obs = w*(bf - obs) is exact. 12A must therefore
+#             write a truncated-but-UNWEIGHTED stack, or 12C:220 would apply the
+#             masking a second time. Note that q99 is derived BEFORE masking in
+#             V5 too (step 6 precedes step 7), so the frozen parameter is
+#             identical either way.
+#
 # Returns a list(stack, q99, densmax) so callers can persist the frozen params.
 # ---
 
@@ -67,11 +77,12 @@ v5_truncate <- function(stack_in,
                         spp,
                         bcr,
                         densmax,
-                        masks,
-                        range_root,
-                        q99        = NULL,
-                        project_to = "EPSG:3978",
-                        res        = 1000) {
+                        masks       = NULL,
+                        range_root  = NULL,
+                        q99         = NULL,
+                        project_to  = "EPSG:3978",
+                        res         = 1000,
+                        apply_masks = TRUE) {
 
   stopifnot(length(densmax) == 1, is.finite(densmax))
 
@@ -91,6 +102,10 @@ v5_truncate <- function(stack_in,
     if (is.na(q99)) return(NULL)   # 10.Truncate.R:131
   }
   r <- terra::clamp(r, upper = q99, values = TRUE)
+
+  if (!apply_masks) return(list(stack = r, q99 = q99, densmax = densmax))
+  if (is.null(masks) || is.null(range_root))
+    stop("apply_masks = TRUE requires both `masks` and `range_root`")
 
   # -- step 7: range as a multiplicative weight, then NA -> 0 -------------------
   # V5 applies the range continuously (not as a hard cutoff) and zeroes every NA,

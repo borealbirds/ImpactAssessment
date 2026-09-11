@@ -31,8 +31,39 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
 
   message(Sys.time(), " | preparing ALL coalitions for species=", species, " year=", year)
 
-  qsp <- q.out[q.out$spp == species, ]$q
-  q0  <- l.out[l.out$spp == species, ]$denshthresh
+  # ---- V5 truncation caps (two upper stages; see 12A0_v5_truncate.R) ----------
+  # densmax: species constant. NOTE the schema change in V5 commit 4e7fc83
+  # (2026-06-04) -- q.out lost its $q column and gained $densmax. Reading the old
+  # $q here returned NULL, and pmin(x, NULL) is numeric(0) *silently*, so this
+  # clamp was a no-op on the cluster path.
+  #
+  # q99: the 99.9th percentile of the densmax-clamped bootstrap mean. It is the
+  # DOMINANT cap -- across our 25 species x BCR pairs it binds 1.2x to 35.4x lower
+  # than densmax (median 6.9x CAWA / 2.1x OVEN) -- and it was never applied at all.
+  #
+  # q99 is FROZEN from the observed landscape by 12A rather than derived here.
+  # It is the only data-dependent parameter in the transform: removing industry
+  # raises density, so a counterfactual's own 99.9th percentile sits higher and
+  # would be clamped less than the observed landscape it is differenced against,
+  # putting a component of the cap itself into the obs/bf contrast.
+  #
+  # The old l.out$denshthresh low-density zeroing was deleted from V5's pipeline
+  # (it has no counterpart in 10.Truncate.R) and is not applied. l.out still ships
+  # in the .Rdata; it is simply unused.
+  if (!"densmax" %in% names(q.out))
+    stop("q.out has no `densmax` column - SpeciesPredictionTruncationValues.Rdata ",
+         "is the pre-2026-06-04 version. Restage it from G:/Shared drives/",
+         "BAM_NationalModels5/data/ and re-run 12A.")
+  qsp <- q.out[q.out$spp == species, ]$densmax
+  if (length(qsp) != 1L || !is.finite(qsp))
+    stop("no usable densmax for species=", species)
+
+  params_path <- file.path(ia_dir, "data", "derived_data", "predictions", species,
+                           "truncation_params.rds")
+  if (!file.exists(params_path))
+    stop("missing ", params_path, " - run 12A_observed.R locally and Globus it to ",
+         "the cluster before 12B. The frozen q99 cannot be recovered here.")
+  trunc_params <- readRDS(params_path)
 
   rdata_files <- list.files(file.path(nm_root, "output/06_bootstraps", species),
                             pattern = "can.*\\.Rdata$", full.names = TRUE)
@@ -65,6 +96,21 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
       message(Sys.time(), " | TEST_BCR=", test_bcr_env, " — skipping ", bcr_code)
       return(NULL)
     }
+
+    # frozen secondary cap for THIS BCR, written by 12A next to observed_bootstraps.tif
+    tp_key <- paste(bcr_code, year, sep = "_")
+    tp     <- trunc_params[[tp_key]]
+    if (is.null(tp) || !is.finite(tp$q99))
+      stop(species, " ", bcr_code, ": no frozen q99 in ", params_path,
+           " - re-run 12A_observed.R for this BCR and restage it.")
+    q99 <- tp$q99
+    if (!isTRUE(all.equal(tp$densmax, qsp)))
+      stop(species, " ", bcr_code, ": densmax mismatch - params has ", tp$densmax,
+           " but q.out has ", qsp, ". 12A and 12C are reading different ",
+           "SpeciesPredictionTruncationValues.Rdata files.")
+    message(Sys.time(), " | ", species, " ", bcr_code,
+            " | caps: densmax=", signif(qsp, 6), " q99=", signif(q99, 6),
+            " (q99 binds ", round(qsp / q99, 1), "x lower)")
 
     sub_ids <- bcr_subbasins_ref |>
       dplyr::filter(bcr_code == !!bcr_code) |>
@@ -279,7 +325,8 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
           pred_vec[complete_mask] <- gbm::predict.gbm(
             model, X_k[complete_mask, , drop = FALSE],
             n.trees = model$n.trees, type = "response")
-        sc[, k] <- pmin(pred_vec, qsp)
+        # both V5 upper caps, in 10.Truncate.R order (densmax then the frozen q99)
+        sc[, k] <- pmin(pmin(pred_vec, qsp), q99)
       }
       sc
     }, mc.cores = n_cores)
@@ -290,8 +337,8 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
 
     # M: [n_super x (n_boot*n_scen)] capped birds/ha; col block per bootstrap.
     M <- do.call(cbind, boot_mats); rm(boot_mats)
-    # apply prediction weight AFTER the in-worker qsp clamp (V5 order: truncate then
-    # range-multiply). weight_super has length n_super = nrow(M); column-major
+    # apply prediction weight AFTER the in-worker densmax+q99 clamps (V5 order:
+    # truncate, then range-multiply). weight_super has length n_super = nrow(M); column-major
     # recycling multiplies row i of every column by weight_super[i]. Symmetric with
     # the observed-side weighting above, so bf - obs stays w*(bf - obs). The bf-only
     # arr stashed below is reshaped from this M, so it inherits the weighting too.
@@ -324,7 +371,7 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     # NOTE: per-coalition inspection rasters (predictions_coalitions/.../backfilled_
     # {mean,sd}.tif) are intentionally NOT written here — no downstream script reads
     # them (12D/12F/14B consume only the .rds tables). If needed, emit them only for
-    # the save_arrays_ids coalitions from M (birds/ha) + the q99/q0 caps, as in 12C.
+    # the save_arrays_ids coalitions from M (birds/ha), which is already capped.
 
     # ---- reduce every coalition (cheap: masked grouped sums) -------------------
     coalition_tables <- vector("list", length(all_cids))

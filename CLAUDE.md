@@ -169,7 +169,7 @@ sbatch --array=1 --time=01:00:00 --mem=192G --export=ALL,TEST_BCR=can60,TEST_N_B
 - The complete-case mask is identical between obs and bf (a single `keep` drives both).
 - BART draws are log1p-scaled → `expm1` before use; non-finite → NA, never 0.
 - Categorical `var.levels` are indexed by `match()` against `var.names`, never by name.
-- The `qsp` per-pixel cap stays in the gbm step (it feeds the density table); q99/q0 caps only ever touched inspection rasters, never the density table.
+- BOTH V5 upper caps are applied per pixel in the gbm step and DO feed the density table: `pmin(pmin(pred_vec, densmax), q99)` (12C:329). `densmax` is `q.out$densmax` (the old `$q` column no longer exists); `q99` is the per-BCR 99.9th percentile **frozen from the observed landscape** by 12A and read from `predictions/{species}/truncation_params.rds`. It must never be re-derived from a counterfactual, or the cap enters the obs/bf contrast. The observed side is pre-clamped by 12A, so both sides carry identical caps. (Superseded 2026-09-11: the caps used to touch only inspection rasters, and `q99` was never applied at all — see Open Limitation #6.)
 - Grouped `_draw_*` reads use INTERLEAVE=BAND (now once per BCR).
 
 **Shapley attribution**: 8 sectors → 256 coalitions (2^8; cid 1 = empty is skipped → 255 computed). All 255 are produced by a single SLURM job per species (12B). `14B_sector_attribution.R` computes exact Shapley values from the coalition density tables. Shapley values sum exactly to the total HF impact. `12E_shapley_utils.R` provides coalition enumeration and the Shapley formula.
@@ -287,6 +287,19 @@ Large spatial files (`.tif`, `.gpkg`, `.shp`) and most `.rds` files are gitignor
    applied it. The `denshthresh` low-density step was deleted from V5 entirely. Also: **CAWA
    `can40` is withheld** by BAM (`review/ModelReleaseDecisions.xlsx`, "remove" tab, AUC), but our
    BCR discovery still processes it. Plan and design rationale: **`TODO.md`** workstream B.
+
+   **UPDATE 2026-09-11 — conformed in code; cluster run pending.** `12A0_v5_truncate.R` ports
+   `10.Truncate.R`; `12A` rewritten and re-run (all 25 stacks now carry BOTH caps and a frozen
+   per-BCR `q99` in `predictions/{species}/truncation_params.rds`); `12C` reads `$densmax` behind
+   a schema guard and applies `pmin(pmin(pred_vec, densmax), q99)`. Across the 25 species x BCR
+   pairs `q99` binds **1.2x-35.4x lower** than `densmax` (median 6.9x CAWA / 2.1x OVEN), so the
+   missing cap was the dominant one everywhere, not just on `can10`. CAWA `can40` is still
+   produced deliberately — the release filter belongs in `14B` (B8), not in the products.
+   **Gate G2 passed**: our observed-side population estimates reproduce BAM's published
+   `13_summary` numbers to full published precision (point estimate and both 5-95% bounds).
+   **Still unvalidated**: G2 ran the harness config (3978 + V5 vector masks), NOT production
+   (5072 + `weight.tif`). Masking is a 7.8x effect on CAWA can10 — far larger than the 2.3%
+   projection — and nothing yet proves `weight.tif` reproduces it. See `TODO.md` G3/G4.
 
 ## Instructions from Masa
 1.Always ignore the directory /Rscripts/misc when thinking. It's not immediately relevant to the project.

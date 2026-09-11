@@ -7,7 +7,7 @@ memory. (This file replaced `HANDOFF_cafire_backfill_fix.md`, deleted 2026-09-11
 | | workstream | where | state |
 |---|---|---|---|
 | **A** | CAfire / phenology backfill fix (Open Limitation #5) | cluster compute | fixes built + staged; **cleanup done 2026-09-11**; compute never launched |
-| **B** | Conform observed + counterfactual density to current V5 packaging (Open Limitation #6) | local | **B1 done (G1 passed)**; B2 next |
+| **B** | Conform observed + counterfactual density to current V5 packaging (Open Limitation #6) | local | **B1-B5 done; G1+G2 passed**; next B6/B7 (stage to cluster), G3/G4 open |
 
 **Both edit `12C`. Both must land before the single `12B` run** (2 × 24 h @ 384 G per
 species — doing them in separate passes pays for it twice).
@@ -90,7 +90,7 @@ differenced and contaminate the contrast.
 ("Future versions will not require this step"). It costs 2.3 % of abundance (bilinear
 isn't conservative) and would break the exact superset→masked-rowsum decomposition,
 since `clamp` doesn't commute with projection. The *parameter* is CRS-invariant
-(q99.9 = 0.132897 in 5072 vs 0.132940 in 3978, 0.03 % apart), so the 5072-derived cap
+(CAWA can10 q99.9 = 0.132457 in 5072 vs 0.132881 in 3978, 0.32 % apart), so the 5072-derived cap
 **is** V5's cap. Use 3978 only as a validation harness.
 
 - [x] **B1. DONE — Gate G1 PASSED 2026-09-11.** `Rscripts/12A0_v5_truncate.R` ports
@@ -102,28 +102,70 @@ since `clamp` doesn't commute with projection. The *parameter* is CRS-invariant
       `project_terra_gotchas` memory. The port generalises the transform in two ways the
       counterfactual needs: `q99` can be passed in (frozen) rather than derived, and
       `project_to = NULL` skips the legacy 3978 step.
-- [ ] **B2.** Rewrite `12A_observed.R`:
+- [x] **B2. DONE 2026-09-11.** Rewrote `12A_observed.R`:
       - `q.out$q` → `q.out$densmax` (`:55`). Schema changed; `$q` no longer exists.
       - drop the `q0`/`denshthresh` step (`:56`, `:117-119`) — V5 deleted it.
       - apply densmax **and** q99.9 to the saved stack, so `observed_bootstraps.tif`
         becomes our 5072 analogue of `10_truncated`.
       - write `truncation_params.rds` per species×BCR: `{densmax, q99, spp, bcr, year}`.
-- [ ] **B3.** Re-run `12A` locally for CAWA + OVEN (25 stacks). **Gate G2** — check observed
-      BCR/national totals against `output/13_summary/BAMV5-abundance.RData` /
-      `BAMV5-results.xlsx`. `13.Summarize.R:227` is `global(t * 100, sum)` per bootstrap
-      layer, median + 5–95 % — directly comparable to `obs_total_mean/sd`. First exact
-      external check we've ever had on the observed side.
-      **Gate G3** — record the 5072-vs-3978 total ratio per species×BCR as the published
-      crosswalk to BAM's numbers.
-- [ ] **B4.** Update `12C_predict_species_all_coalitions.R`:
-      - `$q` → `$densmax` (`:34`). **Currently `pmin(pred_vec, NULL)` returns `numeric(0)`
-        silently** if the new Rdata is dropped in without this.
-      - delete `q0` (`:35`).
-      - read `q99` from `truncation_params.rds`; insert the second clamp at `:282`
-        *before* the weight multiply (V5 order: truncate → mask; `:293` already has this right):
-        `sc[, k] <- pmin(pmin(pred_vec, densmax), q99)`
-- [ ] **B5.** Restage `data/raw_data/SpeciesPredictionTruncationValues.Rdata` from
-      `G:/Shared drives/BAM_NationalModels5/data/` (2026-06-04 version).
+- [x] **B3. DONE 2026-09-11.** Re-ran `12A` locally for CAWA + OVEN. All 25 stacks rebuilt
+      (11 CAWA incl. the withheld `can40`, 14 OVEN); both exit 0; `truncation_params.rds`
+      holds 11 and 14 entries; 32 layers and `INTERLEAVE=BAND` verified on spot-checks.
+      Stack maxima sit +4e-8 *relative* above the recorded `q99` — that is FLT4S round-to-
+      nearest on write (float32 eps = 1.2e-7), not a clamp failure.
+
+      **The `densmax/q99` ratio at scale confirms the finding was not local to can10.**
+      `densmax` is essentially never the binding cap:
+
+      | | range | median |
+      |---|---|---|
+      | CAWA (11 BCRs) | 3.4x - 24.8x | 6.9x |
+      | OVEN (14 BCRs) | 1.2x - 35.4x | 2.1x |
+
+      Extremes: CAWA `can71` q99=0.0336 vs densmax 0.833 (24.8x); OVEN `can82` q99=0.0393 vs
+      1.394 (35.4x). Every one of the 25 pairs was previously truncated at `densmax` only.
+
+- [x] **Gate G2 PASSED 2026-09-11.** Our population estimates reproduce BAM's published
+      numbers to full published precision, point estimate *and* both bootstrap bounds:
+
+      | | ours (M) | BAM (M) | ours 5-95% | BAM 5-95% |
+      |---|---|---|---|---|
+      | CAWA can10 | 0.0194 | 0.019 | 0.0146-0.0239 | 0.015-0.024 |
+      | OVEN can10 | 0.0541 | 0.054 | 0.0486-0.0588 | 0.049-0.059 |
+      | CAWA can71 | 0.1619 | 0.162 | 0.1472-0.2085 | 0.147-0.208 |
+
+      Confirms the transform, the frozen parameters, the x100 hectare->km2 convention, and the
+      bootstrap-interval construction, against `output/13_summary/BAMV5-abundance.RData`.
+      Caveat: this is the *harness* config (3978 + V5 vector masks), not production — see G3/G4.
+- [ ] **G3/G4 — the masking half is still unvalidated.** G2 exercised the *harness* config
+      (3978 + V5's own vector masks). Production is *5072 + weight.tif*, and nothing yet proves
+      `weight.tif` reproduces V5's range x water x data-limit masking. This matters more than the
+      projection does: on CAWA can10 the masking is a **7.8x** reduction (148,798 birds unmasked
+      vs 19,000 published), so an error there dwarfs the 2.3% projection effect.
+      Check: `sum(observed_bootstraps.tif x weight.tif x 100)` per species x BCR against the
+      published number; the residual after that is the 5072-vs-3978 crosswalk (G3). Needs
+      `weight.tif`, so it runs on the cluster after A2 — or rebuild a couple locally to
+      close it sooner.
+- [x] **B4. DONE 2026-09-11.** Updated `12C_predict_species_all_coalitions.R`:
+      - `$q` → `$densmax`, behind a schema guard that `stop()`s rather than letting
+        `pmin(x, NULL)` return `numeric(0)` silently.
+      - dropped `q0`. Note `l.out` **still ships** in the `.Rdata` (151 rows, `denshthresh`
+        intact) — V5 deleted the *step*, not the object, so this was dead weight rather
+        than a latent error.
+      - loads `truncation_params.rds` once per species; per BCR it looks up the frozen
+        `q99`, `stop()`s if absent, and cross-checks `densmax` against `q.out` so 12A and
+        12C can never read different `.Rdata` versions without failing loudly.
+      - `:329` now `pmin(pmin(pred_vec, qsp), q99)`, still ahead of the weight multiply
+        (V5 order: truncate → mask).
+      - logs `caps: densmax=... q99=... (q99 binds Nx lower)` per BCR.
+      Observed side needs no change: it is read pre-clamped from `observed_bootstraps.tif`,
+      so both sides of the contrast now carry identical caps.
+      `CLAUDE.md`'s "12C restructure invariants" bullet was rewritten — it previously
+      asserted the opposite ("q99/q0 caps only ever touched inspection rasters").
+
+- [x] **B5. DONE 2026-09-11.** Restaged `data/raw_data/SpeciesPredictionTruncationValues.Rdata`
+      from `G:/Shared drives/BAM_NationalModels5/data/` (2026-06-04 version). The old file is
+      recoverable from git history if the pre-rewrite `$q` values are ever needed.
 - [ ] **B6.** `12A2` — no change needed. `weight = range × notwater × inlimit` already matches
       `10.Truncate.R:137-148`, and the source GIS layers are unchanged since staging
       (WaterMask_Canada Apr 23, DataLimitationsMask Jan 16, ranges Apr 22 — all predate
@@ -156,6 +198,11 @@ since `clamp` doesn't commute with projection. The *parameter* is CRS-invariant
 ---
 
 ## Loose ends
+
+- [ ] `12A` loads each full `b.list` `.Rdata` (up to 654 MB, off Google Drive) purely to read
+      `attr(b.list[[1]], "bcr")` — ~4.3 GB of I/O per species to extract 11 strings. The BCR code
+      is in the filename, and the `12B` preflight already derives it that way. Verify the filename
+      always equals the attribute, then drop the load. Matters at the planned ~60-species scale.
 
 - [ ] Decide the fate of local `covariates_mosaiced_2020_PREORIG.tif` (1.5 G) — the only
       surviving pre-CAfire-fix 2020 mosaic. The G: sandbox copy was overwritten by the rebuild.
