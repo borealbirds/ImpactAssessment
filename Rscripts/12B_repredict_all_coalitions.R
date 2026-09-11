@@ -86,6 +86,37 @@ sectors    <- canonical_sectors()
 target_ids <- c(sectors_to_coalition_id(sectors, sectors),
                 vapply(sectors, function(s) sectors_to_coalition_id(s, sectors), numeric(1L)))
 
+# preflight: every species x BCR must have weight.tif --------------------------
+# 12C falls back to an UNMASKED run (w == 1) on a missing weight.tif and only
+# warns, which silently counts birds on water, outside the species' range, and
+# outside the V5 data-limitation extent. That fallback got more dangerous once
+# 08A started median-imputing partial-NA BART predictors: water pixels used to
+# fail complete.cases in 12C and drop out of BOTH obs and bf on their own, so
+# weight.tif is now the only thing keeping them out of the density tables. Fail
+# here rather than 20 h into a job whose totals are quietly wrong.
+# BCR codes are taken from the bootstrap filenames (12C reads them from the
+# b.list "bcr" attribute, which would mean loading every .Rdata just to check).
+weight_bcrs <- basename(list.files(file.path(nm_root, "output/06_bootstraps", species),
+                                   pattern = "can.*\\.Rdata$"))
+weight_bcrs <- unique(regmatches(weight_bcrs, regexpr("can[0-9]+", weight_bcrs)))
+test_bcr_env <- Sys.getenv("TEST_BCR", "")   # honour the same smoke-test filter as 12C
+if (nchar(test_bcr_env) > 0)
+  weight_bcrs <- intersect(weight_bcrs, strsplit(test_bcr_env, ",")[[1]])
+
+if (length(weight_bcrs) == 0) {
+  warning(species, " | could not derive any BCR codes from 06_bootstraps filenames",
+          " — skipping the weight.tif preflight")
+} else {
+  missing_w <- weight_bcrs[!file.exists(
+    file.path(ia_dir, "data", "derived_data", "predictions", species, weight_bcrs,
+              year, "weight.tif"))]
+  if (length(missing_w) > 0)
+    stop(species, " | weight.tif missing for ", length(missing_w), "/",
+         length(weight_bcrs), " BCR(s): ", paste(missing_w, collapse = ", "),
+         " — run 12A2_build_prediction_weights.sh before 12B")
+  message(Sys.time(), " | weight.tif present for all ", length(weight_bcrs), " BCR(s)")
+}
+
 res <- predict_species_all_coalitions(species, year = year,
                                       all_subbasins_subset = all_subbasins_subset,
                                       hirsh_dir = hirsh_dir, save_arrays_ids = target_ids)

@@ -235,7 +235,17 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
         X_rep[[v]] <- factor(as.character(X_rep[[v]]), levels = lvls)
     }
     for (v in draw_covs) if (v %in% names(X_rep)) X_rep[[v]] <- draw_vals_super[[v]][, 1L]
-    complete_mask <- stats::complete.cases(X_rep[, model_vars_shared, drop = FALSE])
+    # Gate ONLY on the BACKFILLED covariates we inject (continuous biotic draws +
+    # backfilled categoricals). Observed-only covariates (climate, soil, terrain,
+    # phenology) may be NA — gbm::predict.gbm tolerates NA via surrogate splits exactly
+    # as V5's 07.Predict did, so dropping a pixel on their NA over-restricts the
+    # counterfactual (e.g. StandardGreenup/Dormancy NA on water/quality-gap pixels that
+    # V5 still predicted). The backfilled draws/categoricals are the counterfactual
+    # signal itself, so they MUST be complete. Range/water/extent is handled separately
+    # by weight_super (12A2), not by this gate. A single complete_mask still drives BOTH
+    # the re-predicted field (M) and obs_on (via `keep`), so obs/bf parity is preserved.
+    backfilled_vars <- intersect(c(draw_covs, cat_vars_shared), model_vars_shared)
+    complete_mask <- stats::complete.cases(X_rep[, backfilled_vars, drop = FALSE])
     rm(X_rep)
     message(Sys.time(), " | ", species, " ", bcr_code, " | complete superset pixels: ",
             sum(complete_mask), " / ", length(super_idx),
