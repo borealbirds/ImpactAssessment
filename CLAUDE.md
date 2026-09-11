@@ -102,8 +102,10 @@ Re-predicting birds:
 # Phase 1b: Build prediction weights ONCE before 12B (range/water/extent masking).
 # Reads data/raw_data/v5_gis (staged from G:); writes weight.tif per species x BCR.
 sbatch 12A2_build_prediction_weights.sh   # --array=1-<n_species>
-# If weight.tif is absent, 12C runs UNMASKED (with a warning) — so this is a
-# correctness step, not a hard dependency for the pipeline to execute.
+# weight.tif is a HARD dependency: 12C stops if it is missing (changed 2026-09-11).
+# Since Fix B median-imputes partial-NA covariates, water / out-of-range / out-of-
+# extent pixels no longer drop out via complete.cases() on their own, so weight.tif
+# is the only masking left. An unmasked run is quietly wrong, not obviously broken.
 
 # Phase 2: ONE job per species computes ALL 255 coalitions in a single pass
 # (superset restructure — see "12C restructure invariants" in Key Architecture

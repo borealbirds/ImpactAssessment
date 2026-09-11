@@ -47,12 +47,13 @@ must be run from your own authenticated session. Globus works (one file per call
       (5.3 G, output of the retired per-coalition path).
 - [ ] **A2.** Confirm `weight.tif` exists for all **25** species×BCR pairs
       (11 CAWA + 14 OVEN `can*` models). If short, `sbatch 12A2_build_prediction_weights.sh`.
-      **Do not skip.** `12C` falls back to an UNMASKED run (`w == 1`) with only a warning when
-      `weight.tif` is missing, and that got materially more dangerous once Fix B started
-      median-imputing: water pixels used to fail `complete.cases` and drop out of BOTH obs and
-      bf on their own, so `weight.tif` is now the **only** thing keeping water, out-of-range
-      and out-of-extent pixels out of the density tables. The preflight fails fast instead of
-      20 h into a job whose totals are quietly wrong.
+      **Do not skip.** `12C` now `stop()`s outright if `weight.tif` is missing (changed
+      2026-09-11; it used to fall back to `w == 1` with only a message). Fix B made that
+      fallback dangerous: 08A median-imputes partial-NA covariates, so water, out-of-range
+      and out-of-extent pixels no longer fail `complete.cases()` and drop out of BOTH sides
+      on their own. `weight.tif` is now the only masking left, and an unmasked run would be
+      quietly wrong rather than obviously broken — a 7.8x over-count on CAWA can10. 12C also
+      rejects an all-zero/NA weight, which would zero every density in the BCR.
 - [ ] **A3.** Re-Globus `12B`/`12C` if either changed since the 2026-07-02 staging (they have —
       see step 0 and B4).
 - [x] **A4. DONE 2026-09-11** (run early, not just-before-`07` — strictly safer, nothing left to mix). Cleanup Tier B — ~27 G, run **immediately before** `sbatch 07`:

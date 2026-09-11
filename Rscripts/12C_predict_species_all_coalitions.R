@@ -203,21 +203,31 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     # ---- Prediction weight (range x not-water x in-data-limit; built by 12A2) ---
     # Applied multiplicatively to BOTH observed and backfilled density so obs/bf
     # symmetry holds: w*bf - w*obs = w*(bf - obs). Replicates V5 10.Truncate
-    # range/water/extent masking. Missing weight => UNMASKED (w == 1) with a warning
-    # so the pipeline still runs. Built on the stack grid, so it aligns with
+    # range/water/extent masking. Built on the stack grid, so it aligns with
     # stack_obs and the observed bootstraps; resample only as a grid-drift guard.
+    #
+    # HARD DEPENDENCY (changed 2026-09-11 -- this used to fall back to w == 1 and
+    # carry on with only a message). Fix B made the fallback materially more
+    # dangerous: 08A now median-imputes partial-NA covariates, so water,
+    # out-of-range and out-of-extent pixels no longer fail complete.cases() and
+    # drop out of BOTH sides on their own. weight.tif is now the ONLY thing
+    # keeping them out of the density tables, and an unmasked run produces
+    # totals that are quietly wrong rather than obviously broken -- on CAWA
+    # can10 the masking is a 7.8x reduction. Fail here rather than 20 h in.
     weight_path <- file.path(ia_dir, "data", "derived_data", "predictions",
                              species, bcr_code, year, "weight.tif")
-    if (file.exists(weight_path)) {
-      weight_r <- terra::rast(weight_path)
-      if (!isTRUE(terra::compareGeom(weight_r, stack_obs[[1]], stopOnError = FALSE)))
-        weight_r <- terra::resample(weight_r, stack_obs[[1]], method = "near")
-    } else {
-      message(Sys.time(), " | ", species, " ", bcr_code,
-              " | no weight.tif — proceeding UNMASKED (run 12A2_build_prediction_weights)")
-      weight_r <- terra::rast(stack_obs[[1]]); terra::values(weight_r) <- 1
-    }
+    if (!file.exists(weight_path))
+      stop(species, " ", bcr_code, ": missing ", weight_path,
+           " - run `sbatch 12A2_build_prediction_weights.sh` before 12B. Since Fix B ",
+           "this is the only masking left, so an unmasked run would silently ",
+           "over-count water, out-of-range and out-of-extent pixels.")
+    weight_r <- terra::rast(weight_path)
+    if (!isTRUE(terra::compareGeom(weight_r, stack_obs[[1]], stopOnError = FALSE)))
+      weight_r <- terra::resample(weight_r, stack_obs[[1]], method = "near")
     weight_super <- terra::values(weight_r, mat = FALSE)[super_idx]
+    if (all(!is.finite(weight_super)) || sum(weight_super, na.rm = TRUE) == 0)
+      stop(species, " ", bcr_code, ": weight.tif is all-zero/NA over the superset - ",
+           "it would zero every density in this BCR. Rebuild it with 12A2.")
 
     # observed covariates at superset pixels (identical extraction to 12C) -------
     obs_all_vals  <- terra::values(stack_obs)
