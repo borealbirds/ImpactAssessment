@@ -12,8 +12,13 @@
 #   C  V5's own masking    : same, after V5's legacy projection to EPSG:3978
 #
 # A vs B isolates raster-weight-vs-vector masking; B vs C isolates the 5072-vs-3978
-# crosswalk we deliberately skip (see 12A0_v5_truncate.R). C is the number that should
+# projection we deliberately skip (see 12A0_v5_truncate.R). C is the number that should
 # match output/13_summary/BAMV5-results.xlsx.
+#
+# NOTE on B vs C: that gap is an AREA-UNITS artifact, not a resampling loss -- 3978 is
+# conformal, its 1000 m cells hold ~1.027 km2 of ground, and `* 100` assumes 1 km2 per
+# pixel. Weighting by cellSize() collapses it to 0.05-0.23%. Our 5072 side is the one
+# that satisfies the assumption. CLAUDE.md Open Limitation #8.
 #
 # RESULT 2026-09-11 (CAWA can10 / CAWA can71 / OVEN can10):
 #   A/B = 1.000011, 1.000002, 1.000001   -- float32 noise; masking parity is exact

@@ -30,11 +30,21 @@
 #   `project_to` -- set NULL to skip step 4 and stay in the prediction's native
 #             EPSG:5072. 10.Truncate.R:19 documents the 3978 reprojection as a
 #             legacy artifact ("Future versions will not require this step").
-#             It costs ~2.3% of total abundance (bilinear resampling does not
-#             conserve sums) and, because clamp() does not commute with
-#             projection, it would break the exact superset -> masked-rowsum
-#             decomposition that 12C relies on. Production runs in 5072; 3978 is
-#             used only to reproduce V5's released product as a verification gate.
+#             Because clamp() does not commute with projection, it would also
+#             break the exact superset -> masked-rowsum decomposition that 12C
+#             relies on. Production runs in 5072; 3978 is used only to reproduce
+#             V5's released product as a verification gate.
+#
+#             CORRECTED 2026-09-14. This used to read "it costs ~2.3% of total
+#             abundance (bilinear resampling does not conserve sums)". Wrong
+#             mechanism and wrong direction. 5072 is Albers EQUAL AREA; 3978 is
+#             Lambert CONFORMAL Conic, whose 1000 m cells hold ~1.027 km2 of
+#             ground between the standard parallels. Since population is summed
+#             as density * 100 with one km2 assumed per pixel, the 3978 total
+#             comes out ~2.9-3.4% LOW -- staying in 5072 is the side that is
+#             right, not a cost we absorb. Area-weighting by cellSize() collapses
+#             the gap to 0.05-0.23%, which is the real interpolation residual.
+#             See CLAUDE.md Open Limitation #8.
 #
 #   `apply_masks` -- set FALSE to stop after step 6 (the two clamps) and skip
 #             steps 7-8. Our pipeline carries V5's range/water/data-limit masking

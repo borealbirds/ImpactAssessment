@@ -315,9 +315,11 @@ Large spatial files (`.tif`, `.gpkg`, `.shp`) and most `.rds` files are gitignor
    **Gate G2 passed**: our observed-side population estimates reproduce BAM's published
    `13_summary` numbers to full published precision (point estimate and both 5-95% bounds).
    **Still unvalidated**: G2 ran the harness config (3978 + V5 vector masks), NOT production
-   (5072 + `weight.tif`). Masking is a 7.8x effect on CAWA can10 — far larger than the 2.3%
-   projection — and nothing yet proves `weight.tif` reproduces it. See `TODO.md` G3/G4.
-   Chasing exactly that gap turned up Open Limitation #7 below.
+   (5072 + `weight.tif`). Masking is a 7.8x effect on CAWA can10 — far larger than the
+   projection. **Closed 2026-09-11**: chasing that gap turned up two defects in
+   `weight.tif` (Open Limitation #7), and with both fixed G3/G4 pass to float32 noise.
+   The 5072-vs-3978 gap measures +2.9% to +3.4% (we had guessed 2.3%), and was
+   re-diagnosed 2026-09-14 as an area-units artifact — Open Limitation #8.
 
 7. **`weight.tif` was missing V5's mosaic cut, double-counting at every BCR seam
    (2026-09-11)**: V5 predicts each subunit on a grid BUFFERED well past the subunit and
@@ -345,6 +347,65 @@ Large spatial files (`.tif`, `.gpkg`, `.shp`) and most `.rds` files are gitignor
    the weight multiplies both sides, so `w*bf - w*obs = w*(bf - obs)` held throughout and
    Shapley *shares* were less distorted than totals. Per-BCR and national **totals**
    computed before this fix are wrong and must be regenerated.
+
+   **Second defect, same investigation: `rasterize(touches = FALSE)`.** V5 applies its
+   masks as `mask(vect, inverse = TRUE)` and `crop(vect, mask = TRUE)`, which retain or
+   remove any cell the polygon **touches**. `terra::rasterize()` defaults to the
+   cell-**centre** rule instead, so `12A2` under-masked. The size of the gap scales with
+   how fragmented the layer is: `WaterMask_Canada` has **29,545 polygons**, mostly thin
+   rivers and small lakes that touch a cell without covering its centre, and the centre
+   rule let through **4.9-7.7% of total abundance**; on the single-blob BCR polygon the
+   same discrepancy is only 0.7-2.2% (perimeter cells), and on the data-limit mask 0.02%.
+   All three terms now pass `touches = TRUE`.
+
+   **Gates G3/G4 PASSED 2026-09-11** with both fixes in. `sum(observed x weight x 100)`
+   reproduces V5's own vector masking to **A/B = 1.000011 / 1.000002 / 1.000001** (CAWA
+   can10, CAWA can71, OVEN can10) — float32 noise. The masking half of the conformance
+   work is validated against the PRODUCTION config (5072 + `weight.tif`), not just the G2
+   harness. Harness: `Rscripts/misc/verify_weight_vs_v5_masking.R`.
+
+8. **V5 sums density over a CONFORMAL grid, so published abundances read ~3% low
+   (UPSTREAM, 2026-09-14)**: `13.Summarize.R:227` computes population as
+   `global(t * 100, sum)` over the `10_truncated` product, which lives in EPSG:3978. The
+   `x 100` step converts birds/ha to birds/km2 (see "Instructions from Masa" below), and
+   summing that over pixels yields birds **only if every pixel is one square kilometre of
+   ground** — a property of equal-area projections specifically.
+
+   EPSG:5072 (our production CRS) is Albers **Equal Area**. EPSG:3978 (Canada Atlas
+   Lambert, V5's delivery CRS) is Lambert **Conformal** Conic: between its standard
+   parallels (49N, 77N) the scale factor is below 1, so a 1000 m x 1000 m cell holds
+   **more than 1 km2 of ground**. Measured with `terra::cellSize()`:
+
+   | | CAWA can10 | CAWA can71 | OVEN can10 |
+   |---|---|---|---|
+   | mean TRUE cell area, 5072 | 1.00000 km2 | 1.00000 km2 | 1.00000 km2 |
+   | mean TRUE cell area, 3978 | 1.02682 km2 | 1.03085 km2 | 1.02682 km2 |
+   | data cells, 3978 / 5072 | 0.9732 | 0.9700 | 0.9732 |
+   | **naive sum** (`x100`, 1 km2/cell) | **1.0288** | **1.0284** | **1.0346** |
+   | **area-weighted sum** (`x cellSize`) | **1.0006** | **1.0005** | **1.0023** |
+
+   Each 3978 cell carries ~2.7% more ground than it is credited with, so the region needs
+   ~2.7% fewer cells and the naive sum falls short by about that much. Weight every cell
+   by its true area and the two projections agree to **0.05-0.23%** — i.e. essentially the
+   whole gap is the area-units mismatch, and bilinear interpolation contributes only that
+   ~0.1% remainder.
+
+   **Consequences.** (a) Our 5072 totals satisfy the `x 100` assumption and V5's 3978
+   totals do not, so the ~3% is V5 reading low, not us reading high. (b) The fix is one
+   multiplication on either side: `global(t * 100 * cellSize(t, unit = "km"), "sum")`,
+   which is projection-agnostic. (c) It is a bias, not an invalidating error — 3% sits
+   well inside the published 5-95% bootstrap intervals (roughly +/-25% on these three) —
+   and it cancels in the obs/bf contrast, so no Shapley number moves. (d) Gate G2 still
+   stands precisely *because* it reproduced V5's own convention in V5's own CRS: it tested
+   transform parity, not unit correctness.
+
+   **Correction of an earlier claim.** Until 2026-09-14 this was documented here, in
+   `TODO.md`, in the `12A0_v5_truncate.R` / `12A_observed.R` headers and in memory as "the
+   3978 reprojection costs ~2.3% because bilinear resampling does not conserve sums, an
+   accepted cost of staying in 5072" — wrong mechanism and wrong direction. The
+   generalizable lesson: **`x 100` silently encodes "one pixel = 1 km2", which only
+   equal-area projections honour**, so any per-area quantity summed over a grid is
+   re-scaled by a mid-analysis projection change unless cell areas are re-derived.
 
 ## Instructions from Masa
 1.Always ignore the directory /Rscripts/misc when thinking. It's not immediately relevant to the project.

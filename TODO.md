@@ -7,7 +7,7 @@ memory. (This file replaced `HANDOFF_cafire_backfill_fix.md`, deleted 2026-09-11
 | | workstream | where | state |
 |---|---|---|---|
 | **A** | CAfire / phenology backfill fix (Open Limitation #5) | cluster compute | fixes built; **all scripts staged + cleanup done 2026-09-11 (A3, A4)**; compute never launched |
-| **B** | Conform observed + counterfactual density to current V5 packaging (Open Limitation #6) | local | **DONE - B1-B8, C4 and gates G1-G4 all passed.** G3/G4 found + fixed two `weight.tif` defects (Open Limitation #7); only residual is the deliberate +2.9-3.4% 5072-vs-3978 choice |
+| **B** | Conform observed + counterfactual density to current V5 packaging (Open Limitation #6) | local | **DONE - B1-B8, C4 and gates G1-G4 all passed.** G3/G4 found + fixed two `weight.tif` defects (Open Limitation #7); only residual is the +2.9-3.4% 5072-vs-3978 gap, re-diagnosed 2026-09-14 as an area-units artifact with our side correct (Open Limitation #8) |
 
 **Both edit `12C`. Both must land before the single `12B` run** (2 × 24 h @ 384 G per
 species — doing them in separate passes pays for it twice).
@@ -108,7 +108,10 @@ and rewrote the truncation values (`4e7fc83`). Measured gap on `can10` 2020:
 |---|---|---|
 | `densmax` cap removes | 1.29 % | 0.32 % |
 | frozen `q99.9` cap removes a further | **12.19 %** | **4.13 %** |
-| projection 5072→3978 costs a further | ~2.3 % | — |
+| projection 5072→3978 appears to cost a further | ~2.3 % | — |
+
+(That last row is **misattributed** — see the 2026-09-14 correction under "Stay in
+EPSG:5072" below. It is not a truncation effect at all.)
 
 `q99.9` (≈0.133 for CAWA) binds 6.3× lower than `densmax` (0.833) and is doing nearly all
 the work — and our density tables have **never** applied it.
@@ -120,11 +123,37 @@ Recomputing `q99.9` per counterfactual would let the cap adapt to the landscape 
 differenced and contaminate the contrast.
 
 **Stay in EPSG:5072.** `10.Truncate.R:19` states the 3978 reprojection is legacy
-("Future versions will not require this step"). It costs 2.3 % of abundance (bilinear
-isn't conservative) and would break the exact superset→masked-rowsum decomposition,
-since `clamp` doesn't commute with projection. The *parameter* is CRS-invariant
-(CAWA can10 q99.9 = 0.132457 in 5072 vs 0.132881 in 3978, 0.32 % apart), so the 5072-derived cap
-**is** V5's cap. Use 3978 only as a validation harness.
+("Future versions will not require this step"). It would also break the exact
+superset→masked-rowsum decomposition, since `clamp` doesn't commute with projection.
+The *parameter* is CRS-invariant (CAWA can10 q99.9 = 0.132457 in 5072 vs 0.132881 in
+3978, 0.32 % apart), so the 5072-derived cap **is** V5's cap. Use 3978 only as a
+validation harness.
+
+**CORRECTED 2026-09-14 — the ~3 % is an area-units artifact, and 5072 is the side that
+is RIGHT.** This was written up (here, in `CLAUDE.md`, in `12A0`/`12A` headers and in
+memory) as "bilinear isn't conservative, so staying in 5072 costs us ~2.3 %". Both halves
+were wrong: wrong mechanism, and wrong sign of the argument. Measured with
+`terra::cellSize()`:
+
+| | CAWA can10 | CAWA can71 | OVEN can10 |
+|---|---|---|---|
+| mean TRUE cell area, 5072 | 1.00000 km² | 1.00000 km² | 1.00000 km² |
+| mean TRUE cell area, 3978 | 1.02682 km² | 1.03085 km² | 1.02682 km² |
+| data cells, 3978 / 5072 | 0.9732 | 0.9700 | 0.9732 |
+| **naive sum** (`×100`, 1 km²/cell) | **1.0288** | **1.0284** | **1.0346** |
+| **area-weighted sum** (`× cellSize`) | **1.0006** | **1.0005** | **1.0023** |
+
+EPSG:5072 is Albers **Equal Area**; EPSG:3978 (Canada Atlas Lambert) is Lambert
+**Conformal** Conic. Between its standard parallels (49°N, 77°N) the scale factor is
+below 1, so a 1000 m × 1000 m cell in 3978 holds **1.027 km² of ground**, not 1 km².
+Weight each cell by its true area and the two projections agree to **0.05–0.23 %** — so
+essentially the whole gap is the area-units mismatch, and bilinear interpolation
+contributes only that ~0.1 % remainder.
+
+The load-bearing assumption is the `× 100` convention itself (birds/ha → birds/km²):
+summing that over pixels yields birds **only if every pixel is one km² of ground**, which
+is a property of equal-area projections specifically. So our 5072 totals satisfy the
+assumption and V5's 3978 totals do not — see **`CLAUDE.md` Open Limitation #8**.
 
 - [x] **B1. DONE — Gate G1 PASSED 2026-09-11.** `Rscripts/12A0_v5_truncate.R` ports
       `10.Truncate.R`; `Rscripts/misc/verify_v5_truncate_port.R` is the harness.
@@ -210,10 +239,11 @@ since `clamp` doesn't commute with projection. The *parameter* is CRS-invariant
       onward is sound, and the whole residual lives in the two deliberate production
       departures.
 
-      - **B->C, the 5072-vs-3978 crosswalk: +2.9%, +2.9%, +3.4%.** Consistent, close to the
-        ~2.3% previously estimated, and an accepted cost of staying in 5072 (documented in
-        `12A0_v5_truncate.R`: `clamp()` does not commute with projection, so projecting
-        would break the superset -> masked-rowsum decomposition).
+      - **B->C, the 5072-vs-3978 gap: +2.9%, +2.9%, +3.4%.** Originally logged as an
+        accepted cost of staying in 5072. **Re-diagnosed 2026-09-14: it is an area-units
+        artifact and 5072 is the correct side** — 3978 is conformal, its cells hold
+        1.027 km² of ground, and area-weighting collapses the gap to 0.05-0.23%. See the
+        correction block under "Stay in EPSG:5072" above and Open Limitation #8.
       - **A->B, raster-vs-vector masking: +6.2%, +1.4%, +12.7%.** Not uniform, so not a
         simple edge effect. Isolated per term, and it was a **single root cause**:
         `terra::rasterize()` defaults to `touches = FALSE` (cell-centre rule), while
@@ -236,12 +266,13 @@ since `clamp` doesn't commute with projection. The *parameter* is CRS-invariant
       float32 noise. The masking half of the conformance work is now validated against
       the PRODUCTION config (5072 + `weight.tif`), not just the G2 harness.
 
-      Only departure left is the deliberate one: staying in EPSG:5072 costs **+2.9% to
-      +3.4%** vs V5's legacy 3978 delivery projection (previously estimated at 2.3%).
-      That is the documented trade for keeping `clamp()` commutable with the superset ->
-      masked-rowsum decomposition; it applies equally to obs and bf, so it cancels in the
-      contrast. Harness: `Rscripts/misc/verify_weight_vs_v5_masking.R`, which prints all
-      three configurations and is the thing to re-run after any weight change.
+      Only departure left is the **+2.9% to +3.4%** between our 5072 totals and V5's
+      3978 ones. Re-diagnosed 2026-09-14: that is not a cost of our choice, it is an
+      area-units artifact of summing `density x 100` over a CONFORMAL grid, and our side
+      is the one that satisfies the `x 100` assumption (Open Limitation #8). It cancels
+      in the obs/bf contrast either way. Harness:
+      `Rscripts/misc/verify_weight_vs_v5_masking.R`, which prints all three
+      configurations and is the thing to re-run after any weight change.
 
       Note this defect moved **absolute populations only**. The weight multiplies both
       sides, so `w*bf - w*obs = w*(bf - obs)` held throughout and Shapley *shares* were far

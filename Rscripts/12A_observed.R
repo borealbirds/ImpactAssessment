@@ -59,12 +59,18 @@
 # WHY THIS STAYS IN EPSG:5072 AND IS NOT MASKED HERE
 # --------------------------------------------------
 # V5 reprojects to EPSG:3978 before truncating, but 10.Truncate.R:19 documents
-# that as a legacy artifact ("Future versions will not require this step"). It
-# costs ~2.3% of abundance (bilinear resampling does not conserve sums) and,
-# because clamp() does not commute with projection, it would break the exact
-# superset -> masked-rowsum decomposition 12C relies on. The parameter itself is
-# near CRS-invariant -- CAWA can10 q99.9 = 0.132457 in 5072 vs 0.132881 in 3978,
-# 0.32% apart -- so the 5072-derived cap is effectively V5's cap.
+# that as a legacy artifact ("Future versions will not require this step").
+# Because clamp() does not commute with projection, projecting would break the
+# exact superset -> masked-rowsum decomposition 12C relies on. The parameter
+# itself is near CRS-invariant -- CAWA can10 q99.9 = 0.132457 in 5072 vs
+# 0.132881 in 3978, 0.32% apart -- so the 5072-derived cap is effectively V5's.
+#
+# CORRECTED 2026-09-14: this used to say the 3978 step "costs ~2.3% of abundance
+# (bilinear resampling does not conserve sums)". Wrong mechanism, wrong sign.
+# 5072 is Albers EQUAL AREA, 3978 is Lambert CONFORMAL Conic whose 1000 m cells
+# hold ~1.027 km2 of ground, and population is summed as density * 100 assuming
+# 1 km2 per pixel -- so the 3978 total reads ~2.9-3.4% LOW and 5072 is the
+# correct side. See CLAUDE.md Open Limitation #8.
 #
 # Range/water/data-limit masking is deliberately NOT applied here: it lives in
 # weight.tif (12A2) and 12C:220 multiplies it into BOTH the observed and the
