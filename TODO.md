@@ -100,6 +100,20 @@ run from your own authenticated session. Globus works (one file per call, **neve
       with nothing but mtime to tell them apart. The `_metrics.rds`/`_confusion.rds` baseline
       is already safe locally at 674/674.
 - [ ] **A5.** Smoke `07` on a few subbasins — Fix B is untested at scale.
+
+      **Full `07` source chain verified + re-staged 2026-09-14.** Resolved the chain by
+      following `source()` calls (`07.sh` -> `07.R` -> `08A` -> `08B_deploy_{gbart,mbart}`
+      -> `09_collect_{,holdout_}metrics_{gbart,mbart}` = 9 files) and checksum-synced every
+      one. **7 of the 9 were STALE on the cluster** — only `08A` and `09_collect_metrics_mbart.R`
+      (exactly the two A3 staged from this chain) moved 0 bytes. The other seven were all last
+      committed Feb-Mar 2026, i.e. the cluster was carrying pre-2026-07-02 versions; notably
+      `08B_deploy_gbart.R` (`cf9f35f`, "drop _mean raster layer") would have written a
+      different backfill layer set. All nine now match git HEAD.
+
+      This is A3's lesson recurring: staging derived from "which scripts did I edit" misses
+      files that were never edited but were never correctly staged either. Derive the set from
+      the **`source()` closure of the entry point**, then checksum-sync all of it — a 0-byte
+      transfer is a free proof of equality, so there is no reason to sync only the suspects.
 - [ ] **A6.** `sbatch --array=1-674 07_train_and_backfill.sh` → `sbatch 11_premosaic_backfilled_stacks.sh`.
 - [ ] **A7.** Validate Fix A: the `12C` runtime line `complete superset pixels: N / M (X%)`
       must be ≫ the old 1–3%. This is the only fix never tested.
