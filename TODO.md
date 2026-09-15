@@ -110,6 +110,19 @@ run from your own authenticated session. Globus works (one file per call, **neve
       `08B_deploy_gbart.R` (`cf9f35f`, "drop _mean raster layer") would have written a
       different backfill layer set. All nine now match git HEAD.
 
+      **The `.sh` files were a separate, larger gap (2026-09-14).** Only
+      `07_train_and_backfill.sh` was ever on the cluster; `sbatch 12A2_build_prediction_weights.sh`
+      failed with `Unable to open file`. Staged all six missing cluster job scripts: `12A2`,
+      `11`, `12B`, `10C`, `10D`, and `07_train_and_backfill_larger.sh` (the OOM/timeout re-run
+      script named in `07.sh`'s own trailing comment). `12A_observed.sh` stays local-only.
+      Note `.sh` files MUST be transferred as LF — a CRLF shell script dies on Linux with
+      `/bin/bash^M: bad interpreter`. `07_train_and_backfill_larger.sh` had a CRLF working
+      copy (blob was LF) and was normalized before staging; verify with
+      `tr -dc '' < f | wc -c` (0 = LF), NOT `grep -c $''`, which silently matches the
+      letter `r` in some shells. Globus also refuses sources outside the local endpoint's
+      configured root, so a temp-dir staging copy fails with `Path not allowed` — stage from
+      inside the repo tree.
+
       This is A3's lesson recurring: staging derived from "which scripts did I edit" misses
       files that were never edited but were never correctly staged either. Derive the set from
       the **`source()` closure of the entry point**, then checksum-sync all of it — a 0-byte
