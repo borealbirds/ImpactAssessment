@@ -414,6 +414,24 @@ assumption and V5's 3978 totals do not — see **`CLAUDE.md` Open Limitation #8*
       `density_tables/*.rds` **and** `arrays/*.rds` already happened in A4; redo it only if
       anything writes there first. The old tables were stale on three counts: pre-weighting,
       pre-gate-change (A), and pre-truncation-conformance (B).
+
+      **Cluster staging for C1 is DONE 2026-09-15**, after the 12* renumbering. Eight files
+      transferred and verified byte-for-byte (`12C_build_prediction_weights.R`/`.sh`,
+      `12D_repredict_all_coalitions.R`/`.sh`, `12F_predict_species_all_coalitions.R`,
+      `12E_shapley_utils.R`, `10D_BART_posterior_diagnostics.sh`,
+      `11_premosaic_backfilled_stacks.R`), and the five old-named duplicates removed so a
+      stale `sbatch 12B_repredict_all_coalitions.sh` can no longer run the pre-rename pair.
+      `/Rscripts/12*` on Fir is now exactly six files; `12A` is local-only by design.
+
+      **`12E_shapley_utils.R` was never on the cluster at all** — `12D:73` sources it, so C1
+      would have died on its first `source()` after queueing for a 384G node. It was never
+      edited, so it appeared in no "what changed" staging list; only walking the entry point's
+      `source()` closure found it. That is the A3/A5 lesson recurring a THIRD time. Derive the
+      staging set from the closure, never from a diff.
+
+      Two files are knowingly divergent: `08A_train_and_backfill_subbasin_s.R` and
+      `08B_deploy_gbart.R` carry comment-only local edits that were NOT staged, because A6's
+      queued array tasks source them live. Re-stage after A6 to restore the 0-byte-sync proof.
 - [ ] **C2.** `14B_sector_attribution.R` locally → corrected Shapley CSVs.
 - [ ] **C3.** Sensitivity pass with the `q99.9` stage disabled, and report the spread.
       The frozen cap has a known-direction bias: counterfactual densities are higher, so
