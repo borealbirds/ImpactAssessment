@@ -1,0 +1,5 @@
+# Shell scripts are submitted to SLURM on Linux. A CRLF .sh dies immediately with
+# "/bin/bash^M: bad interpreter", and this repo is worked on from Windows with
+# core.autocrlf=true, which would otherwise rewrite them to CRLF on every checkout.
+# Pin them to LF in the worktree so a Globus transfer can never stage a broken one.
+*.sh text eol=lf
