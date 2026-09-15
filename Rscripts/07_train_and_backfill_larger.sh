@@ -2,10 +2,6 @@
 #SBATCH --account=def-bayne
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-# 750G is the per-node ceiling on Fir (RealMemory = 768000 MB = 750 GiB).
-# This was 850G, inherited from a cluster with fatter nodes; on Fir that request
-# can never be satisfied and the job pends indefinitely. Use --mem=0 if a request
-# equal to RealMemory is refused because the site reserves memory for the OS.
 #SBATCH --mem=750G
 #SBATCH --time=12:00:00
 #SBATCH --job-name=2020_run_backfill_larger
