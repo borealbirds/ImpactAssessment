@@ -229,8 +229,9 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     w_name <- names(weight_r)[1]
     if (!isTRUE(w_name == "weight_v3_touches"))
       stop(species, " ", bcr_code, ": weight.tif band name is '", w_name,
-           "', expected 'weight_v2_bcrcut'. This weight predates the BCR-cut fix ",
-           "(2026-09-11). Delete predictions/*/*/*/weight.tif and re-run ",
+           "', expected 'weight_v3_touches'. This weight predates the BCR-cut ",
+           "and/or the rasterize(touches = TRUE) fix (2026-09-11). No rm is needed - ",
+           "the version stamp forces a rebuild: re-run ",
            "`sbatch 12A2_build_prediction_weights.sh`.")
     if (!isTRUE(terra::compareGeom(weight_r, stack_obs[[1]], stopOnError = FALSE)))
       weight_r <- terra::resample(weight_r, stack_obs[[1]], method = "near")

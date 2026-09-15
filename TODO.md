@@ -25,11 +25,16 @@ cluster:  [cleanup DONE] ─► A5 smoke 07 ─► A6 sbatch 07 ─► sbatch 11
 local:    [B1-B8, C4, G1-G4 ALL DONE] ─────────────┴─────────┘
 ```
 
-**A2 changed and now has a prerequisite.** `12A2_build_prediction_weights.R` and
+**A2's prerequisite is CLEARED 2026-09-14.** `12A2_build_prediction_weights.R` and
 `12C_predict_species_all_coalitions.R` were both edited 2026-09-11 (BCR cut + version
-stamp + `touches = TRUE` + NA audit) and must be re-Globus'd before A2 runs, or A2
-rebuilds the same defective weights. No `rm` of the old `weight.tif` is needed — the version stamp
+stamp + `touches = TRUE` + NA audit) and had to be re-Globus'd before A2 ran, or A2 would
+have rebuilt the same defective weights. Both transferred 2026-09-14 (10,738 and 27,849
+bytes — i.e. both were still stale on the cluster), so `sbatch 12A2_build_prediction_weights.sh`
+is now safe to submit. No `rm` of the old `weight.tif` is needed — the version stamp
 (`weight_v3_touches`) forces a rebuild, and 12C refuses to run against anything older.
+Derived from `git log 5e5526a..HEAD --name-only -- Rscripts/` minus `misc/`, per A3's lesson;
+the other three changed files (`12A_observed.R`, `12A0_v5_truncate.R`, `14B_sector_attribution.R`)
+are local-only and were correctly not staged.
 
 Verified 2026-09-11 and NOT a blocker any more:
 - `covariates_mosaiced_2020.tif` is the CAfire-fixed build on **both** ends (local partial-NA
@@ -222,7 +227,7 @@ assumption and V5's 3978 totals do not — see **`CLAUDE.md` Open Limitation #8*
       Unbuffered.shp`, verified to be the same geometry as V5's
       `Subregions_Mosaics_EPSG3978.shp` (areas agree to <1 km2, IoU = 1.0000 on
       can10/can11/can60) — so no new Globus staging. `weight.tif` now carries a version
-      stamp in its band name (`weight_v2_bcrcut`); `12A2` REBUILDS a stale weight instead
+      stamp in its band name (`weight_v3_touches`); `12A2` REBUILDS a stale weight instead
       of skipping it, and `12C` refuses to run against one. See Open Limitation #7.
 
       **Residual, decomposed 2026-09-11.** Ran three configurations on the same

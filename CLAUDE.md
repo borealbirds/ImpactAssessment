@@ -110,7 +110,7 @@ sbatch 12A2_build_prediction_weights.sh   # --array=1-<n_species>
 # is the only masking left. An unmasked run is quietly wrong, not obviously broken.
 #
 # VERSIONED (2026-09-11). weight.tif carries its version in its band name
-# ("weight_v2_bcrcut"). 12A2 rebuilds any weight whose stamp does not match instead
+# ("weight_v3_touches"). 12A2 rebuilds any weight whose stamp does not match instead
 # of skipping it, and 12C refuses to run against a stale one. Weights built before
 # this date lack the BCR-polygon cut and inflate populations 2.2x-14.6x — see
 # Open Limitation #7. No manual `rm` is needed; just re-run 12A2.
