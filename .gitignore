@@ -84,3 +84,6 @@ slurm-*.out
 
 # Local Claude Code settings (per-machine)
 .claude/settings.local.json
+
+# Cluster logs and artifacts fetched via Globus for inspection
+cluster_logs/

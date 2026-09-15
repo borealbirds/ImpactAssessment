@@ -16,13 +16,13 @@ species — doing them in separate passes pays for it twice).
 
 ## Critical path (revised 2026-09-11, after B6/B8/C4)
 
-All staging is done except `weight.tif` (A2). `07` (674 array tasks) is the long pole and
-depends on nothing in B, so it should start first and everything else runs in its shadow.
+**Staging is complete and A2 + A5 both PASSED 2026-09-14** (see those items for evidence).
+`07` (674 array tasks) is the long pole and depends on nothing in B, so **A6 is the next action**.
 
 ```
-cluster:  [cleanup DONE] ─► A5 smoke 07 ─► A6 sbatch 07 ─► sbatch 11 ─┐
-          [A2 weight.tif, AFTER re-Globus of 12A2] ─────────┐         ├─► 12B smoke ─► C1 12B ─► C2 14B
-local:    [B1-B8, C4, G1-G4 ALL DONE] ─────────────┴─────────┘
+cluster:  [cleanup, A5 smoke 07 DONE] ─► A6 sbatch 07 ─► sbatch 11 ─┐
+          [A2 weight.tif DONE, 25/25] ──────────────────────────────┬─► 12B smoke ─► C1 12B ─► C2 14B
+local:    [B1-B8, C4, G1-G4 ALL DONE] ──────────────────────────────┘
 ```
 
 **A2's prerequisite is CLEARED 2026-09-14.** `12A2_build_prediction_weights.R` and
@@ -62,7 +62,7 @@ run from your own authenticated session. Globus works (one file per call, **neve
       six pre-fix `covariates_mosaiced_{1990..2015}.tif` (2026-02-06, pre-CAfire-fix and
       therefore defective; only consumer `17` skips missing years) + `predictions_coalitions/`
       (5.3 G, output of the retired per-coalition path).
-- [ ] **A2.** Confirm `weight.tif` exists for all **25** species×BCR pairs
+- [x] **A2. DONE 2026-09-14.** Confirm `weight.tif` exists for all **25** species×BCR pairs
       (11 CAWA + 14 OVEN `can*` models). If short, `sbatch 12A2_build_prediction_weights.sh`.
       **Do not skip.** `12C` now `stop()`s outright if `weight.tif` is missing (changed
       2026-09-11; it used to fall back to `w == 1` with only a message). Fix B made that
@@ -71,6 +71,18 @@ run from your own authenticated session. Globus works (one file per call, **neve
       on their own. `weight.tif` is now the only masking left, and an unmasked run would be
       quietly wrong rather than obviously broken — a 7.8x over-count on CAWA can10. 12C also
       rejects an all-zero/NA weight, which would zero every density in the BCR.
+
+      **Result (job 59867049, array 1-2).** Both tasks ran clean to
+      `prediction weights complete.` and wrote **25/25** weights (11 CAWA + 14 OVEN),
+      verified by `globus ls -r` on `predictions/`. Every one of the 25 was REBUILT, not
+      skipped: each logged `weight.tif is stale (band name 'range', want
+      'weight_v3_touches')`, i.e. the pre-existing weights were the original range-only
+      rasters and the version stamp caught all of them. `frac_outside_bcr` ranges
+      0.592-0.907 across BCRs, confirming the BCR-polygon cut (Open Limitation #7) is the
+      dominant masking term as expected. **The silent partial-success path did NOT fire** —
+      no `no prediction stack — skipping` line in either log. The only warnings are 10x
+      `PROJ: Cannot take exclusive lock on .../proj/cache.db`, benign contention between the
+      two concurrent array tasks.
 - [x] **A3. DONE 2026-09-11.** Re-Globus'd every cluster-side script changed since the
       2026-07-02 staging — **seven files, not the two this item originally named.** All seven
       transferred non-zero bytes, i.e. all seven were stale on the cluster:
@@ -99,7 +111,7 @@ run from your own authenticated session. Globus works (one file per call, **neve
       Timing matters: a partial `07` would otherwise interleave pre- and post-fix subbasins
       with nothing but mtime to tell them apart. The `_metrics.rds`/`_confusion.rds` baseline
       is already safe locally at 674/674.
-- [ ] **A5.** Smoke `07` on a few subbasins — Fix B is untested at scale.
+- [x] **A5. DONE 2026-09-14.** Smoke `07` on a few subbasins — Fix B is untested at scale.
 
       **Full `07` source chain verified + re-staged 2026-09-14.** Resolved the chain by
       following `source()` calls (`07.sh` -> `07.R` -> `08A` -> `08B_deploy_{gbart,mbart}`
@@ -118,7 +130,9 @@ run from your own authenticated session. Globus works (one file per call, **neve
       Note `.sh` files MUST be transferred as LF — a CRLF shell script dies on Linux with
       `/bin/bash^M: bad interpreter`. `07_train_and_backfill_larger.sh` had a CRLF working
       copy (blob was LF) and was normalized before staging; verify with
-      `tr -dc '' < f | wc -c` (0 = LF), NOT `grep -c $''`, which silently matches the
+      `tr -dc '
+' < f | wc -c` (0 = LF), NOT `grep -c $'
+'`, which silently matches the
       letter `r` in some shells. Globus also refuses sources outside the local endpoint's
       configured root, so a temp-dir staging copy fails with `Path not allowed` — stage from
       inside the repo tree.
@@ -127,6 +141,33 @@ run from your own authenticated session. Globus works (one file per call, **neve
       files that were never edited but were never correctly staged either. Derive the set from
       the **`source()` closure of the entry point**, then checksum-sync all of it — a 0-byte
       transfer is a free proof of equality, so there is no reason to sync only the suspects.
+      **Result (job 59865956, array 1-3).** All three tasks returned `$ok TRUE` and wrote a
+      complete `_backfill.tif` / `_metrics.rds` / `_confusion.rds` triplet. **Fix B validated
+      at scale**: on subbasin 1 the raster carries values at **1784/1784** high-HF pixels
+      (exactly the `np` BART reported) and **100.00%** of them are complete across all 17
+      `_draw_*` covariates — the quantity `12C:315` gates on. That is the direct successor
+      to the 0.8% figure that opened this whole investigation. `np` is constant down the
+      entire hierarchy in all three subbasins (1784 / 6951 / 4965) with no NaN cascade, and
+      `p` grows monotonically as backfilled covariates enter as predictors.
+
+      **The smoke ran the RE-STAGED code, so it does not need repeating.** Timing alone was
+      ambiguous (the re-stage landed 17:36, task 1 finished 17:58 local), but the output
+      settles it: pre-`cf9f35f` `08B_deploy_gbart.R` wrote a `<cov>_mean` layer for *every*
+      continuous covariate, and the smoke raster has `_mean` for only the 12 covariates that
+      08A short-circuits as constant — the 17 that actually ran `gbart()` have `_draw_*`
+      and no `_mean`. That is post-`cf9f35f` behaviour.
+
+      **Incidental finding, no action needed.** 12 of 29 continuous biotic covariates were
+      constant across subbasin 1's low-HF pixels, so `08A:100-120` skipped BART and wrote
+      `<cov>_mean` / `<cov>_sd` instead of draws; for 4 of them there were no valid training
+      rows at all, so `const_val <- NA` and the layer is all-NA. This is harmless because
+      `12C` only ever consults a `_mean` layer for *categorical* vars (`12C:263`) — a
+      continuous covariate with no draws simply keeps its observed value in `X_rep`, so it is
+      identical on both sides of the contrast and contributes nothing spurious. The NA also
+      cannot poison the hierarchy cascade, because Fix B's median-impute (`08A:161-184`)
+      catches any column with NAs in either the train or backfill frame. Worth knowing when
+      reading a backfill stack: not every biotic covariate has `_draw_*` layers.
+
 - [ ] **A6.** `sbatch --array=1-674 07_train_and_backfill.sh` → `sbatch 11_premosaic_backfilled_stacks.sh`.
 - [ ] **A7.** Validate Fix A: the `12C` runtime line `complete superset pixels: N / M (X%)`
       must be ≫ the old 1–3%. This is the only fix never tested.
