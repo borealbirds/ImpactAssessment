@@ -105,7 +105,7 @@ train_and_backfill_subbasin_s <- function(
       if (length(const_val) == 0) const_val <- NA
 
       # fill outputs — naming must match deploy_gbart/mbart layer name conventions so that
-      # 11_premosaic and 12C can locate the layers by their expected names
+      # 11_premosaic and 12F can locate the layers by their expected names
       df_backfill[[b]] <- const_val
       if (b %in% categorical_responses) {
         out_layers[[b]]                     <- rep(const_val, nrow(df_backfill))

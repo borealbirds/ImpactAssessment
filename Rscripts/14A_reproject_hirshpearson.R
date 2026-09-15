@@ -14,7 +14,7 @@
 #   - Resolution: 1000 m x 1000 m
 #   - Method:     bilinear (scores are continuous)
 #
-# Run this script once before 15_sector_attribution.R.
+# Run this script once before 14B_sector_attribution.R.
 # The CanHF* files are left untouched.
 # ---
 

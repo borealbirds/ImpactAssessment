@@ -2,7 +2,7 @@
 # title: Population distribution plots — observed vs counterfactual
 # author: Mannfred Boehm
 # ---
-# Reads the national bootstrap x scenario arrays saved by 12B for target
+# Reads the national bootstrap x scenario arrays saved by 12D for target
 # coalitions and plots empirical density distributions of population size.
 #
 # Two figure types per species:
@@ -61,7 +61,7 @@ single_ids <- setNames(
 
 arr_files <- list.files(arr_dir, pattern = "_arrays\\.rds$", full.names = TRUE)
 if (length(arr_files) == 0) stop("No array files found in ", arr_dir,
-                                 "\nRe-run 12B on the cluster first.")
+                                 "\nRe-run 12D on the cluster first.")
 
 parsed <- regmatches(basename(arr_files),
   regexec("^(.+)_([0-9]{4})_coalition_([0-9]+)_arrays\\.rds$", basename(arr_files)))

@@ -9,7 +9,7 @@ memory. (This file replaced `HANDOFF_cafire_backfill_fix.md`, deleted 2026-09-11
 | **A** | CAfire / phenology backfill fix (Open Limitation #5) | cluster compute | fixes built; **all scripts staged + cleanup done 2026-09-11 (A3, A4)**; compute never launched |
 | **B** | Conform observed + counterfactual density to current V5 packaging (Open Limitation #6) | local | **DONE - B1-B8, C4 and gates G1-G4 all passed.** G3/G4 found + fixed two `weight.tif` defects (Open Limitation #7); only residual is the +2.9-3.4% 5072-vs-3978 gap, re-diagnosed 2026-09-14 as an area-units artifact with our side correct (Open Limitation #8) |
 
-**Both edit `12C`. Both must land before the single `12B` run** (2 × 24 h @ 384 G per
+**Both edit `12F`. Both must land before the single `12D` run** (2 × 24 h @ 384 G per
 species — doing them in separate passes pays for it twice).
 
 ---
@@ -21,19 +21,19 @@ species — doing them in separate passes pays for it twice).
 
 ```
 cluster:  [cleanup, A5 smoke 07 DONE] ─► A6 sbatch 07 ─► sbatch 11 ─┐
-          [A2 weight.tif DONE, 25/25] ──────────────────────────────┬─► 12B smoke ─► C1 12B ─► C2 14B
+          [A2 weight.tif DONE, 25/25] ──────────────────────────────┬─► 12D smoke ─► C1 12D ─► C2 14B
 local:    [B1-B8, C4, G1-G4 ALL DONE] ──────────────────────────────┘
 ```
 
-**A2's prerequisite is CLEARED 2026-09-14.** `12A2_build_prediction_weights.R` and
-`12C_predict_species_all_coalitions.R` were both edited 2026-09-11 (BCR cut + version
+**A2's prerequisite is CLEARED 2026-09-14.** `12C_build_prediction_weights.R` and
+`12F_predict_species_all_coalitions.R` were both edited 2026-09-11 (BCR cut + version
 stamp + `touches = TRUE` + NA audit) and had to be re-Globus'd before A2 ran, or A2 would
 have rebuilt the same defective weights. Both transferred 2026-09-14 (10,738 and 27,849
-bytes — i.e. both were still stale on the cluster), so `sbatch 12A2_build_prediction_weights.sh`
+bytes — i.e. both were still stale on the cluster), so `sbatch 12C_build_prediction_weights.sh`
 is now safe to submit. No `rm` of the old `weight.tif` is needed — the version stamp
-(`weight_v3_touches`) forces a rebuild, and 12C refuses to run against anything older.
+(`weight_v3_touches`) forces a rebuild, and 12F refuses to run against anything older.
 Derived from `git log 5e5526a..HEAD --name-only -- Rscripts/` minus `misc/`, per A3's lesson;
-the other three changed files (`12A_observed.R`, `12A0_v5_truncate.R`, `14B_sector_attribution.R`)
+the other three changed files (`12A_observed.R`, `12B_v5_truncate.R`, `14B_sector_attribution.R`)
 are local-only and were correctly not staged.
 
 Verified 2026-09-11 and NOT a blocker any more:
@@ -50,7 +50,7 @@ run from your own authenticated session. Globus works (one file per call, **neve
 
 ## 0. Commit what's already written
 
-- [x] **DONE 2026-09-11.** Fix A + the `12B` weight preflight committed (`6455756`); the V5
+- [x] **DONE 2026-09-11.** Fix A + the `12D` weight preflight committed (`6455756`); the V5
       port, truncation conformance and docs followed in `d4b803e`, `7057c91`, `cb573cb`.
 
 ---
@@ -63,13 +63,13 @@ run from your own authenticated session. Globus works (one file per call, **neve
       therefore defective; only consumer `17` skips missing years) + `predictions_coalitions/`
       (5.3 G, output of the retired per-coalition path).
 - [x] **A2. DONE 2026-09-14.** Confirm `weight.tif` exists for all **25** species×BCR pairs
-      (11 CAWA + 14 OVEN `can*` models). If short, `sbatch 12A2_build_prediction_weights.sh`.
-      **Do not skip.** `12C` now `stop()`s outright if `weight.tif` is missing (changed
+      (11 CAWA + 14 OVEN `can*` models). If short, `sbatch 12C_build_prediction_weights.sh`.
+      **Do not skip.** `12F` now `stop()`s outright if `weight.tif` is missing (changed
       2026-09-11; it used to fall back to `w == 1` with only a message). Fix B made that
       fallback dangerous: 08A median-imputes partial-NA covariates, so water, out-of-range
       and out-of-extent pixels no longer fail `complete.cases()` and drop out of BOTH sides
       on their own. `weight.tif` is now the only masking left, and an unmasked run would be
-      quietly wrong rather than obviously broken — a 7.8x over-count on CAWA can10. 12C also
+      quietly wrong rather than obviously broken — a 7.8x over-count on CAWA can10. 12F also
       rejects an all-zero/NA weight, which would zero every density in the BCR.
 
       **Result (job 59867049, array 1-2).** Both tasks ran clean to
@@ -92,17 +92,17 @@ run from your own authenticated session. Globus works (one file per call, **neve
       | `08A_train_and_backfill_subbasin_s.R` | **Fix B** (median-impute + `_isNA`) | **yes** — sourced by `07` |
       | `09_collect_metrics_mbart.R` | sourced by `08B_deploy_mbart` | **yes** |
       | `11_premosaic_backfilled_stacks.R` | `cc = TRUE`, changed | after `07` |
-      | `12B_repredict_all_coalitions.R` | weight preflight | no |
-      | `12C_predict_species_all_coalitions.R` | Fix A + B4 caps + weight hard-stop | no |
+      | `12D_repredict_all_coalitions.R` | weight preflight | no |
+      | `12F_predict_species_all_coalitions.R` | Fix A + B4 caps + weight hard-stop | no |
       | `10C_abiotic_extrapolation_diagnostics.R` | `cc = TRUE`, changed | no |
       | `10D_BART_posterior_diagnostics.R` | hardcoded cluster path, changed | no |
 
-      **Had A3 been executed as scoped (`12B`/`12C` only), the 674-task `07` run would have
+      **Had A3 been executed as scoped (`12D`/`12F` only), the 674-task `07` run would have
       used the pre-Fix-B `08A` and reproduced the coverage collapse we are re-running to fix.**
       Lesson for future stagings: derive the file set from
       `git log --since=<staging date> --name-only -- Rscripts/` intersected with the sourced-from
       entry points, rather than from memory of which scripts "are cluster scripts".
-      `12A0_v5_truncate.R` was deliberately NOT staged — `12A` runs locally and nothing on the
+      `12B_v5_truncate.R` was deliberately NOT staged — `12A` runs locally and nothing on the
       cluster sources it.
 
 - [x] **A4. DONE 2026-09-11** (run early, not just-before-`07` — strictly safer, nothing left to mix). Cleanup Tier B — ~27 G, run **immediately before** `sbatch 07`:
@@ -123,9 +123,9 @@ run from your own authenticated session. Globus works (one file per call, **neve
       different backfill layer set. All nine now match git HEAD.
 
       **The `.sh` files were a separate, larger gap (2026-09-14).** Only
-      `07_train_and_backfill.sh` was ever on the cluster; `sbatch 12A2_build_prediction_weights.sh`
-      failed with `Unable to open file`. Staged all six missing cluster job scripts: `12A2`,
-      `11`, `12B`, `10C`, `10D`, and `07_train_and_backfill_larger.sh` (the OOM/timeout re-run
+      `07_train_and_backfill.sh` was ever on the cluster; `sbatch 12C_build_prediction_weights.sh`
+      failed with `Unable to open file`. Staged all six missing cluster job scripts: `12C`,
+      `11`, `12D`, `10C`, `10D`, and `07_train_and_backfill_larger.sh` (the OOM/timeout re-run
       script named in `07.sh`'s own trailing comment). `12A_observed.sh` stays local-only.
       Note `.sh` files MUST be transferred as LF — a CRLF shell script dies on Linux with
       `/bin/bash^M: bad interpreter`. `07_train_and_backfill_larger.sh` had a CRLF working
@@ -145,7 +145,7 @@ run from your own authenticated session. Globus works (one file per call, **neve
       complete `_backfill.tif` / `_metrics.rds` / `_confusion.rds` triplet. **Fix B validated
       at scale**: on subbasin 1 the raster carries values at **1784/1784** high-HF pixels
       (exactly the `np` BART reported) and **100.00%** of them are complete across all 17
-      `_draw_*` covariates — the quantity `12C:315` gates on. That is the direct successor
+      `_draw_*` covariates — the quantity `12F:315` gates on. That is the direct successor
       to the 0.8% figure that opened this whole investigation. `np` is constant down the
       entire hierarchy in all three subbasins (1784 / 6951 / 4965) with no NaN cascade, and
       `p` grows monotonically as backfilled covariates enter as predictors.
@@ -161,7 +161,7 @@ run from your own authenticated session. Globus works (one file per call, **neve
       constant across subbasin 1's low-HF pixels, so `08A:100-120` skipped BART and wrote
       `<cov>_mean` / `<cov>_sd` instead of draws; for 4 of them there were no valid training
       rows at all, so `const_val <- NA` and the layer is all-NA. This is harmless because
-      `12C` only ever consults a `_mean` layer for *categorical* vars (`12C:263`) — a
+      `12F` only ever consults a `_mean` layer for *categorical* vars (`12F:263`) — a
       continuous covariate with no draws simply keeps its observed value in `X_rep`, so it is
       identical on both sides of the contrast and contributes nothing spurious. The NA also
       cannot poison the hierarchy cascade, because Fix B's median-impute (`08A:161-184`)
@@ -169,7 +169,7 @@ run from your own authenticated session. Globus works (one file per call, **neve
       reading a backfill stack: not every biotic covariate has `_draw_*` layers.
 
 - [ ] **A6.** `sbatch --array=1-674 07_train_and_backfill.sh` → `sbatch 11_premosaic_backfilled_stacks.sh`.
-- [ ] **A7.** Validate Fix A: the `12C` runtime line `complete superset pixels: N / M (X%)`
+- [ ] **A7.** Validate Fix A: the `12F` runtime line `complete superset pixels: N / M (X%)`
       must be ≫ the old 1–3%. This is the only fix never tested.
 
 ## B. V5 packaging conformance (local)
@@ -203,7 +203,7 @@ The *parameter* is CRS-invariant (CAWA can10 q99.9 = 0.132457 in 5072 vs 0.13288
 validation harness.
 
 **CORRECTED 2026-09-14 — the ~3 % is an area-units artifact, and 5072 is the side that
-is RIGHT.** This was written up (here, in `CLAUDE.md`, in `12A0`/`12A` headers and in
+is RIGHT.** This was written up (here, in `CLAUDE.md`, in `12B`/`12A` headers and in
 memory) as "bilinear isn't conservative, so staying in 5072 costs us ~2.3 %". Both halves
 were wrong: wrong mechanism, and wrong sign of the argument. Measured with
 `terra::cellSize()`:
@@ -228,7 +228,7 @@ summing that over pixels yields birds **only if every pixel is one km² of groun
 is a property of equal-area projections specifically. So our 5072 totals satisfy the
 assumption and V5's 3978 totals do not — see **`CLAUDE.md` Open Limitation #8**.
 
-- [x] **B1. DONE — Gate G1 PASSED 2026-09-11.** `Rscripts/12A0_v5_truncate.R` ports
+- [x] **B1. DONE — Gate G1 PASSED 2026-09-11.** `Rscripts/12B_v5_truncate.R` ports
       `10.Truncate.R`; `Rscripts/misc/verify_v5_truncate_port.R` is the harness.
       Reproduces `10_truncated` on CAWA can10/can71 and OVEN can10: dims, extent and CRS
       identical, sum ratios within 4.3e-5, and **flat terrain bit-identical** (mean |diff| in the
@@ -278,10 +278,10 @@ assumption and V5's 3978 totals do not — see **`CLAUDE.md` Open Limitation #8*
 
       **`weight.tif` was missing V5's mosaic cut.** V5 predicts each subunit on a grid
       buffered well past the subunit and crops it back to the subunit polygon at
-      `10.Truncate.R:146` before mosaicking. `12A2` had V5's range / water / data-limit
+      `10.Truncate.R:146` before mosaicking. `12C` had V5's range / water / data-limit
       masks but not that crop. On our own staged stacks **59-71% of non-NA pixels** lie
       outside the subunit's own polygon, carrying **41-84% of the raw density sum**; and
-      because `12B:38` assigns a subbasin to every BCR it intersects (**329 of 674, 59% of
+      because `12D:38` assigns a subbasin to every BCR it intersects (**329 of 674, 59% of
       area**), every straddling subbasin was summed in full under each of its BCRs.
       Measured inflation vs the corrected weight:
 
@@ -291,12 +291,12 @@ assumption and V5's 3978 totals do not — see **`CLAUDE.md` Open Limitation #8*
       | CAWA can71 | 369,570 | 168,887 | **2.19x** |
       | OVEN can10 | 918,402 | 62,965 | **14.59x** |
 
-      Fix: `12A2` multiplies in an `inbcr` term from `Regions/BAM_BCR_NationalModel_
+      Fix: `12C` multiplies in an `inbcr` term from `Regions/BAM_BCR_NationalModel_
       Unbuffered.shp`, verified to be the same geometry as V5's
       `Subregions_Mosaics_EPSG3978.shp` (areas agree to <1 km2, IoU = 1.0000 on
       can10/can11/can60) — so no new Globus staging. `weight.tif` now carries a version
-      stamp in its band name (`weight_v3_touches`); `12A2` REBUILDS a stale weight instead
-      of skipping it, and `12C` refuses to run against one. See Open Limitation #7.
+      stamp in its band name (`weight_v3_touches`); `12C` REBUILDS a stale weight instead
+      of skipping it, and `12F` refuses to run against one. See Open Limitation #7.
 
       **Residual, decomposed 2026-09-11.** Ran three configurations on the same
       `observed_bootstraps.tif` to separate the two candidate causes:
@@ -351,7 +351,7 @@ assumption and V5's 3978 totals do not — see **`CLAUDE.md` Open Limitation #8*
       sides, so `w*bf - w*obs = w*(bf - obs)` held throughout and Shapley *shares* were far
       less distorted than totals — but every per-BCR and national total produced before the
       fix is wrong.
-- [x] **B4. DONE 2026-09-11.** Updated `12C_predict_species_all_coalitions.R`:
+- [x] **B4. DONE 2026-09-11.** Updated `12F_predict_species_all_coalitions.R`:
       - `$q` → `$densmax`, behind a schema guard that `stop()`s rather than letting
         `pmin(x, NULL)` return `numeric(0)` silently.
       - dropped `q0`. Note `l.out` **still ships** in the `.Rdata` (151 rows, `denshthresh`
@@ -359,13 +359,13 @@ assumption and V5's 3978 totals do not — see **`CLAUDE.md` Open Limitation #8*
         than a latent error.
       - loads `truncation_params.rds` once per species; per BCR it looks up the frozen
         `q99`, `stop()`s if absent, and cross-checks `densmax` against `q.out` so 12A and
-        12C can never read different `.Rdata` versions without failing loudly.
+        12F can never read different `.Rdata` versions without failing loudly.
       - `:329` now `pmin(pmin(pred_vec, qsp), q99)`, still ahead of the weight multiply
         (V5 order: truncate → mask).
       - logs `caps: densmax=... q99=... (q99 binds Nx lower)` per BCR.
       Observed side needs no change: it is read pre-clamped from `observed_bootstraps.tif`,
       so both sides of the contrast now carry identical caps.
-      `CLAUDE.md`'s "12C restructure invariants" bullet was rewritten — it previously
+      `CLAUDE.md`'s "12F restructure invariants" bullet was rewritten — it previously
       asserted the opposite ("q99/q0 caps only ever touched inspection rasters").
 
 - [x] **B5. DONE 2026-09-11.** Restaged `data/raw_data/SpeciesPredictionTruncationValues.Rdata`
@@ -379,8 +379,8 @@ assumption and V5's 3978 totals do not — see **`CLAUDE.md` Open Limitation #8*
       `weight.tif` is non-NA everywhere by construction (range NA→0 via `classify`, every
       `rasterize` has `background = 0`), so mask-induced NA becomes a hard 0 exactly as in V5;
       and prediction-origin NAs are zeroed at aggregation instead (`zonal(..., na.rm = TRUE)`
-      at 12C:363, `Ok[is.na(Ok)] <- 0` at 12C:429). V5's step-8 crops leave NA where we leave
-      literal 0, which is identical under a sum. Added an explicit `stop()` in 12A2 if any
+      at 12F:363, `Ok[is.na(Ok)] <- 0` at 12F:429). V5's step-8 crops leave NA where we leave
+      literal 0, which is identical under a sum. Added an explicit `stop()` in 12C if any
       weight cell is NA, since that assumption is now load-bearing.
 
       *What the check actually turned up:* the missing BCR-polygon crop — see G3/G4 above and
@@ -390,7 +390,7 @@ assumption and V5's 3978 totals do not — see **`CLAUDE.md` Open Limitation #8*
       `rowsum(M[keep, ])` has no `na.rm`, so one NA would NA out a whole subbasin on the
       backfilled side only. And `complete_mask` is built from **draw column 1** as a proxy for
       all 100 draws, while each scenario samples a different draw — so a pixel complete in
-      draw 1 can be NA in the draw actually used. 12C now audits M column-by-column once per
+      draw 1 can be NA in the draw actually used. 12F now audits M column-by-column once per
       BCR and `stop()`s with the count. If it ever fires, widen the gate to all draws.
 - [x] **B7. DONE 2026-09-11.** Globus'd all 25 regenerated `observed_bootstraps.tif` +
       both `truncation_params.rds` to the cluster, one `globus transfer` call per file
@@ -410,7 +410,7 @@ assumption and V5's 3978 totals do not — see **`CLAUDE.md` Open Limitation #8*
 
 ## C. Converge
 
-- [ ] **C1.** `sbatch 12B_repredict_all_coalitions.sh` (`--array=1-2`). The usual pre-run wipe of
+- [ ] **C1.** `sbatch 12D_repredict_all_coalitions.sh` (`--array=1-2`). The usual pre-run wipe of
       `density_tables/*.rds` **and** `arrays/*.rds` already happened in A4; redo it only if
       anything writes there first. The old tables were stale on three counts: pre-weighting,
       pre-gate-change (A), and pre-truncation-conformance (B).
@@ -420,10 +420,10 @@ assumption and V5's 3978 totals do not — see **`CLAUDE.md` Open Limitation #8*
       they hit the frozen ceiling more often than observed, which systematically
       **under-estimates impact in the highest-density pixels**. With the cap removing
       4–12 % of abundance, that is not negligible. Headline = conformed; sensitivity = uncapped.
-- [x] **C4. DONE 2026-09-11.** `CLAUDE.md`: pre-`12B` wipe now also clears
+- [x] **C4. DONE 2026-09-11.** `CLAUDE.md`: pre-`12D` wipe now also clears
       `density_tables/arrays/*.rds` (with the `rm -f` not `rm -rf` caveat); the two
-      `10.Package.R` references retargeted to `10.Truncate.R` via `12A0_v5_truncate.R`; the
-      `12A2` row and Phase 1b block rewritten for the four-term, version-stamped weight; new
+      `10.Package.R` references retargeted to `10.Truncate.R` via `12B_v5_truncate.R`; the
+      `12C` row and Phase 1b block rewritten for the four-term, version-stamped weight; new
       **Open Limitation #7** for the BCR-cut double count; #6 updated to record that the
       `14B` release filter is now in place. Memory files updated.
 
@@ -433,12 +433,12 @@ assumption and V5's 3978 totals do not — see **`CLAUDE.md` Open Limitation #8*
 
 - [ ] `12A` loads each full `b.list` `.Rdata` (up to 654 MB, off Google Drive) purely to read
       `attr(b.list[[1]], "bcr")` — ~4.3 GB of I/O per species to extract 11 strings. The BCR code
-      is in the filename, and the `12B` preflight already derives it that way. Verify the filename
+      is in the filename, and the `12D` preflight already derives it that way. Verify the filename
       always equals the attribute, then drop the load. Matters at the planned ~60-species scale.
 
 - [ ] Decide the fate of local `covariates_mosaiced_2020_PREORIG.tif` (1.5 G) — the only
       surviving pre-CAfire-fix 2020 mosaic. The G: sandbox copy was overwritten by the rebuild.
-- [ ] `12F_singletons_plot.R:150` reads `predictions_coalitions/` (local, coalition 9 / CAWA /
+- [ ] `15C_singletons_plot.R:150` reads `predictions_coalitions/` (local, coalition 9 / CAWA /
       mines). That directory was deleted in the local cleanup, so the map panel is already
       broken; A1 removes the cluster copy too. Regenerate via `save_arrays_ids` if wanted.
 

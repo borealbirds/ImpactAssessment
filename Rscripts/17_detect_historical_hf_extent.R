@@ -1,5 +1,5 @@
 ##############################################################################
-# 16_detect_historical_hf_extent.R
+# 17_detect_historical_hf_extent.R
 #
 # Detect whether the 2020 human footprint (HF) mask was smaller in earlier
 # years by comparing observed vs backfilled biotic covariate values within

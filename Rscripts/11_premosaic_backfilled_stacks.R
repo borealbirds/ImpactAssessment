@@ -8,8 +8,8 @@
 # resample to the BCR covariate grid, mask to the BCR polygon, and write to
 # data/derived_data/bart_models_mosaics/{year}/{bcr_code}_backfilled.tif
 #
-# run as a SLURM array (one task per BCR) before 12A_repredict_birds.R.
-# 12B_predict_species_bcr.R reads these files instead of re-mosaicing per
+# run as a SLURM array (one task per BCR) before 12D_repredict_all_coalitions.R.
+# 12F_predict_species_all_coalitions.R reads these files instead of re-mosaicing per
 # species x sector, which eliminates the dominant time bottleneck per BCR (~11 hours).
 
 
@@ -57,7 +57,7 @@ bcr_vec <- bcr_vec[startsWith(bcr_vec, "can")]
 message("Total Canadian BCRs: ", length(bcr_vec))
 
 
-# mosaic helper (same logic as in 12A) ------------------------------------------------------
+# mosaic helper (lifted from the retired 12A_repredict_birds.R) ------------------------------------------------------
 
 mosaic_backfilled_stacks <- function(sub_ids, year, ref) {
 
@@ -229,7 +229,7 @@ bam_bcr_codes <- gsub("_", "", paste(bam_boundary$country, bam_boundary$subUnit,
 bcr_poly      <- bam_boundary[bam_bcr_codes == bcr_code, ]
 
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
-# INTERLEAVE=BAND on the final mosaic too, so downstream 12B can extract
+# INTERLEAVE=BAND on the final mosaic too, so downstream 12F can extract
 # individual covariate bands without scanning the full file (same fix
 # rationale as the pre-resampled tifs above).
 terra::mask(stack_bf, bcr_poly,

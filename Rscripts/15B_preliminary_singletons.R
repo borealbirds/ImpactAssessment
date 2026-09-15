@@ -3,7 +3,7 @@
 # author: Mannfred Boehm
 # ---
 # Computes each sector's STANDALONE impact from the 8 single-sector coalition
-# density tables (run AFTER 12D_combine.R fills the obs columns).
+# density tables (12D now writes complete tables directly; the retired 12D_combine.R step is gone).
 #
 #   v(S) = cf(S) - obs ; per subbasin = bf_on_coalition - obs_on_coalition
 #   sector standalone impact = sum over all subbasins (all BCRs) of v({sector})
@@ -22,7 +22,7 @@
 #
 # Run on a Fir login node:
 #   module load StdEnv/2023 r/4.4.0
-#   cd /home/mannfred/scratch/impact_assessment/Rscripts && Rscript 12F_preliminary_singletons.R
+#   cd /home/mannfred/scratch/impact_assessment/Rscripts && Rscript 15B_preliminary_singletons.R
 # ---
 
 ia_dir <- "/home/mannfred/scratch/impact_assessment"
@@ -50,7 +50,7 @@ summ <- function(dt) {
   imp <- dt$bf_on_coalition_mean - dt$obs_on_coalition_mean          # v(S), per subbasin
   v   <- dt$bf_on_coalition_sd^2 + dt$obs_on_coalition_sd^2           # approx, conservative
   # "active" = subbasin where the sector has REAL footprint contributing birds.
-  # After the 12C keep_mask fix, subbasins whose every footprint pixel is
+  # After the predict_species_bcr keep_mask fix, subbasins whose every footprint pixel is
   # incomplete-case give obs_on_coalition_mean = 0 (and bf likewise), so
   # `!is.na(imp)` overcounts them. Require obs > 0 to count as active.
   active     <- !is.na(dt$obs_on_coalition_mean) & dt$obs_on_coalition_mean > 0
@@ -135,7 +135,7 @@ for (sp in species_vec) {
     cid <- singleton_ids[[s]]
     r   <- read_dt(sp, cid)
     if (is.null(r$dt)) { miss <- c(miss, sprintf("%s (cid %d): NO TABLE", s, cid)); next }
-    if (r$bf_only)     { miss <- c(miss, sprintf("%s (cid %d): still _bf_only (12D not done)", s, cid)) }
+    if (r$bf_only)     { miss <- c(miss, sprintf("%s (cid %d): still _bf_only (combine step not done)", s, cid)) }
     a <- summ(r$dt)
     if (a$n_na > 0)    { miss <- c(miss, sprintf("%s (cid %d): %d subbasins with NA obs", s, cid, a$n_na)) }
     rows[[s]] <- a
@@ -232,10 +232,10 @@ cat(sprintf("%-34s %14s  %s\n", "coalition-64 lower floor",
 cat(sprintf("%-34s %14s\n", "observed national population", fmt(pooled$obs)))
 cat("\ntrue all-8 industry impact (coalition 256, pending) lies between the\n",
     "floor and the upper bound; full Shapley resolves the footprint overlap.\n", sep = "")
-if (!pooled$ok) cat("\nNOTE: data gaps above — rerun after 12D_combine fully completes.\n")
+if (!pooled$ok) cat("\nNOTE: data gaps above — rerun after 12D fully completes.\n")
 
 # write tidy CSV ------------------------------------------------------------
-out_csv <- file.path(ia_dir, "logs", "12F_singletons_summary.csv")
+out_csv <- file.path(ia_dir, "logs", "15B_singletons_summary.csv")
 dir.create(dirname(out_csv), showWarnings = FALSE, recursive = TRUE)
 csv_df <- do.call(rbind, csv_rows)
 write.csv(csv_df, out_csv, row.names = FALSE)

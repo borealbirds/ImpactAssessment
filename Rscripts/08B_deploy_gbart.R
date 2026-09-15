@@ -90,7 +90,7 @@ deploy_gbart <- function(
   # post-modelling PART 1
   # yhat.test: posterior draws [ndpost x n_px]; rows = draws, columns = pixels (log1p scale).
   # Sample 100 random draws and store them as {cov}_draw_001…100 layers.
-  # 12B resamples from these draws directly, avoiding the Gaussian normality assumption.
+  # 12F resamples from these draws directly, avoiding the Gaussian normality assumption.
   # b_mean is used in-memory for the biotic hierarchy cascade (08A) but not written to disk.
   b_mean   <- colMeans(expm1(fit$yhat.test))  # original scale; used by cascade
   n_draws  <- 100L

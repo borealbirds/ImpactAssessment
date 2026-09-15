@@ -18,12 +18,12 @@
 # collect_seff.sh -> analyze_seff.R on the new jobs and tighten.
 #
 #   cd /home/mannfred/scratch/impact_assessment/Rscripts
-#   sbatch 12B_repredict_all_coalitions.sh                 # both species
-#   sbatch --array=1 12B_repredict_all_coalitions.sh       # CAWA only
+#   sbatch 12D_repredict_all_coalitions.sh                 # both species
+#   sbatch --array=1 12D_repredict_all_coalitions.sh       # CAWA only
 #
 # Targeted smoke test (one small BCR, 2 bootstraps) before a full run:
 #   sbatch --array=1 --time=01:00:00 --mem=192G \
-#     --export=ALL,TEST_BCR=can60,TEST_N_BOOT=2 12B_repredict_all_coalitions.sh
+#     --export=ALL,TEST_BCR=can60,TEST_N_BOOT=2 12D_repredict_all_coalitions.sh
 
 module load StdEnv/2023
 module load gcc/12.3
@@ -31,4 +31,4 @@ module load gdal/3.9.1
 module load udunits/2.2.28
 module load r/4.4.0
 
-Rscript --vanilla 12B_repredict_all_coalitions.R
+Rscript --vanilla 12D_repredict_all_coalitions.R

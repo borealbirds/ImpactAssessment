@@ -15,4 +15,4 @@ module load gdal/3.9.1
 module load udunits/2.2.28
 module load r/4.4.0
 
-Rscript --vanilla 14_BART_posterior_diagnostics.R
+Rscript --vanilla 10D_BART_posterior_diagnostics.R

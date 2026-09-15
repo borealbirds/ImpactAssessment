@@ -8,7 +8,7 @@
 #
 # Architecture:
 #   - Reads coalition density tables (one per coalition x species x year)
-#     produced by 12A/12B.
+#     produced by 12D.
 #   - For each coalition, computes v(S) = cf(S) - obs at subbasin level.
 #   - Applies the Shapley formula per sector per subbasin.
 #   - Aggregates bottom-up: subbasin -> BCR -> national.
@@ -57,7 +57,7 @@ hydrobasins <- terra::vect(basin_path)
 # ---- BAM model release filter ------------------------------------------------
 # Our BCR discovery reads 06_bootstraps/{spp}/can*.Rdata, which returns every model
 # BAM FIT — a superset of the models BAM RELEASED. review/ModelReleaseDecisions.xlsx
-# ("remove" tab) withholds CAWA can40 on AUC. 12A/12B deliberately still produce it
+# ("remove" tab) withholds CAWA can40 on AUC. 12A/12D deliberately still produce it
 # (the products stay a complete record of what we ran); the release filter belongs
 # here, at the point where numbers are reported.
 #
@@ -164,7 +164,7 @@ for (sy in seq_len(nrow(species_years))) {
                     collapse = "; "))
       if (n_dropped == 0L)
         message("  NOTE: no rows matched ", paste(drop_bcrs, collapse = ", "),
-                " — either 12B did not produce it, or the BCR code has changed.")
+                " — either 12D did not produce it, or the BCR code has changed.")
     } else {
       message("  release filter DISABLED — withheld BCR(s) ",
               paste(drop_bcrs, collapse = ", "), " are INCLUDED in these numbers.")

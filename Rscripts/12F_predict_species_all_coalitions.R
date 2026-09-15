@@ -3,7 +3,7 @@
 # author: Mannfred Boehm
 # ---
 # Restructured replacement for predict_species_bcr() (12C_predict_species_bcr.R).
-# See DESIGN_12C_restructure.md for the full rationale.
+# See "12F restructure invariants" in CLAUDE.md for the full rationale.
 #
 # KEY INSIGHT: the per-pixel backfilled prediction is coalition-INDEPENDENT. The
 # joint-sampling seed (set.seed below) keys only on species+bcr+bootstrap(i)+
@@ -17,8 +17,8 @@
 # over all 255 coalitions (verify_restructure.R, on CAWA can14 and can10, 2026-06-10);
 # both that oracle and the verifier have since been retired.
 #
-# Sourced by 12B_repredict_all_coalitions.R. Relies on the same globals that
-# 12B sets up: nm_root, ia_dir, year, bcr_subbasins_ref, categorical_responses,
+# Sourced by 12D_repredict_all_coalitions.R. Relies on the same globals that
+# 12D sets up: nm_root, ia_dir, year, bcr_subbasins_ref, categorical_responses,
 # disturbance_vars, biotic_continuous_vars, q.out, l.out, and the 12E helpers
 # canonical_sectors() / coalition_id_to_sectors() / sectors_to_coalition_id().
 
@@ -31,7 +31,7 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
 
   message(Sys.time(), " | preparing ALL coalitions for species=", species, " year=", year)
 
-  # ---- V5 truncation caps (two upper stages; see 12A0_v5_truncate.R) ----------
+  # ---- V5 truncation caps (two upper stages; see 12B_v5_truncate.R) ----------
   # densmax: species constant. NOTE the schema change in V5 commit 4e7fc83
   # (2026-06-04) -- q.out lost its $q column and gained $densmax. Reading the old
   # $q here returned NULL, and pmin(x, NULL) is numeric(0) *silently*, so this
@@ -62,7 +62,7 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
                            "truncation_params.rds")
   if (!file.exists(params_path))
     stop("missing ", params_path, " - run 12A_observed.R locally and Globus it to ",
-         "the cluster before 12B. The frozen q99 cannot be recovered here.")
+         "the cluster before 12D. The frozen q99 cannot be recovered here.")
   trunc_params <- readRDS(params_path)
 
   rdata_files <- list.files(file.path(nm_root, "output/06_bootstraps", species),
@@ -106,7 +106,7 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     q99 <- tp$q99
     if (!isTRUE(all.equal(tp$densmax, qsp)))
       stop(species, " ", bcr_code, ": densmax mismatch - params has ", tp$densmax,
-           " but q.out has ", qsp, ". 12A and 12C are reading different ",
+           " but q.out has ", qsp, ". 12A and 12F are reading different ",
            "SpeciesPredictionTruncationValues.Rdata files.")
     message(Sys.time(), " | ", species, " ", bcr_code,
             " | caps: densmax=", signif(qsp, 6), " q99=", signif(q99, 6),
@@ -165,7 +165,7 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     n_draws          <- 100L
     n_scen           <- 100L
 
-    # bootstrap-invariant quantities (identical to 12C) -------------------------
+    # bootstrap-invariant quantities (identical to predict_species_bcr) -------------------------
     model_vars_shared  <- b.list[[1]]$var.names
     cat_vars_shared    <- intersect(model_vars_shared, categorical_responses)
     dist_shared        <- intersect(disturbance_vars$predictor, model_vars_shared)
@@ -218,7 +218,7 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
                              species, bcr_code, year, "weight.tif")
     if (!file.exists(weight_path))
       stop(species, " ", bcr_code, ": missing ", weight_path,
-           " - run `sbatch 12A2_build_prediction_weights.sh` before 12B. Since Fix B ",
+           " - run `sbatch 12C_build_prediction_weights.sh` before 12D. Since Fix B ",
            "this is the only masking left, so an unmasked run would silently ",
            "over-count water, out-of-range and out-of-extent pixels.")
     weight_r <- terra::rast(weight_path)
@@ -232,7 +232,7 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
            "', expected 'weight_v3_touches'. This weight predates the BCR-cut ",
            "and/or the rasterize(touches = TRUE) fix (2026-09-11). No rm is needed - ",
            "the version stamp forces a rebuild: re-run ",
-           "`sbatch 12A2_build_prediction_weights.sh`.")
+           "`sbatch 12C_build_prediction_weights.sh`.")
     if (!isTRUE(terra::compareGeom(weight_r, stack_obs[[1]], stopOnError = FALSE)))
       weight_r <- terra::resample(weight_r, stack_obs[[1]], method = "near")
     weight_super <- terra::values(weight_r, mat = FALSE)[super_idx]
@@ -240,7 +240,7 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
       stop(species, " ", bcr_code, ": weight.tif is all-zero/NA over the superset - ",
            "it would zero every density in this BCR. Rebuild it with 12A2.")
 
-    # observed covariates at superset pixels (identical extraction to 12C) -------
+    # observed covariates at superset pixels (identical extraction to predict_species_bcr) -------
     obs_all_vals  <- terra::values(stack_obs)
     X_obs_super   <- as.data.frame(obs_all_vals[super_idx, , drop = FALSE], check.names = FALSE)
     rm(obs_all_vals); gc()
@@ -276,14 +276,14 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     obs_boot_path <- file.path(obs_dir, "observed_bootstraps.tif")
     if (!file.exists(obs_boot_path))
       stop(species, " ", bcr_code, " | observed_bootstraps.tif missing at ", obs_boot_path,
-           " — run 12A_observed.R and Globus-transfer the outputs before 12B")
+           " — run 12A_observed.R and Globus-transfer the outputs before 12D")
     obs_boot_stack <- terra::rast(obs_boot_path)
     n_obs <- terra::nlyr(obs_boot_stack)
     obs_preds <- lapply(seq_len(n_obs), function(i) obs_boot_stack[[i]]); rm(obs_boot_stack)
     if (test_n_boot > 0L) obs_preds <- obs_preds[seq_len(min(test_n_boot, length(obs_preds)))]
     # apply prediction weight to observed density (range/water/extent masking).
     # weights BOTH O_super (obs_on source) and obs_total_byboot (zonal) downstream,
-    # mirroring OLD 12C where a single weighted obs_preds fed both quantities.
+    # mirroring the retired predict_species_bcr where a single weighted obs_preds fed both quantities.
     obs_preds <- lapply(obs_preds, function(r) r * weight_r)
     message(Sys.time(), " | ", species, " ", bcr_code, " | loaded ",
             length(obs_preds), " canonical observed bootstraps (weighted)")
@@ -320,7 +320,7 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
 
     # ---- Joint BRT x BART sampling over the SUPERSET (the expensive part, ONCE)
     # Worker i returns an [n_super x n_scen] matrix of capped birds/ha predictions
-    # (NA at incomplete-case pixels). Seed is coalition-free — identical to 12C.
+    # (NA at incomplete-case pixels). Seed is coalition-free — identical to predict_species_bcr.
     n_cores <- max(1L, as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", "1")))
     message(Sys.time(), " | ", species, " ", bcr_code, " | sampling ", n_boot,
             " bootstraps x ", n_scen, " scenarios on ", n_cores, " core(s)")
@@ -388,7 +388,7 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
                       numeric(length(super_idx)))
 
     # ---- coalition-INDEPENDENT obs_total (whole-subbasin), computed ONCE -------
-    # mirrors 12C: per bootstrap, zonal sum of obs_r*100 over subbasin zones.
+    # mirrors predict_species_bcr: per bootstrap, zonal sum of obs_r*100 over subbasin zones.
     obs_total_byboot <- vapply(seq_len(n_boot), function(i) {
       z <- terra::zonal(obs_preds[[i]] * 100, subbasin_zone_r, "sum", na.rm = TRUE)
       z[[2]][idx]                                     # NA where sub's zone absent
@@ -399,7 +399,7 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     rm(stack_obs, stack_bf, obs_preds, X_obs_super, draw_vals_super, cat_vals_super,
        b.list, cat_levels_shared); gc()
 
-    # combine_stats: identical math to 12C (column order is irrelevant to mean/sd)
+    # combine_stats: identical math to predict_species_bcr (column order is irrelevant to mean/sd)
     combine_stats <- function(mat) {
       list(mean = rowMeans(mat, na.rm = TRUE),
            sd   = apply(mat, 1L, sd, na.rm = TRUE))
@@ -410,7 +410,7 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
 
     # NOTE: per-coalition inspection rasters (predictions_coalitions/.../backfilled_
     # {mean,sd}.tif) are intentionally NOT written here — no downstream script reads
-    # them (12D/12F/14B consume only the .rds tables). If needed, emit them only for
+    # them (14B/15A/15B consume only the .rds tables). If needed, emit them only for
     # the save_arrays_ids coalitions from M (birds/ha), which is already capped.
 
     # ---- reduce every coalition (cheap: masked grouped sums) -------------------
@@ -424,14 +424,14 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
       # coalition pixel membership over superset = OR of its sectors' footprints
       coal_mem <- Reduce(`|`, sec_member[coalition])
 
-      # Reproduce 12C's n_active==0 short-circuit EXACTLY: a coalition with no
+      # Reproduce predict_species_bcr's n_active==0 short-circuit EXACTLY: a coalition with no
       # footprint pixels in this BCR returns an all-zeros table (incl. obs_total=0,
-      # which is a coalition-invariant quantity 12C nonetheless zeroes here). Match
-      # it for bit-identity; sum(coal_mem) == 12C's n_active (superset already ANDs
+      # which is a coalition-invariant quantity predict_species_bcr nonetheless zeroes here). Match
+      # it for bit-identity; sum(coal_mem) == predict_species_bcr's n_active (superset already ANDs
       # CanHF>=1, so coal_mem over super == coalition-mask notNA count).
       if (sum(coal_mem) == 0L) {
         # no footprint pixels for this coalition in this BCR: obs placeholders are 0
-        # (bit-identical to OLD 12C's n_active==0 short-circuit), and bf is a genuine
+        # (bit-identical to the retired predict_species_bcr's n_active==0 short-circuit), and bf is a genuine
         # 0 since no footprint here means no counterfactual change.
         coalition_tables[[ci]] <- tibble::tibble(
           species = species, subbasin = sub_ids, bcr = bcr_code, coalition_id = cid,
@@ -449,7 +449,7 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
       obs_on_mat <- matrix(NA_real_, n_sub, n_boot * n_scen)
       if (n_keep > 0) {
         zk     <- super_zones[keep]
-        # x100: birds/ha -> birds/km2 (matches 12C `bf_vals * 100`)
+        # x100: birds/ha -> birds/km2 (matches predict_species_bcr `bf_vals * 100`)
         rs_bf  <- rowsum(M[keep, , drop = FALSE], group = zk, reorder = TRUE) * 100
         map_bf <- match(hybas_ids, rownames(rs_bf))           # bf: absent -> 0
         present <- !is.na(map_bf)
@@ -463,7 +463,7 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
         # zone is absent from the raster (idx NA) or present-but-footprint-free —
         # stay NA, so combine_stats yields NaN mean / NA sd. This mirrors 12C
         # exactly: its terra::zonal over an all-NA zone returns NaN. Do NOT
-        # pre-fill 0 here; 12C never assigns a real 0 to an empty obs_on cell.
+        # pre-fill 0 here; predict_species_bcr never assigns a real 0 to an empty obs_on cell.
         obs_on_byboot <- matrix(NA_real_, n_sub, n_boot)
         map_o <- match(hybas_ids, rownames(rs_obs))
         presO <- !is.na(map_o)
@@ -472,7 +472,7 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
       } else {
         # coalition has footprint in this BCR but no complete-case pixels at all:
         # no kept pixels anywhere -> every subbasin's obs_on is empty -> NA
-        # (NaN mean / NA sd), matching 12C's all-NA zonal result.
+        # (NaN mean / NA sd), matching predict_species_bcr's all-NA zonal result.
         obs_on_mat <- matrix(NA_real_, n_sub, n_boot)[, bcols, drop = FALSE]
       }
 

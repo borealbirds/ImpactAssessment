@@ -17,7 +17,7 @@
 # per species.
 #
 # After running locally, Globus-transfer observed_bootstraps.tif AND
-# truncation_params.rds to the same relative paths on the cluster. 12B/12C read
+# truncation_params.rds to the same relative paths on the cluster. 12D/12F read
 # these rather than recomputing, which also eliminates floating-point drift
 # across parallel SLURM jobs.
 #
@@ -46,12 +46,12 @@
 #
 # WHY q99 IS PERSISTED RATHER THAN RECOMPUTED
 # -------------------------------------------
-# q99 is the only data-dependent parameter in the transform. 12C must clamp the
+# q99 is the only data-dependent parameter in the transform. 12F must clamp the
 # BACKFILLED predictions at the SAME value, frozen from the observed landscape.
 # Removing industry raises density, so a counterfactual's own 99.9th percentile
 # sits higher and would be clamped less than the observed landscape it is being
 # differenced against -- putting a component of the cap itself into the obs/bf
-# contrast. truncation_params.rds carries it to 12C for exactly this reason.
+# contrast. truncation_params.rds carries it to 12F for exactly this reason.
 # (Known residual bias, to be quantified by the uncapped sensitivity pass: a
 # frozen ceiling is hit more often by counterfactuals, which under-estimates
 # impact in the highest-density pixels.)
@@ -61,7 +61,7 @@
 # V5 reprojects to EPSG:3978 before truncating, but 10.Truncate.R:19 documents
 # that as a legacy artifact ("Future versions will not require this step").
 # Because clamp() does not commute with projection, projecting would break the
-# exact superset -> masked-rowsum decomposition 12C relies on. The parameter
+# exact superset -> masked-rowsum decomposition 12F relies on. The parameter
 # itself is near CRS-invariant -- CAWA can10 q99.9 = 0.132457 in 5072 vs
 # 0.132881 in 3978, 0.32% apart -- so the 5072-derived cap is effectively V5's.
 #
@@ -73,12 +73,12 @@
 # correct side. See CLAUDE.md Open Limitation #8.
 #
 # Range/water/data-limit masking is deliberately NOT applied here: it lives in
-# weight.tif (12A2) and 12C:220 multiplies it into BOTH the observed and the
+# weight.tif (12C) and 12F:220 multiplies it into BOTH the observed and the
 # backfilled side, which is what keeps w*bf - w*obs = w*(bf - obs) exact.
 # Baking it in here would double-weight the observed side.
 #
 # Gate G1 (Rscripts/misc/verify_v5_truncate_port.R) confirms the shared transform
-# in 12A0_v5_truncate.R reproduces V5's released output/10_truncated product.
+# in 12B_v5_truncate.R reproduces V5's released output/10_truncated product.
 # ---
 
 suppressPackageStartupMessages({
@@ -106,7 +106,7 @@ if (!cc && !local) { ia_dir <- file.path("G:/Shared drives/BAM_NationalModels5",
 # when running locally, BRT bootstrap models and raw prediction tifs are on G:
 if (!cc) { nm_root <- "G:/Shared drives/BAM_NationalModels5" }
 
-source(file.path(ia_dir, "Rscripts", "12A0_v5_truncate.R"))
+source(file.path(ia_dir, "Rscripts", "12B_v5_truncate.R"))
 
 # prediction thresholds --------------------------------------------------
 # restaged from G:/Shared drives/BAM_NationalModels5/data/ on 2026-09-11
@@ -140,7 +140,7 @@ message(Sys.time(), " | observed predictions for species=", species,
 rdata_files <- list.files(file.path(nm_root, "output/06_bootstraps", species),
                           pattern = "can.*\\.Rdata$", full.names = TRUE)
 
-# same smoke-test filter 12B/12C honour: TEST_BCR=can10,can71
+# same smoke-test filter 12D/12F honour: TEST_BCR=can10,can71
 test_bcr <- Sys.getenv("TEST_BCR", "")
 if (nchar(test_bcr) > 0) {
   want <- strsplit(test_bcr, ",")[[1]]
@@ -171,7 +171,7 @@ for (rdata_path in rdata_files) {
   obs_boot_path <- file.path(obs_dir, "observed_bootstraps.tif")
 
   # skip only if BOTH the stack and its frozen q99 are already on hand — a stack
-  # without a recorded q99 is unusable by 12C and must be rebuilt.
+  # without a recorded q99 is unusable by 12F and must be rebuilt.
   key <- paste(bcr_code, year, sep = "_")
   if (file.exists(obs_boot_path) && !is.null(params[[key]])) {
     message(Sys.time(), " | ", bcr_code, " | already exists — skipping")
@@ -196,7 +196,7 @@ for (rdata_path in rdata_files) {
   }
   obs_stack <- out$stack
 
-  # INTERLEAVE=BAND matters: 12C:215 pulls these 32 layers out one at a time, and
+  # INTERLEAVE=BAND matters: 12F:215 pulls these 32 layers out one at a time, and
   # terra's default BIP layout makes each single-band read scan the whole file.
   dir.create(obs_dir, recursive = TRUE, showWarnings = FALSE)
   terra::writeRaster(obs_stack, obs_boot_path, overwrite = TRUE,
@@ -205,7 +205,7 @@ for (rdata_path in rdata_files) {
 
   # inspection products, matching 11.Package.R's mean/sd over the truncated stack
   # (V5 computes these on the MASKED stack; ours are unmasked, so they are for
-  # inspection only — 12C reads observed_bootstraps.tif, never these).
+  # inspection only — 12F reads observed_bootstraps.tif, never these).
   terra::writeRaster(terra::app(obs_stack, mean, na.rm = TRUE),
                      file.path(obs_dir, "observed_mean.tif"), overwrite = TRUE)
   terra::writeRaster(terra::app(obs_stack, sd, na.rm = TRUE),

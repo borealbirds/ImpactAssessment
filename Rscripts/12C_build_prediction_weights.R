@@ -2,7 +2,7 @@
 # title: Impact Assessment: build per-species x BCR prediction weight rasters
 # author: Mannfred Boehm
 # ---
-# Run ONCE per species (SLURM array) on the cluster, BEFORE 12B/12D.
+# Run ONCE per species (SLURM array) on the cluster, BEFORE 12D.
 #
 # Builds a multiplicative prediction weight that replicates V5 10.Truncate's
 # range / water / data-extent masking:
@@ -27,7 +27,7 @@
 # before mosaicking. Measured on our own staged stacks, 59-71% of non-NA pixels in
 # {bcr}_2020.tif lie OUTSIDE the subunit's unbuffered polygon, carrying 41-84% of
 # the raw density sum. Without this term those buffer pixels enter the density
-# tables, and because 12B assigns a subbasin to EVERY BCR it intersects (329 of 674
+# tables, and because 12D assigns a subbasin to EVERY BCR it intersects (329 of 674
 # subbasins intersect >1 Canadian BCR; 59% of total area), a straddling subbasin was
 # summed in full under each of them -- a straight double count at every BCR seam.
 # Cropping here reproduces V5's mosaic cut: each BCR contributes only its own share
@@ -39,13 +39,13 @@
 # and needs no extra Globus staging.
 #
 # weight is coalition-independent, so it is built ONCE per species x BCR here and
-# reused by every coalition job. 12C and 12D multiply BOTH the observed and the
+# reused by every coalition job. 12F multiplies BOTH the observed and the
 # backfilled density by this weight, so the obs/bf symmetry is preserved
 # exactly:  w*bf - w*obs = w*(bf - obs).
 #
 # Source masks live in data/raw_data/v5_gis (transferred from G: once); the
 # cluster never reads G:. The prediction grid template is the same BCR stack
-# (nm_root/gis/stacks/{bcr}_{year}.tif) that 12C/12D use as stack_obs, so the
+# (nm_root/gis/stacks/{bcr}_{year}.tif) that 12F uses as stack_obs, so the
 # weight aligns with both stack_obs and observed_bootstraps.tif with no resample.
 #
 # Output: data/derived_data/predictions/{species}/{bcr_code}/{year}/weight.tif
@@ -106,7 +106,7 @@ range_path <- file.path(gis_dir, "ranges", paste0(species, ".tif"))
 if (!file.exists(range_path)) stop("no range raster for ", species, " at ", range_path)
 range_r <- terra::rast(range_path)
 
-# ---- Find BCR models (same discovery as 12A/12C/12D) -------------------------
+# ---- Find BCR models (same discovery as 12A/12D/12F) -------------------------
 
 rdata_files <- list.files(file.path(nm_root, "output/06_bootstraps", species),
                           pattern = "can.*\\.Rdata$", full.names = TRUE)
@@ -183,7 +183,7 @@ for (rdata_path in rdata_files) {
   weight <- w_range * notwater * inlim * inbcr   # in [0, 1], defined everywhere
 
   # Every term is built with background = 0 / NA -> 0, so weight must be non-NA
-  # everywhere in the extent. 12C multiplies density by it; an NA here would drop
+  # everywhere in the extent. 12F multiplies density by it; an NA here would drop
   # the pixel silently instead of zeroing it (V5 10.Truncate.R:141 zeroes).
   if (terra::global(is.na(weight), "sum", na.rm = TRUE)[[1]] > 0)
     stop(bcr_code, ": weight.tif has NA cells - one of the mask terms returned NA ",

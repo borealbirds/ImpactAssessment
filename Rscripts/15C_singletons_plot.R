@@ -2,7 +2,7 @@
 # title: Impact Assessment: visualize scale-dependent sector impacts (CAWA, OVEN)
 # author: Mannfred Boehm
 # ---
-# Reads logs/12F_singletons_summary.csv and renders the same sector impacts at
+# Reads logs/15B_singletons_summary.csv and renders the same sector impacts at
 # three increasing geographic scales:
 #   (1) footprint   (pct_footprint)   — % of obs on the sector's footprint pixels
 #   (2) watershed   (pct_sub_active)  — % of obs on subbasins where the sector is active
@@ -26,7 +26,7 @@ if (cc)            { ia_dir <- "/home/mannfred/scratch/impact_assessment" }
 if (!cc && local)  { ia_dir <- getwd() }
 if (!cc && !local) { ia_dir <- file.path("G:/Shared drives/BAM_NationalModels5", "data", "Extras", "sandbox_data", "impactassessment_sandbox") }
 
-csv_path <- file.path(ia_dir, "logs", "12F_singletons_summary.csv")
+csv_path <- file.path(ia_dir, "logs", "15B_singletons_summary.csv")
 fig_dir  <- file.path(ia_dir, "figures")
 dir.create(fig_dir, showWarnings = FALSE, recursive = TRUE)
 
@@ -112,11 +112,11 @@ p <- ggplot(long, aes(x = sector, y = value, color = species)) +
 
 # save ------------------------------------------------------
 
-out_png <- file.path(fig_dir, "12F_singletons_scales.png")
+out_png <- file.path(fig_dir, "15C_singletons_scales.png")
 ggsave(out_png, p, width = 10, height = 9, dpi = 200)
 cat("wrote", out_png, "\n")
 
-out_pdf <- file.path(fig_dir, "12F_singletons_scales.pdf")
+out_pdf <- file.path(fig_dir, "15C_singletons_scales.pdf")
 ggsave(out_pdf, p, width = 10, height = 9)
 cat("wrote", out_pdf, "\n")
 

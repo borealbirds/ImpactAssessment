@@ -9,7 +9,7 @@
 #
 # Output: density_tables/{species}_{year}_coalition_{cid}.rds  (cid 2..256).
 # Observed bootstraps are always present (12A outputs staged on the cluster), so
-# every table is complete on write — no _bf_only suffix, no 12D_combine step.
+# every table is complete on write — no _bf_only suffix, no separate combine step.
 
 suppressPackageStartupMessages({
   library(BAMexploreR); library(gbm); library(terra); library(tidyverse)
@@ -71,7 +71,7 @@ disturbance_vars <- dplyr::tibble(BAMexploreR::predictor_metadata) |>
 
 # Shapley utils + the all-coalitions predictor ---------------------------------
 source(file.path(ia_dir, "Rscripts", "12E_shapley_utils.R"))
-source(file.path(ia_dir, "Rscripts", "12C_predict_species_all_coalitions.R"))
+source(file.path(ia_dir, "Rscripts", "12F_predict_species_all_coalitions.R"))
 
 # run one species ------------------------------------------------------
 species_vec <- c("CAWA", "OVEN")
@@ -87,14 +87,14 @@ target_ids <- c(sectors_to_coalition_id(sectors, sectors),
                 vapply(sectors, function(s) sectors_to_coalition_id(s, sectors), numeric(1L)))
 
 # preflight: every species x BCR must have weight.tif --------------------------
-# 12C falls back to an UNMASKED run (w == 1) on a missing weight.tif and only
+# 12F falls back to an UNMASKED run (w == 1) on a missing weight.tif and only
 # warns, which silently counts birds on water, outside the species' range, and
 # outside the V5 data-limitation extent. That fallback got more dangerous once
 # 08A started median-imputing partial-NA BART predictors: water pixels used to
-# fail complete.cases in 12C and drop out of BOTH obs and bf on their own, so
+# fail complete.cases in 12F and drop out of BOTH obs and bf on their own, so
 # weight.tif is now the only thing keeping them out of the density tables. Fail
 # here rather than 20 h into a job whose totals are quietly wrong.
-# BCR codes are taken from the bootstrap filenames (12C reads them from the
+# BCR codes are taken from the bootstrap filenames (12F reads them from the
 # b.list "bcr" attribute, which would mean loading every .Rdata just to check).
 weight_bcrs <- basename(list.files(file.path(nm_root, "output/06_bootstraps", species),
                                    pattern = "can.*\\.Rdata$"))
@@ -113,7 +113,7 @@ if (length(weight_bcrs) == 0) {
   if (length(missing_w) > 0)
     stop(species, " | weight.tif missing for ", length(missing_w), "/",
          length(weight_bcrs), " BCR(s): ", paste(missing_w, collapse = ", "),
-         " — run 12A2_build_prediction_weights.sh before 12B")
+         " — run 12C_build_prediction_weights.sh before 12D")
   message(Sys.time(), " | weight.tif present for all ", length(weight_bcrs), " BCR(s)")
 }
 

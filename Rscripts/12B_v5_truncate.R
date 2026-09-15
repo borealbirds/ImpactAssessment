@@ -48,10 +48,10 @@
 #
 #   `apply_masks` -- set FALSE to stop after step 6 (the two clamps) and skip
 #             steps 7-8. Our pipeline carries V5's range/water/data-limit masking
-#             as a separate precomputed weight.tif (12A2), which 12C multiplies
+#             as a separate precomputed weight.tif (12C), which 12F multiplies
 #             into BOTH the observed and the backfilled side so the obs/bf
 #             symmetry w*bf - w*obs = w*(bf - obs) is exact. 12A must therefore
-#             write a truncated-but-UNWEIGHTED stack, or 12C:220 would apply the
+#             write a truncated-but-UNWEIGHTED stack, or 12F:220 would apply the
 #             masking a second time. Note that q99 is derived BEFORE masking in
 #             V5 too (step 6 precedes step 7), so the frozen parameter is
 #             identical either way.

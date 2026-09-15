@@ -9,7 +9,7 @@
 # test whether n_draws=100 random draws subsampled from the 700-draw
 # gbart() posterior adequately represent the full posterior.
 #
-# 12B resamples 1 of 100 stored draws per counterfactual scenario; this
+# 12F resamples 1 of 100 stored draws per counterfactual scenario; this
 # script verifies that 100 draws is enough to cover the posterior's shape
 # and tails regardless of their distribution.
 #
