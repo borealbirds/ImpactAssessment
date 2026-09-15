@@ -10,8 +10,9 @@
 #SBATCH --mail-user=mannfred@ualberta.ca
 
 # Restructured Phase 2: ONE job per species (array task 1=CAWA, 2=OVEN) computes
-# ALL 255 coalitions internally (DESIGN_12C_restructure.md). Replaces the 255-jobs
-# -per-species 12B_repredict_birds.sh + 12B_submit_tiered.sh fan-out.
+# ALL 255 coalitions internally (see "12F restructure invariants" in CLAUDE.md).
+# Replaces the 255-jobs-per-species 12B_repredict_birds.sh + 12B_submit_tiered.sh
+# fan-out (both RETIRED — pre-2026-09-15 names, unrelated to today's 12B).
 #
 # Resources: --mem/--time are an initial generous envelope (the per-BCR superset
 # compute ~ one all-8 coalition + 255 cheap reductions). Re-profile with

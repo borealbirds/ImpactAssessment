@@ -3,9 +3,10 @@
 # author: Mannfred Boehm
 # ---
 # Restructured entry point. One SLURM array job = ONE species (array task 1=CAWA,
-# 2=OVEN). Unlike 12B_repredict_birds.R (one job per species x coalition), this
-# computes the backfilled field ONCE per species x BCR over the superset and
-# reduces all 255 coalitions internally — see DESIGN_12C_restructure.md.
+# 2=OVEN). Unlike 12B_repredict_birds.R (RETIRED — a pre-2026-09-15 name, not
+# today's 12B_v5_truncate.R; it ran one job per species x coalition), this computes
+# the backfilled field ONCE per species x BCR over the superset and reduces all 255
+# coalitions internally — see "12F restructure invariants" in CLAUDE.md.
 #
 # Output: density_tables/{species}_{year}_coalition_{cid}.rds  (cid 2..256).
 # Observed bootstraps are always present (12A outputs staged on the cluster), so
@@ -87,13 +88,15 @@ target_ids <- c(sectors_to_coalition_id(sectors, sectors),
                 vapply(sectors, function(s) sectors_to_coalition_id(s, sectors), numeric(1L)))
 
 # preflight: every species x BCR must have weight.tif --------------------------
-# 12F falls back to an UNMASKED run (w == 1) on a missing weight.tif and only
-# warns, which silently counts birds on water, outside the species' range, and
-# outside the V5 data-limitation extent. That fallback got more dangerous once
-# 08A started median-imputing partial-NA BART predictors: water pixels used to
-# fail complete.cases in 12F and drop out of BOTH obs and bf on their own, so
-# weight.tif is now the only thing keeping them out of the density tables. Fail
-# here rather than 20 h into a job whose totals are quietly wrong.
+# 12F itself stop()s on a missing, stale or all-zero/NA weight.tif (it used to
+# fall back to an UNMASKED run, w == 1, and only warn). This preflight is the
+# cheap early copy of that check: fail here rather than 20 h into a job.
+# Without the weight, totals are quietly wrong rather than obviously broken — it
+# silently counts birds on water, outside the species' range, and outside the V5
+# data-limitation extent. That got more dangerous once 08A started median-imputing
+# partial-NA BART predictors: water pixels used to fail complete.cases in 12F and
+# drop out of BOTH obs and bf on their own, so weight.tif is now the only masking
+# left.
 # BCR codes are taken from the bootstrap filenames (12F reads them from the
 # b.list "bcr" attribute, which would mean loading every .Rdata just to check).
 weight_bcrs <- basename(list.files(file.path(nm_root, "output/06_bootstraps", species),
