@@ -42,14 +42,11 @@ Two mechanical gotchas found the same way:
 - Globus refuses sources outside the local endpoint's configured root, so a temp-dir staging
   copy fails with `Path not allowed`. Stage from inside the repo tree.
 
-**Current state (2026-09-15)**: `/Rscripts` on Fir matches HEAD, and `/Rscripts/12*` is exactly
-six files (old-named duplicates removed after the renumbering; `12A` is local-only by design).
-Four files are knowingly divergent, all comment-only:
-`08A_train_and_backfill_subbasin_s.R` and `08B_deploy_gbart.R` are held back deliberately because
-A6's queued array tasks source them live — re-stage after A6. `12D_repredict_all_coalitions.R`
-and `.sh` were edited 2026-09-15 (dead `DESIGN_12C_restructure.md` reference; a preflight comment
-that still described the removed `w == 1` unmasked fallback) and can be re-staged any time before
-C1. Re-stage all four to restore the 0-byte-sync proof.
+**Current state (2026-09-16)**: `/Rscripts` on Fir matches HEAD with no known divergence.
+The four files held back while A6 was queued — `08A_train_and_backfill_subbasin_s.R`,
+`08B_deploy_gbart.R`, `12D_repredict_all_coalitions.R` and `.sh` — were all re-staged once the
+queue drained. `/Rscripts/12*` is exactly six files (old-named duplicates removed after the
+renumbering; `12A` is local-only by design).
 
 ---
 
@@ -64,6 +61,20 @@ All fixes (CAfire recode, Fix A, Fix B, the `12D` weight preflight) are committe
       at 750G/12h). `--array=1-674` on either would override its list, run the large subbasins at
       64G (guaranteed OOM) and race the other job writing the same `subbasin_{i}_backfill.tif`.
       `07.sh` also carries the recipe for finding OOM-killed tasks in its trailing comments.
+      **Run 1 (jobs `60009763` large / `60010888` small) finished 668/674 on 2026-09-16.** The
+      six gaps were all `OUT_OF_MEMORY` with MaxRSS pegged exactly at the request: 57, 62, 98 at
+      750G and 454, 474, 583 at 64G. Cause was **not** subbasin size — S454 (`ncell=45288`) died
+      at 64G while S5 (`ncell=44896`) succeeded — but allocation churn in `08A`'s raster
+      assembly, where `result_raster[[j]] <- v` copied the whole ~2000-layer stack on each of
+      ~2000 assignments. Patched 2026-09-16 to fill one `ncell x nlyr` matrix and call
+      `terra::values()` once. Reruns: `sbatch --array=57,62,98,454,474,583
+      07_train_and_backfill_larger.sh`. Mixing patched and unpatched outputs is safe — the patch
+      changes assembly only, no modelled value.
+      **Diagnostic note**: neither `.out`/`sacct` state nor `done` in `logs/Y2020_S*.log` proves
+      success. `07_train_and_backfill.R`'s `tryCatch` makes a failed subbasin exit `COMPLETED`,
+      and `08A:24`'s `on.exit(logp("done"))` fires on error unwind. Logs also *append* across
+      runs, so they cannot isolate one run. The oracle is the filesystem: `_confusion.rds` is
+      written last, plus an mtime check so pre-CAfire-fix leftovers cannot pass as fresh.
 - [ ] **A7.** Validate Fix A — the only fix never tested. The `12F` runtime line
       `complete superset pixels: N / M (X%)` must be ≫ the old 1–3%.
 

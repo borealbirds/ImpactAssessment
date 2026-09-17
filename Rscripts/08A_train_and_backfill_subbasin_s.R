@@ -252,20 +252,27 @@ train_and_backfill_subbasin_s <- function(
   if (!length(created)) return(invisible(NULL))
   
   template <- cov_s[[1]]
-  result_raster <- terra::rast(template, nlyr = length(created))
-  
+
+  # Fill ONE ncell x nlyr matrix, then set values a single time.
+  # Do NOT assign layer-by-layer into the SpatRaster (result_raster[[j]] <- v): terra copies
+  # the entire stack on every such assignment, so the loop churns ~nlyr^2 * ncell * 8 bytes
+  # through the allocator. With ~2000 layers that OOM'd subbasins 57/62/98 at 750G and
+  # 454/474/583 at 64G even though the finished stack is only ~12 GB (2026-09-16).
+  M <- matrix(NA_real_, nrow = terra::ncell(template), ncol = length(created))
+
   # fill only the high-HF cells
   for (j in seq_along(created)) {
-    
-    v <- rep(NA_real_, terra::ncell(template)) # create NAs for every cell
-    vals <- as.numeric(out_layers[[ created[j] ]]) # fetch backfilled values from out_layers list
-    
-    # write correctly-aligned values
-    v[backfill_idx] <- vals
-    
-    result_raster[[j]] <- v
+
+    # write correctly-aligned values, then drop the source vector to free memory as we go.
+    # indexing out_layers by NAME keeps this correct while elements are being removed.
+    M[backfill_idx, j] <- as.numeric(out_layers[[ created[j] ]])
+    out_layers[[ created[j] ]] <- NULL
   }
-  
+
+  result_raster <- terra::rast(template, nlyr = length(created))
+  terra::values(result_raster) <- M
+  rm(M)
+
   # assign the actual layer names
   names(result_raster) <- created
   
