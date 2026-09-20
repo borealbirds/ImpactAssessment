@@ -2,34 +2,62 @@
 #SBATCH --account=def-bayne
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --mem=64G
-#SBATCH --time=06:00:00
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=128G
+#SBATCH --time=08:00:00
 #SBATCH --job-name=2020_run_backfill
-# ---------------------------------------------------------------------------
-# ARRAY TIERING. Subbasins vary enormously in size. The ~97 largest OOM at the
-# 64G/6h settings below and are run separately by 07_train_and_backfill_larger.sh
-# (750G/12h) with its own baked-in index list. THE TWO SCRIPTS MUST PARTITION
-# 1-674: every index appears in exactly one of them, or the overlapping tasks
-# race each other writing the same subbasin_{i}_backfill.tif.
-#
-# The active line below is that complement, MINUS subbasins 1-3, which the
-# 2026-09-14 A5 smoke (job 59865956) already completed at full production
-# settings. For a fresh run from an empty bart_models/2020, use the plain
-# complement instead (the second commented line).
-#
-# Regenerate the complement after editing larger.sh's array, from this dir:
-#   python3 -c "import re;b=set(int(x) for x in re.search(r'--array=([0-9,]+)',open('07_train_and_backfill_larger.sh').read()).group(1).split(','));r=[];[r.append([i,i]) if not r or i>r[-1][1]+1 else r[-1].__setitem__(1,i) for i in range(1,675) if i not in b];print(','.join(f'{a}-{c}' if c>a else str(a) for a,c in r))"
-#
-# The %N suffix is the concurrency throttle. These are single-threaded 64G
-# tasks (BART runs at tc=1), so %40 is a light load on 750G nodes and finishes
-# ~4x sooner than the %10 this script used to carry.
-# ---------------------------------------------------------------------------
-#SBATCH --array=4-18,20-23,25-26,28-29,31-47,49-52,59-60,65-76,78-81,84-90,93-97,99,101,109-121,123-178,180-183,185-189,191-202,204-219,221-227,229-234,236-238,240-259,261-271,274-275,277,279-295,297-313,315-316,320-323,325-338,340-346,348-351,353-359,361-375,378,380-385,387-396,398-404,406-426,428-437,439-460,462-466,468-471,473-485,487,489-511,513-515,517-529,531-537,539,541-542,544-545,548-552,554-557,561-564,566-571,573-585,587,589-595,597-598,600-602,604-607,609-620,622-628,631-636,639-641,643-650,652-661,663-665,667-671,674%40
-# plain complement of larger.sh, all 577 (use for a run from an empty bart_models/2020):
-# #SBATCH --array=1-18,20-23,25-26,28-29,31-47,49-52,59-60,65-76,78-81,84-90,93-97,99,101,109-121,123-178,180-183,185-189,191-202,204-219,221-227,229-234,236-238,240-259,261-271,274-275,277,279-295,297-313,315-316,320-323,325-338,340-346,348-351,353-359,361-375,378,380-385,387-396,398-404,406-426,428-437,439-460,462-466,468-471,473-485,487,489-511,513-515,517-529,531-537,539,541-542,544-545,548-552,554-557,561-564,566-571,573-585,587,589-595,597-598,600-602,604-607,609-620,622-628,631-636,639-641,643-650,652-661,663-665,667-671,674%40
-# every subbasin, no tiering (the large ones will OOM at 64G):
-# #SBATCH --array=1-674%10
+#SBATCH --array=1-674%30
 #SBATCH --mail-user=mannfred@ualberta.ca
+# ---------------------------------------------------------------------------
+# ONE TIER, ALL 674 SUBBASINS. This replaces the former 07_train_and_backfill.sh
+# / 07_train_and_backfill_larger.sh pair (deleted 2026-09-19) and the two
+# hand-maintained complementary --array lists that had to partition 1-674
+# exactly or race each other writing the same subbasin_{i}_backfill.tif.
+#
+# WHY THE TIERS ARE GONE. The split existed because ~97 subbasins OOM'd at 64G.
+# That looked like a size effect and was not: 08A assembled the output stack
+# with `result_raster[[j]] <- v`, and terra copies the ENTIRE stack on every
+# such assignment, so filling ~2000 layers churned ~nlyr^2 * ncell * 8 bytes
+# through the allocator. More RAM only bought more garbage before a GC, which
+# is why 57/62/98 died on a full 750G node exactly as 454/474/583 died at 64G.
+# 08A now fills one ncell x nlyr matrix and calls terra::values() once
+# (commit 73e8b68). The six reruns (job 60134338, all COMPLETED 0:0) came back:
+#
+#   S57   50.8 GB  1:31:24   (was 750 GB, OOM)
+#   S62   44.4 GB  1:28:10   (was 750 GB, OOM)
+#   S98   50.2 GB  0:47:24   (was 750 GB, OOM)
+#   S454   7.4 GB  0:57:21   (was  64 GB, OOM)
+#   S474   9.5 GB  2:05:33   (was  64 GB, OOM)
+#   S583   7.3 GB  0:28:52   (was  64 GB, OOM)
+#
+# MEMORY. 57/62/98 were the worst cases in the entire set, so 128G is ~2.5x the
+# observed post-fix peak. Peak is roughly (BART working set) + 2 * ncell * nlyr
+# * 8 bytes, the factor of 2 being the transient copy inside terra::values()<-;
+# for the largest subbasin (S98, ncell=746790, ~2000 layers) that middle term is
+# ~24 GB. 96G would very likely suffice -- 128G buys headroom for a subbasin
+# bigger than any measured, and the whole run still costs LESS than the old two
+# tiers (674 x 128G = 86 TB vs 577 x 64G + 97 x 750G = 110 TB).
+#
+# If one index ever does OOM, give that index more room rather than re-tiering:
+#   sbatch --array=<i> --mem=256G 07_train_and_backfill.sh
+#
+# TIME. Longest observed post-fix run is 2:05:33 (S474), so 08:00:00 is ~4x
+# margin and backfills onto idle nodes sooner than the old 12h large tier did.
+#
+# CPU. Genuinely single-threaded: 08B calls BART::gbart()/BART::mbart(), not the
+# mc.* variants, and nothing sets mc.cores, terraOptions(threads=) or
+# OMP_NUM_THREADS. More cores would multiply the allocation charge for nothing.
+#
+# %30 is the concurrency throttle, not a reservation -- it caps how many array
+# tasks run at once, and can be raised or dropped freely.
+#
+# COMPLETION IS PROVED BY ARTIFACTS, NOT BY SLURM STATE OR BY THE LOGS. 07 wraps
+# the call in tryCatch, so an R-level failure still exits COMPLETED, and
+# Y2020_S*.log appends across runs -- four of the six subbasins above carried
+# "writing N layers" lines from a March run while having no output at all. The
+# oracle is subbasin_{i}_confusion.rds, which 08A writes last:
+#   find ../data/derived_data/bart_models/2020 -name '*_confusion.rds' | wc -l
+# ---------------------------------------------------------------------------
 
 module load StdEnv/2023
 module load gcc/12.3
@@ -39,9 +67,3 @@ module load r/4.4.0
 
 export NODELIST=$(echo $(srun hostname))
 Rscript --vanilla 07_train_and_backfill.R ${SLURM_ARRAY_TASK_ID}
-
-# these settings worked for the vast majority of subbasins
-# I ran:
-# grep -L "writing .* layers to .*/subbasin_[0-9]\+" Y2020_*.log | \
-# xargs -r grep -L "^done$"
-# to identify subbasins that were OOM killed or timed out and re-ran with 07_train_and_backfill_larger.sh

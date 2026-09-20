@@ -46,7 +46,7 @@ Scripts are numbered in execution order:
 | `04_reproject_and_crop_hydrobasins.R` | local | Crop Level 6 HydroBASINS to BAM study area |
 | `05_merge_low_density_subbasins.R` | local | Merge data-sparse subbasins so every unit has ≥Q25 low-HF pixels; subset to subbasins with any high-HF pixels → `hydrobasins_masked_merged_subset.gpkg` (674 subbasins) |
 | `06_build_covariate_stacks.R` | local | Mosaic BCR covariate stacks by year and add soil + CAfire layers → `covariates_mosaiced_{year}.tif` |
-| `07_train_and_backfill.R` + `.sh` | cluster | Entry point: for a given SLURM array index (subbasin), train BART models and backfill high-HF pixels. Submitted as two tiered jobs — `.sh` (64G/6h) and `07_train_and_backfill_larger.sh` (750G/12h) — whose baked-in `--array` lists partition 1–674 |
+| `07_train_and_backfill.R` + `.sh` | cluster | Entry point: for a given SLURM array index (subbasin), train BART models and backfill high-HF pixels. ONE array job over all 674 subbasins at 128G / 8h / 1 core. The former 64G+750G tiering (and its second script, `07_train_and_backfill_larger.sh`) was an artifact of the `08A` assembly OOM fixed in `73e8b68`, not of subbasin size |
 | `08A_train_and_backfill_subbasin_s.R` | sourced | Core `train_and_backfill_subbasin_s()` function; loops over biotic covariates in hierarchy order |
 | `08B_deploy_gbart.R` | sourced | `deploy_gbart()`: Gaussian BART for continuous biotic covariates (log1p-transformed, 90/10 train/holdout split) |
 | `08B_deploy_mbart.R` | sourced | `deploy_mbart()`: Multinomial BART for categorical land-cover covariates |
@@ -100,12 +100,18 @@ you edited — see `TODO.md` "Staging discipline".
 
 Backfilling (SLURM array, one job per subbasin index):
 ```bash
-# TWO scripts, each carrying its own baked-in --array list. They PARTITION 1-674: every index
-# appears in exactly one of them, or the overlapping tasks race writing the same
-# subbasin_{i}_backfill.tif. Do NOT pass --array on the command line (it overrides the baked
-# list) except to rerun specific failures.
-sbatch 07_train_and_backfill.sh          # 64G / 6h  — the ~577 ordinary subbasins
-sbatch 07_train_and_backfill_larger.sh   # 750G / 12h — the ~97 largest, which OOM at 64G
+# ONE script, ONE tier: --array=1-674%30 at 128G / 8h / 1 core, all baked in.
+sbatch 07_train_and_backfill.sh
+
+# The old two-script split (64G + 750G, with complementary --array lists that had to partition
+# 1-674 exactly or race each other writing the same subbasin_{i}_backfill.tif) is GONE as of
+# 2026-09-19. It existed only because 08A's layer-by-layer assembly churned ~nlyr^2 * ncell * 8
+# bytes through the allocator; after 73e8b68 the worst subbasin in the set peaks at 50.8 GB, so
+# a single 128G tier covers everything with ~2.5x margin — and costs less in total than the two
+# tiers did. Single-threaded by construction (BART::gbart, not mc.gbart), so --cpus-per-task=1.
+#
+# If one index OOMs, give that index more room instead of re-tiering the file:
+sbatch --array=<i> --mem=256G 07_train_and_backfill.sh
 ```
 
 Re-predicting birds:

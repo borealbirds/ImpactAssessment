@@ -55,21 +55,28 @@ renumbering; `12A` is local-only by design).
 All fixes (CAfire recode, Fix A, Fix B, the `12D` weight preflight) are committed as of `6455756` and staged; the compute has never been launched. Prerequisites
 (cleanup, weight rebuild 25/25, `07` smoke) are all done — see **Completed**.
 
-- [ ] **A6.** `sbatch 07_train_and_backfill.sh` **and** `sbatch 07_train_and_backfill_larger.sh`,
-      then `sbatch 11_premosaic_backfilled_stacks.sh`. **Pass no `--array` override**: the two
-      scripts carry baked-in index lists that partition 1–674 (577 ordinary at 64G/6h, ~97 large
-      at 750G/12h). `--array=1-674` on either would override its list, run the large subbasins at
-      64G (guaranteed OOM) and race the other job writing the same `subbasin_{i}_backfill.tif`.
-      `07.sh` also carries the recipe for finding OOM-killed tasks in its trailing comments.
+- [ ] **A6.** ~~`sbatch 07_train_and_backfill.sh`~~ **DONE — 674/674 on 2026-09-19.** Remaining
+      half is `sbatch 11_premosaic_backfilled_stacks.sh`, which must NOT run until the
+      `_confusion.rds` count reads 674 (`11:71` silently drops non-existent paths and `11:189`
+      skips BCRs whose mosaic already exists, so a hole would be baked in permanently).
       **Run 1 (jobs `60009763` large / `60010888` small) finished 668/674 on 2026-09-16.** The
       six gaps were all `OUT_OF_MEMORY` with MaxRSS pegged exactly at the request: 57, 62, 98 at
       750G and 454, 474, 583 at 64G. Cause was **not** subbasin size — S454 (`ncell=45288`) died
       at 64G while S5 (`ncell=44896`) succeeded — but allocation churn in `08A`'s raster
       assembly, where `result_raster[[j]] <- v` copied the whole ~2000-layer stack on each of
-      ~2000 assignments. Patched 2026-09-16 to fill one `ncell x nlyr` matrix and call
-      `terra::values()` once. Reruns: `sbatch --array=57,62,98,454,474,583
-      07_train_and_backfill_larger.sh`. Mixing patched and unpatched outputs is safe — the patch
+      ~2000 assignments. Patched 2026-09-16 (`73e8b68`) to fill one `ncell x nlyr` matrix and
+      call `terra::values()` once. Mixing patched and unpatched outputs is safe — the patch
       changes assembly only, no modelled value.
+      **Run 2 (job `60134338`, the six reruns) all COMPLETED `0:0` on 2026-09-17**, confirming
+      the diagnosis quantitatively: S57 50.8 GB / S62 44.4 GB / S98 50.2 GB (all three had
+      pegged a full 750G node) and S454 7.4 GB / S474 9.5 GB / S583 7.3 GB (all three had OOM'd
+      at 64G). Roughly a 15× drop; none of these subbasins was ever big.
+      **Consequently the array tiering is retired (2026-09-19).**
+      `07_train_and_backfill_larger.sh` is deleted and `07_train_and_backfill.sh` now carries a
+      single `--array=1-674%30` at 128G / 8h / `--cpus-per-task=1` (single-threaded:
+      `BART::gbart`, not `mc.gbart`). No more complementary index lists to keep in sync, and no
+      more race risk from overlapping arrays. One index OOMing is now handled by
+      `sbatch --array=<i> --mem=256G 07_train_and_backfill.sh`, not by re-tiering.
       **Diagnostic note**: neither `.out`/`sacct` state nor `done` in `logs/Y2020_S*.log` proves
       success. `07_train_and_backfill.R`'s `tryCatch` makes a failed subbasin exit `COMPLETED`,
       and `08A:24`'s `on.exit(logp("done"))` fires on error unwind. Logs also *append* across
