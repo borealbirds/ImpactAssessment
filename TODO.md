@@ -32,6 +32,9 @@ never been edited — and so appeared in no diff-derived list — turned out to 
   `08B_deploy_gbart.R`, which would have written a different backfill layer set.
 - `12E_shapley_utils.R` had never been on the cluster at all; `12D:73` sources it, so C1 would
   have died on its first `source()` after queueing for a 384 G node.
+- The closure includes **data files**, not just scripts: `SpeciesPredictionTruncationValues.Rdata`
+  was recorded as "restaged" in B but Fir still had the old-schema copy, and the A7 smoke died
+  on `12F`'s `densmax` guard.
 
 Two mechanical gotchas found the same way:
 
@@ -60,6 +63,16 @@ Backfill and premosaic (A6) are done for 2020 — see **Completed**. Only A7 rem
       `sbatch --array=1 --time=01:00:00 --mem=192G --export=ALL,TEST_BCR=can60,TEST_N_BOOT=2 12D_repredict_all_coalitions.sh`
       The smoke writes real files: `CAWA_2020_coalition_*.rds` into `density_tables/` (can60
       only, 2 bootstraps) and per-pixel arrays into `arrays/`. **Wipe both again before C1.**
+      **Smoke 1 (job 61147703, 2026-09-23): 13097 / 113017 (11.6%)** — up from 1–3% but not ≫,
+      so A7 is NOT closed. The denominator includes the stack grid's 100 km buffer, which `11`
+      masks to NA and weight zeroes anyway; `12F` now also logs coverage among weight > 0
+      pixels plus per-var / per-subbasin NA counts.
+      **Smoke 2 (job 61160614): 11869 / 20931 weight > 0 (56.7%).** Every one of the 9062 lost
+      pixels is NA in one var, `SCANFIBalsamFir_5x5`, across 24 subbasins (most lost in full).
+      Cause: `08A:101–116` writes `<cov>_mean` instead of `_draw_*` where a covariate is constant
+      in a subbasin; the BCR mosaic then has draws elsewhere but NA there, and the gate drops it.
+      Fixed in `12F`: draw-less pixels take the `_mean` constant for every draw (logged as
+      `filled N draw-less superset pixels`). Staged. **Smoke 3 must show ~100% weight > 0.**
       C1 overwrites every coalition it writes, but `12D:131` skips an empty coalition without
       writing, so a smoke table could survive into C2 unnoticed.
 
@@ -85,10 +98,22 @@ Backfill and premosaic (A6) are done for 2020 — see **Completed**. Only A7 rem
 
 ## Loose ends
 
-- [ ] `12A` loads each full `b.list` `.Rdata` (up to 654 MB, off Google Drive) purely to read
-      `attr(b.list[[1]], "bcr")` — ~4.3 GB of I/O per species to extract 11 strings. The BCR code
-      is in the filename, and the `12D` preflight already derives it that way. Verify the filename
-      always equals the attribute, then drop the load. Matters at the planned ~60-species scale.
+- [ ] **Move `12A` to the cluster** (prerequisite for the planned 100+ species). Evidence
+      gathered 2026-09-23 that Elly's `def-ecknight/NationalModels/output/` is a sound source:
+      `06_bootstraps` and the 2020 `07_predictions` pair 1:1 (2,868 each, 1,686 Canadian); a
+      name+size comparison against G: over 32 of 151 species matched 4,504/4,505 common files
+      (the odd one is `AMPI_can3_1990`, not 2020); `q.out` covers exactly the same 151
+      species. `12A` reads only raw `07_predictions` + `06_bootstraps` filenames + our own
+      `SpeciesPredictionTruncationValues.Rdata`, so it does not depend on whether Elly ran
+      V5's truncation revision there. Remaining proof of byte-equivalence: run `12A` on the
+      cluster for CAWA into a scratch dir and diff against the G:-built
+      `observed_bootstraps.tif` / `truncation_params.rds`. Then set `cc <- TRUE`, add a `.sh`,
+      stage `12B_v5_truncate.R` (production path uses no G: resource: `apply_masks = FALSE`,
+      `project_to = NULL`), and drop the Globus step from CLAUDE.md.
+      **Done 2026-09-23**: `12A` no longer loads each `b.list` `.Rdata` (up to 654 MB, ~4.3 GB
+      per species) just to read `attr(b.list[[1]], "bcr")`; it parses the BCR from the
+      filename. `12F`, which loads `b.list` anyway, now `stop()`s if the attribute and the
+      filename disagree. Verified equal for all 25 CAWA/OVEN pairs.
 - [ ] Decide the fate of local `covariates_mosaiced_2020_PREORIG.tif` (1.5 G) — the only
       surviving pre-CAfire-fix 2020 mosaic.
 - [ ] `15C_singletons_plot.R:150` reads `predictions_coalitions/`, deleted on both ends, so the
@@ -128,7 +153,9 @@ Backfill and premosaic (A6) are done for 2020 — see **Completed**. Only A7 rem
 **B (V5 packaging conformance), 2026-09-11.** `12B_v5_truncate.R` ports `10.Truncate.R`;
 `12A` rewritten and re-run (all 25 stacks carry both caps + a frozen per-BCR `q99` in
 `truncation_params.rds`); `12F` reads `$densmax` behind a schema guard and applies
-`pmin(pmin(pred_vec, densmax), q99)`; `SpeciesPredictionTruncationValues.Rdata` restaged;
+`pmin(pmin(pred_vec, densmax), q99)`; `SpeciesPredictionTruncationValues.Rdata` restaged
+locally (the Fir copy was NOT — it was still the 2026-05-04 old-schema file until the first A7
+smoke hit `12F`'s schema guard on 2026-09-23; Globus'd then, 6387 bytes);
 `14B` drops withheld models (`DROP_WITHHELD`; the workbook's "remove" tab flags exactly one of
 our 25 pairs — CAWA can40); all 25 observed stacks Globus'd to the cluster (27/27, byte-exact).
 Gates: **G1** reproduces V5's `10_truncated` (flat terrain bit-identical). **G2** reproduces

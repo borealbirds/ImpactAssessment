@@ -158,14 +158,13 @@ params <- if (file.exists(params_path)) readRDS(params_path) else list()
 
 for (rdata_path in rdata_files) {
 
-  e <- new.env(parent = emptyenv())
-  load(rdata_path, envir = e)
-  if (!exists("b.list", envir = e)) {
-    message("  b.list not found in ", basename(rdata_path), " — skipping")
-    next
-  }
-  bcr_code <- attr(e$b.list[[1]], "bcr")
-  rm(e)
+  # BCR from the filename ({species}_{bcr}.Rdata), not from attr(b.list[[1]], "bcr"):
+  # loading b.list read up to 654 MB per file just to get this one string. 12F loads
+  # b.list anyway and stop()s if the attribute disagrees with the filename.
+  bcr_code <- sub(paste0("^", species, "_(.*)\\.Rdata$"), "\\1", basename(rdata_path))
+  if (!grepl("^can[0-9]+$", bcr_code))
+    stop("cannot parse a BCR code from ", basename(rdata_path),
+         " — expected {species}_can<N>.Rdata")
 
   obs_dir       <- file.path(ia_dir, "data/derived_data/predictions", species, bcr_code, year)
   obs_boot_path <- file.path(obs_dir, "observed_bootstraps.tif")

@@ -89,6 +89,13 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     }
 
     bcr_code <- attr(b.list[[1]], "bcr")
+    # 12A labels observed_bootstraps.tif and truncation_params.rds by the filename's
+    # BCR without loading b.list, so the two must agree or obs and bf would be paired
+    # across BCRs.
+    file_bcr <- sub(paste0("^", species, "_(.*)\\.Rdata$"), "\\1", basename(rdata_path))
+    if (!identical(bcr_code, file_bcr))
+      stop(species, " | ", basename(rdata_path), " carries bcr attribute '", bcr_code,
+           "' but its filename says '", file_bcr, "' - 12A labels by filename.")
     message(Sys.time(), " | working on species=", species, " BCR=", bcr_code)
 
     test_bcr_env <- Sys.getenv("TEST_BCR", "")
@@ -223,7 +230,7 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
            "over-count water, out-of-range and out-of-extent pixels.")
     weight_r <- terra::rast(weight_path)
     # Version stamp written by 12A2. Weights built before 2026-09-11 omit V5's
-    # mosaic crop to the BCR's own polygon (10.Truncate.R:146), which lets buffer
+    # per-subunit crop to the BCR's own polygon (10.Truncate.R:146), which lets buffer
     # pixels from neighbouring subunits into the density tables and double-counts
     # every subbasin straddling a BCR seam (329 of 674 do).
     w_name <- names(weight_r)[1]
@@ -254,6 +261,21 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
         mat_sec   <- mat_raw[super_idx, , drop = FALSE]; rm(mat_raw)
         mat_sec   <- expm1(mat_sec)
         mat_sec[!is.finite(mat_sec)] <- NA_real_
+        # Where v was constant across a subbasin's low-HF pixels, 08A skipped BART and
+        # wrote <v>_mean (raw scale, not log1p) instead of draws, so the BCR mosaic has
+        # no draws there. That constant IS the subbasin's backfill (08A cascades it into
+        # later covariates), so use it for every draw rather than letting the gate drop
+        # the subbasin (CAWA can60: SCANFIBalsamFir_5x5, 24 subbasins, 43% of weight>0).
+        mean_lyr <- paste0(v, "_mean")
+        if (mean_lyr %in% names(stack_bf)) {
+          const <- terra::values(stack_bf[[mean_lyr]], mat = FALSE)[super_idx]
+          fill  <- rowSums(!is.na(mat_sec)) == 0L & is.finite(const)
+          if (any(fill)) {
+            mat_sec[fill, ] <- const[fill]
+            message(Sys.time(), " | ", species, " ", bcr_code, " | ", v,
+                    ": filled ", sum(fill), " draw-less superset pixels from ", mean_lyr)
+          }
+        }
         pmax(mat_sec, 0)
       }), draw_covs)
 
@@ -313,10 +335,31 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     # the re-predicted field (M) and obs_on (via `keep`), so obs/bf parity is preserved.
     backfilled_vars <- intersect(c(draw_covs, cat_vars_shared), model_vars_shared)
     complete_mask <- stats::complete.cases(X_rep[, backfilled_vars, drop = FALSE])
-    rm(X_rep)
     message(Sys.time(), " | ", species, " ", bcr_code, " | complete superset pixels: ",
             sum(complete_mask), " / ", length(super_idx),
             " (", round(100 * mean(complete_mask), 1), "%)")
+    # The line above counts the stack grid's 100 km buffer, where 11 masked the
+    # backfill to NA but weight is 0 anyway, so dropping those pixels is harmless.
+    # Coverage that matters is among weight > 0 pixels; break down any loss there.
+    in_w <- is.finite(weight_super) & weight_super > 0
+    message(Sys.time(), " | ", species, " ", bcr_code, " | complete weight>0 superset pixels: ",
+            sum(complete_mask & in_w), " / ", sum(in_w),
+            " (", round(100 * sum(complete_mask & in_w) / max(1L, sum(in_w)), 1), "%)")
+    lost <- in_w & !complete_mask
+    if (any(lost)) {
+      na_by_var <- vapply(backfilled_vars, function(v) sum(is.na(X_rep[[v]][lost])), integer(1))
+      na_by_var <- sort(na_by_var[na_by_var > 0], decreasing = TRUE)
+      message(Sys.time(), " | ", species, " ", bcr_code, " | NA among lost weight>0 pixels, by var: ",
+              paste0(names(na_by_var), "=", na_by_var, collapse = ", "))
+      zone_lbl   <- ifelse(is.na(super_zones), "none", as.character(super_zones))
+      lost_zones <- sort(table(zone_lbl[lost]), decreasing = TRUE)
+      tot_zones  <- table(zone_lbl[in_w])
+      message(Sys.time(), " | ", species, " ", bcr_code, " | lost weight>0 pixels span ",
+              length(lost_zones), " subbasin zone(s) (HYBAS_ID=lost/total): ",
+              paste0(names(lost_zones), "=", as.integer(lost_zones), "/",
+                     as.integer(tot_zones[names(lost_zones)]), collapse = ", "))
+    }
+    rm(X_rep, in_w, lost)
 
     # ---- Joint BRT x BART sampling over the SUPERSET (the expensive part, ONCE)
     # Worker i returns an [n_super x n_scen] matrix of capped birds/ha predictions
