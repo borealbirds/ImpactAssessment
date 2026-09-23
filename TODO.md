@@ -1,4 +1,4 @@
-# TODO — consolidated plan (last updated 2026-09-15)
+# TODO — consolidated plan (last updated 2026-09-23)
 
 Open work is the cluster backfill re-run (**A**) and the converge steps (**C**). Workstream
 **B** (conform density to current V5 packaging) is finished and validated — gates G1–G4 all
@@ -8,12 +8,11 @@ the `project_pipeline_history` memory.
 ## Critical path
 
 ```
-cluster:  A6 sbatch 07 (674 tasks) ─► sbatch 11 ─┐
-                                                 ├─► 12D smoke ─► C1 12D ─► C2 14B ─► C3
-local:    [B, G1–G4 all DONE] ───────────────────┘
+cluster:  [A6 07 + 11 DONE] ─► 12D smoke = A7 ─► wipe ─► C1 12D ─┐
+local:    [B, G1–G4 DONE]                                        ├─► C2 14B ─► C3
 ```
 
-`07` is the long pole and depends on nothing in B, so **A6 is the next action**.
+A6 closed 2026-09-22, so **the `12D` smoke is the next action** — and it doubles as A7.
 
 **Blocker for every cluster step**: SSH is keyboard-interactive (2FA), so cluster commands must
 be run from your own authenticated session. Globus works (one file per call, **never** `--batch`).
@@ -52,44 +51,23 @@ renumbering; `12A` is local-only by design).
 
 ## A. CAfire / phenology backfill re-run (cluster)
 
-All fixes (CAfire recode, Fix A, Fix B, the `12D` weight preflight) are committed as of `6455756` and staged; the compute has never been launched. Prerequisites
-(cleanup, weight rebuild 25/25, `07` smoke) are all done — see **Completed**.
+All fixes (CAfire recode, Fix A, Fix B, the `12D` weight preflight) are committed and staged.
+Backfill and premosaic (A6) are done for 2020 — see **Completed**. Only A7 remains.
 
-- [ ] **A6.** ~~`sbatch 07_train_and_backfill.sh`~~ **DONE — 674/674 on 2026-09-19.** Remaining
-      half is `sbatch 11_premosaic_backfilled_stacks.sh`, which must NOT run until the
-      `_confusion.rds` count reads 674 (`11:71` silently drops non-existent paths and `11:189`
-      skips BCRs whose mosaic already exists, so a hole would be baked in permanently).
-      **Run 1 (jobs `60009763` large / `60010888` small) finished 668/674 on 2026-09-16.** The
-      six gaps were all `OUT_OF_MEMORY` with MaxRSS pegged exactly at the request: 57, 62, 98 at
-      750G and 454, 474, 583 at 64G. Cause was **not** subbasin size — S454 (`ncell=45288`) died
-      at 64G while S5 (`ncell=44896`) succeeded — but allocation churn in `08A`'s raster
-      assembly, where `result_raster[[j]] <- v` copied the whole ~2000-layer stack on each of
-      ~2000 assignments. Patched 2026-09-16 (`73e8b68`) to fill one `ncell x nlyr` matrix and
-      call `terra::values()` once. Mixing patched and unpatched outputs is safe — the patch
-      changes assembly only, no modelled value.
-      **Run 2 (job `60134338`, the six reruns) all COMPLETED `0:0` on 2026-09-17**, confirming
-      the diagnosis quantitatively: S57 50.8 GB / S62 44.4 GB / S98 50.2 GB (all three had
-      pegged a full 750G node) and S454 7.4 GB / S474 9.5 GB / S583 7.3 GB (all three had OOM'd
-      at 64G). Roughly a 15× drop; none of these subbasins was ever big.
-      **Consequently the array tiering is retired (2026-09-19).**
-      `07_train_and_backfill_larger.sh` is deleted and `07_train_and_backfill.sh` now carries a
-      single `--array=1-674%30` at 128G / 8h / `--cpus-per-task=1` (single-threaded:
-      `BART::gbart`, not `mc.gbart`). No more complementary index lists to keep in sync, and no
-      more race risk from overlapping arrays. One index OOMing is now handled by
-      `sbatch --array=<i> --mem=256G 07_train_and_backfill.sh`, not by re-tiering.
-      **Diagnostic note**: neither `.out`/`sacct` state nor `done` in `logs/Y2020_S*.log` proves
-      success. `07_train_and_backfill.R`'s `tryCatch` makes a failed subbasin exit `COMPLETED`,
-      and `08A:24`'s `on.exit(logp("done"))` fires on error unwind. Logs also *append* across
-      runs, so they cannot isolate one run. The oracle is the filesystem: `_confusion.rds` is
-      written last, plus an mtime check so pre-CAfire-fix leftovers cannot pass as fresh.
-- [ ] **A7.** Validate Fix A — the only fix never tested. The `12F` runtime line
-      `complete superset pixels: N / M (X%)` must be ≫ the old 1–3%.
+- [ ] **A7.** Validate Fix A — the only fix never tested. Run it on the `12D` smoke, not the
+      full run: the `12F` runtime line `complete superset pixels: N / M (X%)` must be ≫ the old
+      1–3%. If it is not, stop — do not burn the 2 × 24 h C1 run.
+      `sbatch --array=1 --time=01:00:00 --mem=192G --export=ALL,TEST_BCR=can60,TEST_N_BOOT=2 12D_repredict_all_coalitions.sh`
+      The smoke writes real files: `CAWA_2020_coalition_*.rds` into `density_tables/` (can60
+      only, 2 bootstraps) and per-pixel arrays into `arrays/`. **Wipe both again before C1.**
+      C1 overwrites every coalition it writes, but `12D:131` skips an empty coalition without
+      writing, so a smoke table could survive into C2 unnoticed.
 
 ## C. Converge
 
-- [ ] **C1.** `sbatch 12D_repredict_all_coalitions.sh` (`--array=1-2`). The pre-run wipe of
-      `density_tables/*.rds` **and** `arrays/*.rds` already happened; redo it only if anything
-      writes there first. Old tables are stale on three counts: pre-weighting, pre-gate-change
+- [ ] **C1.** `sbatch 12D_repredict_all_coalitions.sh` (`--array=1-2`). Redo the wipe of
+      `density_tables/*.rds` **and** `arrays/*.rds` first — the A7 smoke writes to both.
+      Old tables are stale on three counts: pre-weighting, pre-gate-change
       (A), pre-truncation-conformance (B).
 
       **Watch for one guarded-not-fixed condition.** `complete_mask` is built from draw column 1
@@ -119,6 +97,21 @@ All fixes (CAfire recode, Fix A, Fix B, the `12D` weight preflight) are committe
 ---
 
 ## Completed
+
+**A6 (backfill + premosaic), 2026-09-16 → 09-22**
+- `07`: 674/674. Run 1 left six `OUT_OF_MEMORY` gaps (57, 62, 98 at 750G; 454, 474, 583 at
+  64G) caused by allocation churn in `08A`'s assembly, not subbasin size. Fixed in `73e8b68`;
+  the six reruns peaked at 7–51 GB. The 64G/750G array tiering is retired (`12f1ad6`): one
+  `--array=1-674%30` at 128G. Oracle for `07` is `_confusion.rds` + mtime — `tryCatch` makes a
+  failed subbasin exit `COMPLETED` and the logs append across runs.
+- `11`: 19/19 BCR mosaics, job `60806856`, written 2026-09-21 16:20 → 09-22 11:00, every
+  `.out` ending `done.`. A first submission (`60564008`, 09-19) was a no-op: the 19 stale
+  2026-05-24 mosaics had never actually been deleted, so `11:187`'s skip-if-exists guard
+  `quit(status = 0)`'d every task in seconds and `sacct` reported all 19 `COMPLETED 0:0`.
+  **Oracle for `11` is the `.out`, not `sacct`**: three code paths exit 0 without writing
+  (`:189` exists, `:202` no subbasins, `:216` no backfills), and `terra::mask(filename=)`
+  streams, so a killed task leaves a readable truncated `.tif` that the guard would later
+  accept. Only `:241–242`'s `masked and written to` / `done.` prove the write returned.
 
 **A (cluster prep), 2026-09-11 → 09-14**
 - Cleanup: pre-fix `covariates_mosaiced_{1990..2015}.tif`, `predictions_coalitions/`,
