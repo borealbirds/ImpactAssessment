@@ -22,6 +22,21 @@
 # disturbance_vars, biotic_continuous_vars, q.out, l.out, and the 12E helpers
 # canonical_sectors() / coalition_id_to_sectors() / sectors_to_coalition_id().
 
+# Categorical columns as factors in THIS model's own level set. Each bootstrap is fitted
+# to a different resample, so their var.levels differ (CAWA can14: 28 of 32 bootstraps
+# know VLCE_1km classes 32/40 that bootstrap 1 never saw). predict.gbm matches labels
+# against the model's own levels, and V5's observed layers were made that way; converting
+# with bootstrap 1's levels sent those classes down the missing branch in every other
+# bootstrap (can14, bootstrap 32: 155 cells off V5, caught by the identity gate).
+as_model_factors <- function(X, model, vars) {
+  for (v in vars) if (v %in% names(X)) {
+    lvls <- model$var.levels[[match(v, model$var.names)]]
+    if (is.null(lvls) || length(lvls) == 0L) next
+    X[[v]] <- factor(as.character(X[[v]]), levels = as.character(lvls))
+  }
+  X
+}
+
 # rdata_files: the bootstrap .Rdata files to run (default: every BCR of the species, in
 #   list.files() order). 12D passes one file per array task.
 # return_per_bcr: TRUE returns the per-BCR results (NULL-free list) for 12D to save, and
@@ -180,6 +195,9 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
 
     # bootstrap-invariant quantities (identical to predict_species_bcr) -------------------------
     model_vars_shared  <- b.list[[1]]$var.names
+    if (!all(vapply(b.list, function(m) identical(m$var.names, model_vars_shared), logical(1L))))
+      stop(species, " ", bcr_code, ": bootstraps do not share one var.names - the ",
+           "*_shared quantities below assume they do")
     cat_vars_shared    <- intersect(model_vars_shared, categorical_responses)
     dist_shared        <- intersect(disturbance_vars$predictor, model_vars_shared)
     biotic_cont_shared <- intersect(setdiff(model_vars_shared, categorical_responses),
@@ -188,11 +206,9 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     # reads model$var.names (~17), so reading the rest cost ~2/3 of the draw I/O and memory.
     draw_covs <- intersect(draw_covs, model_vars_shared)
 
-    cat_levels_shared <- setNames(
-      lapply(cat_vars_shared, function(v)
-        as.character(b.list[[1]]$var.levels[[match(v, model_vars_shared)]])),
-      cat_vars_shared)
-    null_cat_vars <- names(Filter(function(x) is.null(x) || length(x) == 0L, cat_levels_shared))
+    # Levels are per bootstrap (as_model_factors); this only reports model 1's empty ones.
+    null_cat_vars <- cat_vars_shared[vapply(cat_vars_shared, function(v)
+      length(b.list[[1]]$var.levels[[match(v, model_vars_shared)]]) == 0L, logical(1L))]
     if (length(null_cat_vars) > 0L)
       message(Sys.time(), " | WARNING: ", species, " ", bcr_code,
               " | var.levels empty for categorical var(s) ",
@@ -359,11 +375,9 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     X_rep <- X_obs_super
     for (v in cat_vars_shared) if (v %in% names(X_rep)) X_rep[[v]] <- cat_vals_super[[v]]
     for (v in dist_shared)     if (v %in% names(X_rep)) X_rep[[v]] <- 0
-    for (v in cat_vars_shared) if (v %in% names(X_rep)) {
-      lvls <- cat_levels_shared[[v]]
-      if (!is.null(lvls) && length(lvls) > 0L)
-        X_rep[[v]] <- factor(as.character(X_rep[[v]]), levels = lvls)
-    }
+    # Categoricals are gated on the RAW backfilled class, not on a factor: a class some
+    # bootstrap never saw is not missing backfill, and each model routes it as predict.gbm
+    # would (its missing branch), exactly as V5 treated such classes on the observed side.
     for (v in draw_covs) if (v %in% names(X_rep)) X_rep[[v]] <- draw_vals_super[[v]][, 1L]
     # Gate ONLY on the BACKFILLED covariates we inject (continuous biotic draws +
     # backfilled categoricals). Observed-only covariates (climate, soil, terrain,
@@ -417,27 +431,28 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     # use and compare it with observed_bootstraps.tif, which is V5's prediction clamped by
     # 12A. Any gap is a difference in HOW the two sides are predicted, and it would land in
     # bf - obs as a fake impact: this is how the NaN/NA mismatch above was found
-    # (2026-09-24). Pixels with a missing covariate are over-sampled because that is where
-    # such rules diverge. Testing the first and last bootstrap also checks that b.list[[i]]
-    # pairs with observed layer i. Tolerance covers only the float32 storage of the tif.
+    # (2026-09-24), and the per-bootstrap categorical levels (can14). Pixels with a missing
+    # covariate or a class some bootstrap never saw are over-sampled because that is where
+    # such rules diverge. Every bootstrap is tested (~0.15 s each), which also checks that
+    # b.list[[i]] pairs with observed layer i. Tolerance covers only the tif's float32 storage.
     spread  <- function(p, k) p[unique(round(seq(1, length(p), length.out = min(k, length(p)))))]
     na_rows <- pred_rows[!stats::complete.cases(X_obs_super[pred_rows, , drop = FALSE])]
-    id_rows <- sort(unique(c(spread(pred_rows, 1500L), spread(na_rows, 1500L))))
+    odd_cls <- Reduce(`|`, lapply(cat_vars_shared, function(v) {
+      common <- Reduce(intersect, lapply(b.list, function(m)
+        as.character(m$var.levels[[match(v, m$var.names)]])))
+      x <- X_obs_super[[v]][pred_rows]
+      !is.na(x) & !(as.character(x) %in% common)
+    }), rep(FALSE, length(pred_rows)))
+    cls_rows <- pred_rows[odd_cls]
+    id_rows <- sort(unique(c(spread(pred_rows, 1500L), spread(na_rows, 1500L), spread(cls_rows, 1500L))))
     if (length(id_rows) > 0L) {
       X_id <- X_obs_super[id_rows, , drop = FALSE]
-      for (v in cat_vars_shared) if (v %in% names(X_id)) {
-        lvls <- cat_levels_shared[[v]]
-        if (is.null(lvls) || length(lvls) == 0L) next
-        X_id[[v]] <- factor(as.character(X_id[[v]]), levels = lvls)
-      }
       obs_chk <- terra::rast(obs_boot_path)
-      for (i in unique(c(1L, n_boot))) {
-        p_id <- pmin(pmin(gbm_predict_design(b.list[[i]], gbm_design(b.list[[i]], X_id)), qsp), q99)
+      for (i in seq_len(n_boot)) {
+        X_i  <- as_model_factors(X_id, b.list[[i]], cat_vars_shared)
+        p_id <- pmin(pmin(gbm_predict_design(b.list[[i]], gbm_design(b.list[[i]], X_i)), qsp), q99)
         o_id <- terra::values(obs_chk[[i]], mat = FALSE)[super_idx[id_rows]]
         bad  <- is.finite(o_id) & !(abs(p_id - o_id) <= 1e-5 * abs(o_id) + 1e-30)
-        message(Sys.time(), " | ", species, " ", bcr_code, " | identity gate, bootstrap ", i,
-                ": ", sum(!bad), "/", length(id_rows), " observed-design predictions match V5 (",
-                length(na_rows), " predicted pixels carry a missing covariate)")
         if (any(bad))
           stop(species, " ", bcr_code, ": identity gate failed for bootstrap ", i, " - ",
                sum(bad), " of ", length(id_rows), " pixels predicted from the OBSERVED ",
@@ -445,7 +460,11 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
                signif(max(abs(p_id - o_id)[bad] / abs(o_id[bad])), 3), "). The bf side would ",
                "be predicted by a different rule than the obs side it is differenced against.")
       }
-      rm(X_id, obs_chk, p_id, o_id, bad)
+      message(Sys.time(), " | ", species, " ", bcr_code, " | identity gate: all ", n_boot,
+              " bootstraps reproduce V5 at ", length(id_rows), "/", length(id_rows),
+              " observed-design pixels (predicted pixels with a missing covariate: ",
+              length(na_rows), "; with a class some bootstrap never saw: ", length(cls_rows), ")")
+      rm(X_id, X_i, obs_chk, p_id, o_id, bad)
     }
 
     # ---- coalition membership, ONCE (shared by the workers and the obs-side reduce) ----
@@ -457,6 +476,8 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     w_c        <- weight_super[c_rows]
     zones_c    <- super_zones[c_rows]
     n_sub      <- length(sub_ids)
+    if (anyDuplicated(hybas_ids)) stop(species, " ", bcr_code, ": duplicate first_HYBAS_ID")
+    zi_c       <- match(zones_c, hybas_ids)            # subbasin row of each complete row
     coal_state <- integer(length(all_cids))
     keep_rows  <- vector("list", length(all_cids))
     for (ci in seq_along(all_cids)) {
@@ -507,11 +528,7 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
         X_k <- X_pred
         for (v in cat_vars_shared) if (v %in% names(X_k)) X_k[[v]] <- cat_vals_pred[[v]]
         for (v in dist_shared)     if (v %in% names(X_k)) X_k[[v]] <- 0
-        for (v in cat_vars_shared) if (v %in% names(X_k)) {
-          lvls <- cat_levels_shared[[v]]
-          if (is.null(lvls) || length(lvls) == 0L) next
-          X_k[[v]] <- factor(as.character(X_k[[v]]), levels = lvls)
-        }
+        X_k  <- as_model_factors(X_k, model, cat_vars_shared)
         dcol <- match(draw_covs, model$var.names)           # NA: not read by this model
         for (v in draw_covs) if (v %in% names(X_k)) {
           dv <- draw_vals_pred[[v]]
@@ -522,7 +539,14 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
         rm(X_k)
       }
 
-      sc <- matrix(NA_real_, nrow = n_c, ncol = n_scen)
+      # Memory. A forked worker inherits the parent's GC trigger, which the BART-draw
+      # reads push to ~10-15 GB on the big BCRs, so each worker may pile up that much
+      # garbage before R collects; 8 workers doing so OOM-ed C1 at 64G (can12/13/80, the
+      # last 80 s into sampling on only 56k rows). So the loop allocates only per-draw
+      # vectors and collects them itself. gc(full = FALSE) scans only young objects (the
+      # worker's own), so it is cheap and does not copy the parent's heap as a full one would.
+      sc    <- matrix(NA_real_, nrow = n_c, ncol = n_scen)
+      n_bad <- 0
       for (d in unique(key)) {
         ks     <- which(key == d)
         pred_c <- numeric(n_c)                      # complete rows with weight 0 stay 0
@@ -534,33 +558,32 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
           }
           pred_c[pred_in_c] <- gbm_predict_design(model, D)
         }
-        # both V5 upper caps, in 10.Truncate.R order (densmax then the frozen q99)
-        sc[, ks] <- pmin(pmin(pred_c, qsp), q99)
+        # both V5 upper caps, in 10.Truncate.R order (densmax then the frozen q99), then
+        # the prediction weight (V5 order: truncate, then range-multiply); symmetric with
+        # the observed side, so bf - obs stays w*(bf - obs)
+        sc_d <- pmin(pmin(pred_c, qsp), q99) * w_c
+        # NA audit. The reduce below has no na.rm, so one NA in a kept pixel NA-s that
+        # subbasin's ENTIRE bf total while the obs side zeroes its NAs -- a one-sided loss.
+        # complete_mask is built from draw 1 as a proxy for all 100 draws, so a pixel
+        # complete in draw 1 can still be NA in the draw a scenario picked.
+        n_bad <- n_bad + length(ks) * sum(is.na(sc_d))
+        sc[, ks] <- sc_d
+        rm(pred_c, sc_d); invisible(gc(full = FALSE))
       }
-      # apply the prediction weight AFTER the clamps (V5 order: truncate, then
-      # range-multiply); symmetric with the observed side, so bf - obs stays w*(bf - obs)
-      sc <- sc * w_c
 
-      # NA audit, per bootstrap. rowsum() below has no na.rm, so one NA in a kept pixel
-      # NA-s that subbasin's ENTIRE bf total while the obs side zeroes its NAs -- a
-      # one-sided loss. complete_mask is built from draw 1 as a proxy for all 100 draws,
-      # so a pixel complete in draw 1 can still be NA in the draw a scenario picked.
-      n_bad <- sum(is.na(sc))
-
+      # x100: birds/ha -> birds/km2. coal_rowsum = rowsum(sc[kr, ], zones_c[kr]) placed on
+      # the n_sub subbasin rows (absent subbasin -> 0), without copying sc[kr, ] 255 times.
       bf <- lapply(seq_along(all_cids), function(ci) {
         if (coal_state[ci] != 2L) return(NULL)
-        kr  <- keep_rows[[ci]]
-        # x100: birds/ha -> birds/km2
-        rs  <- rowsum(sc[kr, , drop = FALSE], group = zones_c[kr], reorder = TRUE) * 100
-        out <- matrix(0, nrow = n_sub, ncol = n_scen)          # bf: absent subbasin -> 0
-        map <- match(hybas_ids, rownames(rs))
-        pres <- !is.na(map)
-        if (any(pres)) out[pres, ] <- rs[map[pres], , drop = FALSE]
-        out
+        coal_rowsum(sc, keep_rows[[ci]], zi_c, n_sub) * 100
       })
       list(bf = bf, n_bad = as.numeric(n_bad))
-    }, mc.cores = n_cores)
+    }, mc.cores = n_cores, mc.preschedule = FALSE)   # one fork per bootstrap, freed on exit
 
+    # A worker the kernel kills (e.g. out of memory) returns NULL, not a try-error.
+    died   <- vapply(boot_res, is.null, logical(1L))
+    if (any(died)) stop(sprintf("%s %s | %d/%d bootstrap workers died without a result (most likely killed out of memory: check the job log for oom_kill and raise --mem)",
+                                species, bcr_code, sum(died), length(boot_res)))
     failed <- vapply(boot_res, inherits, logical(1L), "try-error")
     if (any(failed)) stop(sprintf("%s %s | %d/%d bootstrap workers failed: %s",
                                   species, bcr_code, sum(failed), length(boot_res),
@@ -588,8 +611,7 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     if (is.null(dim(obs_total_byboot)))
       obs_total_byboot <- matrix(obs_total_byboot, nrow = length(sub_ids))
 
-    rm(stack_obs, stack_bf, obs_preds, X_pred, draw_vals_pred, cat_vals_pred,
-       b.list, cat_levels_shared); gc()
+    rm(stack_obs, stack_bf, obs_preds, X_pred, draw_vals_pred, cat_vals_pred, b.list); gc()
 
     # combine_stats: identical math to predict_species_bcr (column order is irrelevant to mean/sd)
     combine_stats <- function(mat) {

@@ -12,8 +12,9 @@ cluster:  [A7 DONE] ─► [D: NaN fix + 12F/12G speedups + per-BCR split] ─�
 local:    [B, G1–G4 DONE]                                                                                  ├─► C2 14B ─► C3
 ```
 
-**Next action: wipe, then C1** (see C below). Smoke 7 passed on both species 2026-09-24. The C1
-submitted earlier on 2026-09-24 predated the NaN fix and was cancelled.
+**Next action: stage the fixed 12F/12G, wipe, then C1** (see C below). C1 attempt 1 (2026-09-24)
+found two defects in its first 11 tasks — worker OOM and per-bootstrap categorical levels — both
+fixed (see D). Every earlier C1 was pre-NaN-fix and was cancelled.
 
 **Blocker for every cluster step**: SSH is keyboard-interactive (2FA), so cluster commands must
 be run from your own authenticated session. Globus works (one file per call, **never** `--batch`).
@@ -160,6 +161,37 @@ CAWA can11's real models and stack (harnesses in the session scratchpad; see mem
       24 s, `nice.`. **12H PASSED** (job `61342818`): both files from one `code_md5`, `n_boot` 2,
       `wrote 255 coalition tables` + `wrote 9 array files` for each species, `nice.`. The smoke
       left real can60 files in `density_tables/`, `arrays/` and `by_bcr/` — C1's wipe covers all three.
+- [x] **C1 attempt 1 (job `61344103`, 2026-09-24) — cancelled after the first 11 tasks exposed two
+      defects.** Timings were excellent where tasks finished: CAWA can10 32 boots in 7.5 min
+      (sampling 5 min on 8 cores; smoke 5's old code took 17 min for 2 boots), can40 1.5 min,
+      can60 2 min, can71 1 min. Every weight > 0 superset was ≥ 99.998% complete.
+      (1) **OOM at 64G** — can12, can13, can80, the last 80 s into sampling on only 56k complete
+      rows, so not data size. Workers inherit the parent's GC trigger (inflated to ~10–15 GB by
+      the draw reads), and 255 `sc[kr, ]` copies per bootstrap fed each one garbage up to it.
+      Fixed: `coal_rowsum()` (C++, no copy; `identical()` to the old path on 200 random cases),
+      weight/NA audit folded into the per-draw loop, `gc(full = FALSE)` per draw, one fork per
+      bootstrap. A killed worker is now reported as such (it returned `NULL`, which the old check
+      turned into an opaque `vapply` error).
+      (2) **Identity gate, can14 bootstrap 32: 3/2986 off V5** (max rel diff 1%). Cause: 12F
+      factor-converted categoricals with bootstrap 1's `var.levels` for all 32, but levels differ
+      per bootstrap. Proven locally on all 837,600 can14 cells: bootstrap-1 levels → 155 cells
+      off V5; each model's own levels → 0. Fixed with `as_model_factors()`; the complete-case gate
+      now tests the raw backfilled class. The gate did its job — without it this would have gone
+      into the tables unseen (any bootstrap 2–31 was never checked).
+      Regression: new 12F on local can60 is `identical()` to Fir's smoke 7 (255 tables, 9 arrays),
+      and at 4 boots `identical()` to HEAD run locally. Against Fir's C1 can60, 4 of 400 cid-2
+      array cells differ by 1 ulp in bootstraps 3–4 — for HEAD and the new code alike, so it is
+      Fir-vs-Windows floating point, not the change; tables were identical.
+      **Full tally of attempt 1** (21 of 25 tasks ran before it was stopped): OOM in 9 — CAWA
+      can11/12/13/61/80/81, OVEN can10/11/12; gate failure in 4, all bootstrap 32 — CAWA can14,
+      OVEN can14/41/70. All four gate failures proven locally over every cell of the BCR: bootstrap-1
+      levels put 155 / 219 / 12,230 / 3,752 cells off V5 (max rel diff 1.9% / 271% / 99.8% / 27%);
+      each model's own levels put 0 off. OVEN can70's bootstrap 1 is the ODD one out (it lacks
+      MODISLCC_1km classes 3/16 that all 31 others know). Old per-BCR outputs saved in
+      `cluster_logs/c1_old/` for a Fir-vs-Fir check after the rerun: CAWA can10/40/60/71 and OVEN
+      can13/60 must come back `identical()`; OVEN can40 must NOT — its 10 lost weight > 0 pixels
+      were lost only to MODISLCC classes unknown to bootstrap 1, and the new gate keeps them
+      (likewise OVEN can41's 6, which never finished).
 - [ ] **Decision (yours): BART draws per bootstrap.** 100 scenarios drawn with replacement give
       ~64 distinct draws per bootstrap. Smoke-6 arrays (CAWA can60, 2 boots): for the full
       coalition the bootstrap spread is 5× the BART spread, so scenario count barely matters;

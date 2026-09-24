@@ -102,3 +102,35 @@ NumericVector gbm_tree_walk(NumericMatrix X, List trees, List csplits, IntegerVe
   }
   return out;
 }
+
+// rowsum(sc[kr, ], zones[kr], reorder = TRUE) placed on n_sub subbasin rows (a subbasin
+// with no kept row stays 0), without materialising sc[kr, ]: 12F used to copy that once
+// per coalition, 255 times per bootstrap, and the garbage helped OOM C1's workers.
+// R's rowsum (src/main/unique.c) zeroes its result and adds x[j, col] in row order for
+// each column; this does the same additions in the same order, so it is bit-identical.
+// kr: 1-based, ascending rows of sc. zi: 1-based subbasin row of every row of sc, NA if none.
+// [[Rcpp::export]]
+NumericMatrix coal_rowsum(NumericMatrix sc, IntegerVector kr, IntegerVector zi, int n_sub) {
+  const int n = sc.nrow(), p = sc.ncol(), m = kr.size();
+  if (zi.size() != n) stop("coal_rowsum: zi must have one entry per row of sc");
+  const int* k = INTEGER(kr);
+  const int* z = INTEGER(zi);
+  for (int a = 0; a < m; a++) {
+    if (k[a] < 1 || k[a] > n || (a > 0 && k[a] <= k[a - 1]))
+      stop("coal_rowsum: kr must be ascending row numbers of sc");
+    if (z[k[a] - 1] != NA_INTEGER && (z[k[a] - 1] < 1 || z[k[a] - 1] > n_sub))
+      stop("coal_rowsum: zi out of range");
+  }
+  NumericMatrix out(n_sub, p);
+  const double* x = REAL(sc);
+  double* o = REAL(out);
+  for (int j = 0; j < p; j++) {
+    const double* xj = x + (size_t)j * n;
+    double* oj = o + (size_t)j * n_sub;
+    for (int a = 0; a < m; a++) {
+      const int r = k[a] - 1, g = z[r];
+      if (g != NA_INTEGER) oj[g - 1] += xj[r];
+    }
+  }
+  return out;
+}

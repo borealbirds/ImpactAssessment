@@ -61,7 +61,7 @@ Scripts are numbered in execution order:
 | `12B_v5_truncate.R` | sourced | `v5_truncate()`: line-for-line port of V5 `analysis/10.Truncate.R` (as of V5 `f082866`). Applies both upper caps (`densmax`, then the 99.9th-percentile `q99`) and the range/water/extent masks. Sourced by `12A` only, so it is local-only by design and is deliberately NOT staged on the cluster; `q99` can be passed in frozen and the legacy EPSG:3978 step skipped |
 | `12C_build_prediction_weights.R` + `.sh` | cluster | Build per-species×BCR `weight.tif` (= range membership × not-water × inside-data-limit × **inside the BCR's own polygon**), replicating V5 `10.Truncate` range/water/extent/mosaic masking; all four terms use `touches = TRUE` (Open Limitation #7). Reads source masks from `data/raw_data/v5_gis/` (no G: access); grid template is the BCR stack. Run ONCE before 12D. 12F multiplies BOTH observed and backfilled density by this weight, preserving obs/bf symmetry (`w·bf − w·obs = w·(bf − obs)`). |
 | `12D_repredict_all_coalitions.R` + `.sh` | cluster | Entry point: re-predict bird densities for ALL 255 coalitions, ONE SLURM array task per species × BCR (`coalition_task_table()` in 12F: every species' `06_bootstraps` files in `list.files()` order; 25 tasks for CAWA + OVEN). Sources 12E, 12F, 12G (and compiles `12G_gbm_tree_walk.cpp`); writes one `density_tables/by_bcr/{species}_{year}_{bcr}.rds` per task (atomically; a BCR 12F skips is still written, with `result = NULL`). Requires `observed_bootstraps.tif` present (hard error if missing — observed rasters are now always staged on the cluster). |
-| `12G_gbm_tree_walk.R` + `.cpp` | sourced | Bit-identical replacement for gbm's compiled tree walk (`gbm_pred`), 3.6–4.4× faster: gbm makes three R API calls per node visited, this hoists them. `gbm_design()` builds predict.gbm's design matrix once per bootstrap; `gbm_check_fast()` `stop()`s in every 12F worker unless the fast path is `identical()` to `predict.gbm` |
+| `12G_gbm_tree_walk.R` + `.cpp` | sourced | Bit-identical replacement for gbm's compiled tree walk (`gbm_pred`), 3.6–4.4× faster: gbm makes three R API calls per node visited, this hoists them. `gbm_design()` builds predict.gbm's design matrix once per bootstrap; `gbm_check_fast()` `stop()`s in every 12F worker unless the fast path is `identical()` to `predict.gbm`. The `.cpp` also holds `coal_rowsum()`, 12F's copy-free, bit-identical coalition `rowsum` |
 | `12H_merge_bcr_tables.R` + `.sh` | cluster | Run after 12D (`--dependency=afterany`). Checks every expected species × BCR has a per-BCR result (names the array indices to resubmit if not), that all came from one version of 12E/12F/12G (`code_md5`), then binds them in `06_bootstraps` order → `density_tables/{species}_{year}_coalition_{cid}.rds` (cid 2..256) and `arrays/`, bit-identical to the old one-job-per-species output |
 | `12E_shapley_utils.R` | sourced | Coalition enumeration, Shapley value computation utilities |
 | `12F_predict_species_all_coalitions.R` | sourced | `predict_species_all_coalitions()`: builds the backfilled field ONCE per species×BCR over the all-8-sectors superset, then reduces all 255 coalitions as cheap masked `rowsum`s (verified bit-identical to the retired per-coalition path). Runs joint BRT×BART sampling; each bootstrap worker reduces its own field to per-coalition subbasin sums, so the full pixels × 3200 matrix is never built. `rdata_files` / `return_per_bcr` let 12D run one BCR; `combine_bcr_results()` (used by 12H) does the cross-BCR bind. Also holds `coalition_task_table()` and `coalition_array_ids()`. |
@@ -219,15 +219,29 @@ sbatch --dependency=afterany:<smoke job id> --export=ALL,TEST_BCR=can60,TEST_N_B
   is built. `SurfaceWater_1km` is gbm-categorical (`var.type` 2, levels "0","1") but not in
   `categorical_responses`, so it is passed raw as V5 did; that is correct only because its
   levels are exactly "0","1", and a raw `NaN` there is undefined behaviour in `gbm_pred`.
-- **Identity gate.** Before sampling, 12F predicts the first and last bootstrap from the
-  OBSERVED design (nothing backfilled) through the workers' exact path and `stop()`s unless it
-  reproduces `observed_bootstraps.tif` (float32 tolerance), over-sampling pixels with a missing
-  covariate. It catches any obs/bf rule divergence, and a `b.list[[i]]` ↔ observed layer `i`
-  mis-pairing.
+- **Identity gate.** Before sampling, 12F predicts EVERY bootstrap from the OBSERVED design
+  (nothing backfilled) through the workers' exact path and `stop()`s unless it reproduces
+  `observed_bootstraps.tif` (float32 tolerance), over-sampling pixels with a missing covariate or
+  with a class some bootstrap never saw. It catches any obs/bf rule divergence, and a
+  `b.list[[i]]` ↔ observed layer `i` mis-pairing. (It tested only bootstraps 1 and 32 until
+  2026-09-24; the categorical-levels bug below showed that was too thin.)
 - **Per-bootstrap reduction.** Workers return per-coalition `[n_sub × n_scen]` sums, not their
   pixel fields. `rowsum()` adds each column independently in row order, so this is bit-identical
   to reducing the assembled `[n_super × (n_boot·n_scen)]` matrix the old code built (up to
-  ~17 GB for can11, held 2–3× over at peak).
+  ~17 GB for can11, held 2–3× over at peak). The sum itself is `coal_rowsum()` (12G `.cpp`):
+  R's `rowsum` loop over the kept rows in place, so it never copies `sc[kr, ]` 255 times.
+- **Categorical levels are PER BOOTSTRAP.** Each bootstrap is fitted to a different resample, so
+  `var.levels` differ between bootstraps of one model (CAWA can14: 28 of 32 know VLCE_1km classes
+  32/40 that bootstrap 1 never saw). `as_model_factors()` converts with each model's own levels,
+  as `predict.gbm` and V5 do. Until 2026-09-24 12F used bootstrap 1's for all 32, so those
+  classes went down the missing branch in other bootstraps (identity gate, can14 bootstrap 32:
+  155 cells off V5) and a backfilled class unknown to bootstrap 1 failed the complete-case gate.
+  The gate now tests the RAW backfilled class for NA, never a factor.
+- **Worker memory.** A forked worker inherits the parent's GC trigger, which the BART-draw reads
+  push to ~10–15 GB on the big BCRs, so 8 workers each piling up garbage OOM-ed C1 at 64G
+  (can12/13/80). Workers allocate only per-draw vectors, collect them with `gc(full = FALSE)`
+  (young objects only: cheap, and it leaves the parent's pages alone), and each fork runs ONE
+  bootstrap (`mc.preschedule = FALSE`). A worker the kernel kills returns `NULL`; 12F names it.
 
 **Shapley attribution**: 8 sectors → 256 coalitions (2^8; cid 1 = empty is skipped → 255 computed). All 255 are produced in one pass per species × BCR (12D), merged by 12H. `14B_sector_attribution.R` computes exact Shapley values from the coalition density tables. Shapley values sum exactly to the total HF impact. `12E_shapley_utils.R` provides coalition enumeration and the Shapley formula.
 
