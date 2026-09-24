@@ -1,16 +1,20 @@
 # ---
-# title: Impact Assessment: re-predict bird densities for ALL 255 coalitions in one job
+# title: Impact Assessment: re-predict bird densities for ALL 255 coalitions, one BCR per task
 # author: Mannfred Boehm
 # ---
-# Restructured entry point. One SLURM array job = ONE species (array task 1=CAWA,
-# 2=OVEN). Unlike 12B_repredict_birds.R (RETIRED — a pre-2026-09-15 name, not
-# today's 12B_v5_truncate.R; it ran one job per species x coalition), this computes
-# the backfilled field ONCE per species x BCR over the superset and reduces all 255
-# coalitions internally — see "12F restructure invariants" in CLAUDE.md.
+# One SLURM array task = ONE species x BCR. coalition_task_table() (12F) lists every
+# species' 06_bootstraps files in list.files() order and task i is row i, so the task list
+# is the same in every task and in 12H. Each task builds the backfilled field ONCE over its
+# BCR's superset and reduces all 255 coalitions internally (see "12F restructure
+# invariants" in CLAUDE.md), then writes a single file:
+#   density_tables/by_bcr/{species}_{year}_{bcr}.rds
+# 12H_merge_bcr_tables.R binds those, in the BCR order the one-job-per-species 12D summed
+# them in, into density_tables/{species}_{year}_coalition_{cid}.rds (cid 2..256) and
+# density_tables/arrays/, which is what 14B and 15A read.
 #
-# Output: density_tables/{species}_{year}_coalition_{cid}.rds  (cid 2..256).
-# Observed bootstraps are always present (12A outputs staged on the cluster), so
-# every table is complete on write — no _bf_only suffix, no separate combine step.
+# Why per BCR (2026-09-24): the BCRs are independent, but they used to run in series inside
+# one 16-core / 384 GB / multi-day job per species. Split, each task is sized to one BCR,
+# queues as a small job, and a failure costs one BCR instead of the whole species.
 
 suppressPackageStartupMessages({
   library(BAMexploreR); library(gbm); library(terra); library(tidyverse)
@@ -70,84 +74,64 @@ disturbance_vars <- dplyr::tibble(BAMexploreR::predictor_metadata) |>
   dplyr::select(predictor, definition, predictor_class) |>
   dplyr::filter(predictor_class == "Disturbance")
 
-# Shapley utils + the all-coalitions predictor ---------------------------------
+# Shapley utils + the all-coalitions predictor + the fast gbm tree walk ----------
 source(file.path(ia_dir, "Rscripts", "12E_shapley_utils.R"))
 source(file.path(ia_dir, "Rscripts", "12F_predict_species_all_coalitions.R"))
+source(file.path(ia_dir, "Rscripts", "12G_gbm_tree_walk.R"))
+Rcpp::sourceCpp(file.path(ia_dir, "Rscripts", "12G_gbm_tree_walk.cpp"))
 
-# run one species ------------------------------------------------------
-species_vec <- c("CAWA", "OVEN")
+# pick this task's species x BCR ---------------------------------------------------
+species_vec <- c("CAWA", "OVEN")   # 12H_merge_bcr_tables.R must list the same species and year
 year <- 2020
 
+tasks   <- coalition_task_table(species_vec, nm_root)
 task_id <- as.integer(Sys.getenv("SLURM_ARRAY_TASK_ID"))
-species <- species_vec[task_id]
-message("running ALL coalitions for species: ", species)
+message(Sys.time(), " | task table: ", nrow(tasks), " species x BCR task(s); this is task ", task_id)
+if (is.na(task_id) || task_id < 1L || task_id > nrow(tasks)) {
+  message(Sys.time(), " | no task ", task_id, " (table has ", nrow(tasks), ") - nothing to do")
+  quit(save = "no", status = 0)
+}
+task    <- tasks[task_id, ]
+species <- task$species
+bcr     <- task$bcr
+message(Sys.time(), " | running ALL coalitions for species=", species, " BCR=", bcr)
 
 hirsh_dir  <- file.path(ia_dir, "data", "raw_data", "hirshpearson")
-sectors    <- canonical_sectors()
-target_ids <- c(sectors_to_coalition_id(sectors, sectors),
-                vapply(sectors, function(s) sectors_to_coalition_id(s, sectors), numeric(1L)))
 
-# preflight: every species x BCR must have weight.tif --------------------------
-# 12F itself stop()s on a missing, stale or all-zero/NA weight.tif (it used to
-# fall back to an UNMASKED run, w == 1, and only warn). This preflight is the
-# cheap early copy of that check: fail here rather than 20 h into a job.
-# Without the weight, totals are quietly wrong rather than obviously broken — it
-# silently counts birds on water, outside the species' range, and outside the V5
-# data-limitation extent. That got more dangerous once 08A started median-imputing
-# partial-NA BART predictors: water pixels used to fail complete.cases in 12F and
-# drop out of BOTH obs and bf on their own, so weight.tif is now the only masking
-# left.
-# BCR codes are taken from the bootstrap filenames (12F reads them from the
-# b.list "bcr" attribute, which would mean loading every .Rdata just to check).
-weight_bcrs <- basename(list.files(file.path(nm_root, "output/06_bootstraps", species),
-                                   pattern = "can.*\\.Rdata$"))
-weight_bcrs <- unique(regmatches(weight_bcrs, regexpr("can[0-9]+", weight_bcrs)))
-test_bcr_env <- Sys.getenv("TEST_BCR", "")   # honour the same smoke-test filter as 12C
-if (nchar(test_bcr_env) > 0)
-  weight_bcrs <- intersect(weight_bcrs, strsplit(test_bcr_env, ",")[[1]])
+# preflight: this species x BCR must have weight.tif -------------------------------
+# 12F itself stop()s on a missing, stale or all-zero/NA weight.tif; this is the cheap early
+# copy of that check. Without the weight, totals are quietly wrong rather than obviously
+# broken: since 08A median-imputes partial-NA BART predictors, water, out-of-range and
+# out-of-extent pixels no longer drop out on their own, so weight.tif is the only masking.
+if (!file.exists(file.path(ia_dir, "data", "derived_data", "predictions", species, bcr,
+                           year, "weight.tif")))
+  stop(species, " ", bcr, " | weight.tif missing - run 12C_build_prediction_weights.sh before 12D")
 
-if (length(weight_bcrs) == 0) {
-  warning(species, " | could not derive any BCR codes from 06_bootstraps filenames",
-          " — skipping the weight.tif preflight")
-} else {
-  missing_w <- weight_bcrs[!file.exists(
-    file.path(ia_dir, "data", "derived_data", "predictions", species, weight_bcrs,
-              year, "weight.tif"))]
-  if (length(missing_w) > 0)
-    stop(species, " | weight.tif missing for ", length(missing_w), "/",
-         length(weight_bcrs), " BCR(s): ", paste(missing_w, collapse = ", "),
-         " — run 12C_build_prediction_weights.sh before 12D")
-  message(Sys.time(), " | weight.tif present for all ", length(weight_bcrs), " BCR(s)")
-}
+per_bcr <- predict_species_all_coalitions(species, year = year,
+                                          all_subbasins_subset = all_subbasins_subset,
+                                          hirsh_dir = hirsh_dir,
+                                          save_arrays_ids = coalition_array_ids(),
+                                          rdata_files = task$rdata_path,
+                                          return_per_bcr = TRUE)
 
-res <- predict_species_all_coalitions(species, year = year,
-                                      all_subbasins_subset = all_subbasins_subset,
-                                      hirsh_dir = hirsh_dir, save_arrays_ids = target_ids)
-
-dt_dir <- file.path(ia_dir, "data", "derived_data", "density_tables")
-dir.create(dt_dir, showWarnings = FALSE)
-
-for (cid in names(res$tables_by_cid)) {
-  tbl <- res$tables_by_cid[[cid]]
-  if (is.null(tbl) || nrow(tbl) == 0) {
-    message(Sys.time(), " | WARNING: empty table for coalition ", cid, " — not written")
-    next
-  }
-  saveRDS(tbl, file = file.path(dt_dir, paste0(species, "_", year, "_coalition_", cid, ".rds")))
-}
-message(Sys.time(), " | wrote ", length(res$tables_by_cid), " coalition tables")
-
-# national bootstrap x scenario arrays for 15A (full coalition + 8 singletons)
-arr_dir <- file.path(dt_dir, "arrays")
-dir.create(arr_dir, showWarnings = FALSE)
-for (cid in names(res$arrays_by_cid)) {
-  arr <- res$arrays_by_cid[[cid]]
-  if (is.null(arr)) {
-    message(Sys.time(), " | WARNING: no arrays for coalition ", cid, " — not written")
-    next
-  }
-  saveRDS(arr, file = file.path(arr_dir, paste0(species, "_", year, "_coalition_", cid, "_arrays.rds")))
-}
-message(Sys.time(), " | wrote ", length(Filter(Negate(is.null), res$arrays_by_cid)), " array files")
+# write this BCR's result, atomically ----------------------------------------------
+# A NULL result is a BCR 12F skipped on purpose (no subbasins, empty superset, no mosaic);
+# it is still written so 12H can tell "skipped" from "never ran". The temp-then-rename means
+# a task killed mid-write leaves no file, never a truncated one 12H would accept. code_md5
+# lets 12H refuse to merge BCRs produced by different versions of the prediction code.
+out_dir <- file.path(ia_dir, "data", "derived_data", "density_tables", "by_bcr")
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+out_f <- file.path(out_dir, paste0(species, "_", year, "_", bcr, ".rds"))
+code_files <- file.path(ia_dir, "Rscripts", c("12E_shapley_utils.R", "12F_predict_species_all_coalitions.R",
+                                              "12G_gbm_tree_walk.R", "12G_gbm_tree_walk.cpp"))
+saveRDS(list(species   = species, year = year, bcr = bcr, bcr_order = task$bcr_order,
+             code_md5  = paste(unname(tools::md5sum(code_files)), collapse = ":"),
+             job       = paste0(Sys.getenv("SLURM_ARRAY_JOB_ID", "local"), "_", task_id),
+             created   = Sys.time(),
+             test_n_boot = as.integer(Sys.getenv("TEST_N_BOOT", "0")),
+             result    = if (length(per_bcr) > 0L) per_bcr[[1]] else NULL),
+        paste0(out_f, ".tmp"))
+if (!file.rename(paste0(out_f, ".tmp"), out_f)) stop("could not move ", out_f, ".tmp into place")
+message(Sys.time(), " | wrote ", out_f, if (length(per_bcr) == 0L) " (BCR skipped by 12F)" else "")
 
 message(Sys.time(), " nice.")
