@@ -12,8 +12,8 @@ cluster:  [A7 DONE] ─► [D: NaN fix + 12F/12G speedups + per-BCR split] ─�
 local:    [B, G1–G4 DONE]                                                                                  ├─► C2 14B ─► C3
 ```
 
-**Next action: stage the D closure and run smoke 7** (see D below). The C1 submitted 2026-09-24
-predates the NaN fix, so its tables are wrong on every BCR — cancel it or discard its output.
+**Next action: wipe, then C1** (see C below). Smoke 7 passed on both species 2026-09-24. The C1
+submitted earlier on 2026-09-24 predated the NaN fix and was cancelled.
 
 **Blocker for every cluster step**: SSH is keyboard-interactive (2FA), so cluster commands must
 be run from your own authenticated session. Globus works (one file per call, **never** `--batch`).
@@ -45,8 +45,8 @@ Two mechanical gotchas found the same way:
 - Globus refuses sources outside the local endpoint's configured root, so a temp-dir staging
   copy fails with `Path not allowed`. Stage from inside the repo tree.
 
-**Current state (2026-09-24)**: `/Rscripts` on Fir matches the working tree, including the
-uncommitted workstream-D files (`12D` `.R`+`.sh`, `12F`, `12G` `.R`+`.cpp`, `12H` `.R`+`.sh`).
+**Current state (2026-09-24)**: `/Rscripts` on Fir matches `c41b17a`, including the workstream-D
+files (`12D` `.R`+`.sh`, `12F`, `12G` `.R`+`.cpp`, `12H` `.R`+`.sh`).
 `/Rscripts/12*` is now ten files (`12A` is local-only by design).
 
 ---
@@ -146,7 +146,7 @@ CAWA can11's real models and stack (harnesses in the session scratchpad; see mem
       is where it bites. Sampling 320 s → 75 s on one core (4.3×).
 - [x] **Staged** 2026-09-24 (checksum sync, LF verified): `12D` `.R`+`.sh`, `12E` (0 bytes — equal),
       `12F`, `12G` `.R`+`.cpp`, `12H` `.R`+`.sh`. Rcpp is in Fir's R library.
-- [ ] **Smoke 7.** 12D task 1 PASSED (job `61340018`, CAWA can60, 2 boots, 8 cores): `sourceCpp`
+- [x] **Smoke 7 PASSED.** 12D task 1 PASSED (job `61340018`, CAWA can60, 2 boots, 8 cores): `sourceCpp`
       compiled on Fir, every worker's fast-vs-`predict.gbm` check passed, identity gate 2469/2469
       for both bootstraps, sampling 17 s (smoke 6: 55 s), `nice.`. Its per-BCR file, pulled back,
       is `identical()` to the local rewrite on all 255 tables and 9 arrays, and its `code_md5`
@@ -155,8 +155,11 @@ CAWA can11's real models and stack (harnesses in the session scratchpad; see mem
       `--array=1-2`; 12H's resubmit hint now carries `TEST_BCR`/`TEST_N_BOOT` (without them
       "task 2" would have been full-bootstrap CAWA can11), and 12H refuses a merge whose
       `TEST_N_BOOT` differs from the files'. All three behaviours checked locally.
-      **Remaining:** 12D task 2 (OVEN can60) + 12H with both TEST vars → `wrote 255 coalition
-      tables` for each species, `wrote 9 array files`, `nice.`.
+      **Task 2 PASSED** (job `61342817_2`, OVEN can60): 22226 / 22226 weight > 0 complete, identity
+      gate 2508/2508 for both bootstraps (1082 predicted pixels carry a missing covariate), sampling
+      24 s, `nice.`. **12H PASSED** (job `61342818`): both files from one `code_md5`, `n_boot` 2,
+      `wrote 255 coalition tables` + `wrote 9 array files` for each species, `nice.`. The smoke
+      left real can60 files in `density_tables/`, `arrays/` and `by_bcr/` — C1's wipe covers all three.
 - [ ] **Decision (yours): BART draws per bootstrap.** 100 scenarios drawn with replacement give
       ~64 distinct draws per bootstrap. Smoke-6 arrays (CAWA can60, 2 boots): for the full
       coalition the bootstrap spread is 5× the BART spread, so scenario count barely matters;
