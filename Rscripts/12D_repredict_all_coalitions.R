@@ -137,4 +137,17 @@ for (cid in names(res$tables_by_cid)) {
 }
 message(Sys.time(), " | wrote ", length(res$tables_by_cid), " coalition tables")
 
+# national bootstrap x scenario arrays for 15A (full coalition + 8 singletons)
+arr_dir <- file.path(dt_dir, "arrays")
+dir.create(arr_dir, showWarnings = FALSE)
+for (cid in names(res$arrays_by_cid)) {
+  arr <- res$arrays_by_cid[[cid]]
+  if (is.null(arr)) {
+    message(Sys.time(), " | WARNING: no arrays for coalition ", cid, " — not written")
+    next
+  }
+  saveRDS(arr, file = file.path(arr_dir, paste0(species, "_", year, "_coalition_", cid, "_arrays.rds")))
+}
+message(Sys.time(), " | wrote ", length(Filter(Negate(is.null), res$arrays_by_cid)), " array files")
+
 message(Sys.time(), " nice.")

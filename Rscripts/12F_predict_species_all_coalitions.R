@@ -178,6 +178,9 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     dist_shared        <- intersect(disturbance_vars$predictor, model_vars_shared)
     biotic_cont_shared <- intersect(setdiff(model_vars_shared, categorical_responses),
                                     biotic_continuous_vars)
+    # The mosaic carries draws for every backfilled covariate (~50), but predict.gbm only
+    # reads model$var.names (~17), so reading the rest cost ~2/3 of the draw I/O and memory.
+    draw_covs <- intersect(draw_covs, model_vars_shared)
 
     cat_levels_shared <- setNames(
       lapply(cat_vars_shared, function(v)
@@ -279,6 +282,21 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
         pmax(mat_sec, 0)
       }), draw_covs)
 
+    # A covariate constant in EVERY subbasin of the BCR has no draws anywhere, only
+    # <v>_mean, so it was never in draw_covs and kept its OBSERVED value on the bf side.
+    # Carry it as a one-draw covariate so it gets the low-HF constant like the case above.
+    mean_only_covs <- setdiff(
+      intersect(sub("_mean$", "", grep("_mean$", names(stack_bf), value = TRUE)), biotic_cont_shared),
+      draw_covs)
+    for (v in mean_only_covs) {
+      const <- terra::values(stack_bf[[paste0(v, "_mean")]], mat = FALSE)[super_idx]
+      const[!is.finite(const)] <- NA_real_
+      draw_vals_super[[v]] <- matrix(pmax(const, 0), ncol = 1L)
+      message(Sys.time(), " | ", species, " ", bcr_code, " | ", v,
+              ": no draws in BCR, using ", v, "_mean at ", sum(!is.na(const)), " superset pixels")
+    }
+    draw_covs <- c(draw_covs, mean_only_covs)
+
     # categorical backfill at superset pixels (constant across scenarios) --------
     cat_vals_super <- setNames(
       lapply(cat_vars_shared, function(v) {
@@ -361,12 +379,21 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     }
     rm(X_rep, in_w, lost)
 
+    # Pixels with weight exactly 0 are zeroed by `M * weight_super` whatever gbm predicts,
+    # so predict only where weight != 0 and write 0 elsewhere (0 * 0 == finite * 0 == 0).
+    # A non-finite weight is still predicted, so it still NA-s M and trips the audit.
+    zero_w    <- is.finite(weight_super) & weight_super == 0
+    pred_mask <- complete_mask & !zero_w
+    message(Sys.time(), " | ", species, " ", bcr_code, " | predicting ", sum(pred_mask),
+            " complete pixels; skipping ", sum(complete_mask & zero_w), " with weight 0")
+
     # ---- Joint BRT x BART sampling over the SUPERSET (the expensive part, ONCE)
     # Worker i returns an [n_super x n_scen] matrix of capped birds/ha predictions
     # (NA at incomplete-case pixels). Seed is coalition-free — identical to predict_species_bcr.
     n_cores <- max(1L, as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", "1")))
     message(Sys.time(), " | ", species, " ", bcr_code, " | sampling ", n_boot,
             " bootstraps x ", n_scen, " scenarios on ", n_cores, " core(s)")
+    multi_draw <- any(vapply(draw_vals_super[draw_covs], ncol, integer(1L)) > 1L)
 
     boot_mats <- parallel::mclapply(seq_along(b.list), function(i) {
       model <- b.list[[i]]
@@ -378,19 +405,32 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
         if (is.null(lvls) || length(lvls) == 0L) next
         X_k[[v]] <- factor(as.character(X_k[[v]]), levels = lvls)
       }
-      sc <- matrix(NA_real_, nrow = nrow(X_k), ncol = n_scen)
-      for (k in seq_len(n_scen)) {
+      # Each scenario re-seeds and picks one BART draw with replacement, so only ~64 of
+      # the 100 picks are distinct. Predictions depend on the draw alone (same model,
+      # same inputs), so predict once per distinct draw and copy it to every scenario
+      # that picked it: same seeds, same picks, same numbers, ~36% fewer gbm calls.
+      chosen_k <- vapply(seq_len(n_scen), function(k) {
         set.seed((sum(utf8ToInt(paste0(species, bcr_code))) + i * 1000L + k) %%
                    .Machine$integer.max)
-        chosen <- sample(n_draws, 1)
-        for (v in draw_covs) if (v %in% names(X_k)) X_k[[v]] <- draw_vals_super[[v]][, chosen]
+        sample(n_draws, 1)
+      }, integer(1L))
+      key <- if (multi_draw) chosen_k else rep(1L, n_scen)
+      sc <- matrix(NA_real_, nrow = nrow(X_k), ncol = n_scen)
+      for (d in unique(key)) {
+        ks     <- which(key == d)
+        chosen <- chosen_k[ks[1L]]
+        for (v in draw_covs) if (v %in% names(X_k)) {
+          dv <- draw_vals_super[[v]]
+          X_k[[v]] <- dv[, if (ncol(dv) == 1L) 1L else chosen]
+        }
         pred_vec <- rep(NA_real_, nrow(X_k))
-        if (any(complete_mask))
-          pred_vec[complete_mask] <- gbm::predict.gbm(
-            model, X_k[complete_mask, , drop = FALSE],
+        pred_vec[complete_mask & zero_w] <- 0
+        if (any(pred_mask))
+          pred_vec[pred_mask] <- gbm::predict.gbm(
+            model, X_k[pred_mask, , drop = FALSE],
             n.trees = model$n.trees, type = "response")
         # both V5 upper caps, in 10.Truncate.R order (densmax then the frozen q99)
-        sc[, k] <- pmin(pmin(pred_vec, qsp), q99)
+        sc[, ks] <- pmin(pmin(pred_vec, qsp), q99)
       }
       sc
     }, mc.cores = n_cores)
@@ -404,8 +444,8 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     # apply prediction weight AFTER the in-worker densmax+q99 clamps (V5 order:
     # truncate, then range-multiply). weight_super has length n_super = nrow(M); column-major
     # recycling multiplies row i of every column by weight_super[i]. Symmetric with
-    # the observed-side weighting above, so bf - obs stays w*(bf - obs). The bf-only
-    # arr stashed below is reshaped from this M, so it inherits the weighting too.
+    # the observed-side weighting above, so bf - obs stays w*(bf - obs). The
+    # save_arrays_ids arrays below are reduced from this M, so they inherit it too.
     M <- M * weight_super
 
     # NA audit on the backfilled side, done ONCE here rather than per coalition.
@@ -450,6 +490,16 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     n_sub <- length(sub_ids)
     # broadcast a [n_sub x n_boot] matrix to [n_sub x (n_boot*n_scen)]
     bcols <- rep(seq_len(n_boot), each = n_scen)
+    # obs_total is coalition-free, so its stats are computed once, not 255 times
+    obs_total_mat <- obs_total_byboot[, bcols, drop = FALSE]
+    ot_stats      <- combine_stats(obs_total_mat)
+
+    # BCR total per (bootstrap, scenario) for 15A: sum over subbasins of an
+    # [n_sub x (n_boot*n_scen)] matrix whose columns run scenario-within-bootstrap.
+    bcr_draws <- function(mat) matrix(colSums(mat, na.rm = TRUE), nrow = n_boot,
+                                      ncol = n_scen, byrow = TRUE)
+    arr_cids   <- intersect(as.character(save_arrays_ids), as.character(all_cids))
+    bcr_arrays <- setNames(vector("list", length(arr_cids)), arr_cids)
 
     # NOTE: per-coalition inspection rasters (predictions_coalitions/.../backfilled_
     # {mean,sd}.tif) are intentionally NOT written here — no downstream script reads
@@ -481,6 +531,13 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
           obs_total_mean = 0, obs_total_sd = 0,
           obs_on_coalition_mean = 0, obs_on_coalition_sd = 0,
           bf_on_coalition_mean = 0, bf_on_coalition_sd = 0)
+        # The table zeroes obs_total here for bit-identity with the retired path, but
+        # the arrays keep the real one so 15A's national observed total stays whole.
+        if (as.character(cid) %in% arr_cids)
+          bcr_arrays[[as.character(cid)]] <- list(
+            obs_total_mat   = bcr_draws(obs_total_mat),
+            obs_on_coal_mat = matrix(0, n_boot, n_scen),
+            bf_on_coal_mat  = matrix(0, n_boot, n_scen))
         next
       }
 
@@ -520,9 +577,12 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
       }
 
       bf_stats      <- combine_stats(bf_mat)
-      obs_total_mat <- obs_total_byboot[, bcols, drop = FALSE]
-      ot_stats      <- combine_stats(obs_total_mat)
       ooc_stats     <- combine_stats(obs_on_mat)
+      if (as.character(cid) %in% arr_cids)
+        bcr_arrays[[as.character(cid)]] <- list(
+          obs_total_mat   = bcr_draws(obs_total_mat),
+          obs_on_coal_mat = bcr_draws(obs_on_mat),
+          bf_on_coal_mat  = bcr_draws(bf_mat))
       coalition_tables[[ci]] <- tibble::tibble(
         species = species, subbasin = sub_ids, bcr = bcr_code, coalition_id = cid,
         obs_total_mean = ot_stats$mean,  obs_total_sd = ot_stats$sd,
@@ -531,6 +591,7 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     }
 
     list(coalition_tables = coalition_tables,
+         bcr_arrays       = bcr_arrays,
          bcr_code         = bcr_code)
   })
 
@@ -543,5 +604,15 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     dplyr::bind_rows(Filter(Negate(is.null), parts))
   }), cid_keys)
 
-  list(tables_by_cid = tables_by_cid)             # named list: "2".."256" -> tibble
+  # ---- national [n_boot x n_scen] arrays for 15A = sum of the per-BCR arrays ----
+  arr_keys <- intersect(as.character(save_arrays_ids), cid_keys)
+  arrays_by_cid <- setNames(lapply(arr_keys, function(k) {
+    parts <- Filter(Negate(is.null), lapply(per_bcr, function(x) x$bcr_arrays[[k]]))
+    if (length(parts) == 0L) return(NULL)
+    lapply(setNames(nm = c("obs_total_mat", "obs_on_coal_mat", "bf_on_coal_mat")),
+           function(f) Reduce(`+`, lapply(parts, `[[`, f)))
+  }), arr_keys)
+
+  list(tables_by_cid = tables_by_cid,             # named list: "2".."256" -> tibble
+       arrays_by_cid = arrays_by_cid)             # save_arrays_ids -> 3 national matrices
 }

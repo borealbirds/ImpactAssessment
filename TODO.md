@@ -57,7 +57,7 @@ renumbering; `12A` is local-only by design).
 All fixes (CAfire recode, Fix A, Fix B, the `12D` weight preflight) are committed and staged.
 Backfill and premosaic (A6) are done for 2020 — see **Completed**. Only A7 remains.
 
-- [ ] **A7.** Validate Fix A — the only fix never tested. Run it on the `12D` smoke, not the
+- [x] **A7.** Validate Fix A — the only fix never tested. Run it on the `12D` smoke, not the
       full run: the `12F` runtime line `complete superset pixels: N / M (X%)` must be ≫ the old
       1–3%. If it is not, stop — do not burn the 2 × 24 h C1 run.
       `sbatch --array=1 --time=01:00:00 --mem=192G --export=ALL,TEST_BCR=can60,TEST_N_BOOT=2 12D_repredict_all_coalitions.sh`
@@ -72,9 +72,43 @@ Backfill and premosaic (A6) are done for 2020 — see **Completed**. Only A7 rem
       Cause: `08A:101–116` writes `<cov>_mean` instead of `_draw_*` where a covariate is constant
       in a subbasin; the BCR mosaic then has draws elsewhere but NA there, and the gate drops it.
       Fixed in `12F`: draw-less pixels take the `_mean` constant for every draw (logged as
-      `filled N draw-less superset pixels`). Staged. **Smoke 3 must show ~100% weight > 0.**
+      `filled N draw-less superset pixels`). Staged.
+      Smoke 3 (61162614) hung on node `fc30537` (`ALLOCATED+NOT_RESPONDING`) — node fault, not code.
+      **Smoke 4 (job 61167742): 20931 / 20931 weight > 0 (100%). A7 PASSES.** Fills: BalsamFir
+      11929, DouglasFir 24599, LodgepolePine 131/225 (1km/5x5). M audit silent; 255 tables written.
+      Sampling took 90 s vs 52 s (1.9× the complete pixels) — expect C1's gbm stage to scale alike.
+      **Follow-up before C1**: a covariate constant in *every* subbasin of a BCR had no draws, so
+      it kept its observed value on the bf side. `12F` now carries it as a one-draw covariate from
+      `<cov>_mean` (logged `no draws in BCR, using <cov>_mean`); it also enters the gate.
+      **Smoke 5 (job 61170330, all CAWA BCRs, 2 boots, 3 h): hit the time limit after 3 BCRs.**
+      can10 100294/100294, can11 427690/427690, can12 132604/132604 — all 100%. The partial fill
+      is large there (can11: PonderosaPine/WhiteRedPine 329k pixels each). No `no draws in BCR`
+      line yet, so the mean-only path is still unexercised. Sampling time per BCR (≈ one C1 wave):
+      can60 1.5 min, can10 17 min, can11 **2 h 10 min**, can12 > 13 min. C1 runs 32 boots on 16
+      cores = 2 waves, so can11 alone is ~4.5 h; the old 24 h envelope predates the fill.
       C1 overwrites every coalition it writes, but `12D:131` skips an empty coalition without
       writing, so a smoke table could survive into C2 unnoticed.
+      **Speedups before C1 (2026-09-23, bit-identical):** `12F` now predicts once per *distinct*
+      BART draw per bootstrap (~64 of 100 scenario picks are distinct under our seeds → ~36% fewer
+      gbm calls), skips weight-0 pixels (2–15% of complete pixels), and reads draws only for model
+      covariates (~17 of ~50; the draw-load phase was 5–7 min/BCR). Tested old vs new on CAWA can11's
+      real models: `M * weight` identical, 1.87× faster. Rejected: a static/dynamic gbm tree split
+      (67–97% of trees split on a backfilled covariate; 1.11×). Not done: summing pixels by
+      (subbasin, sector-signature) instead of `M[keep,]` per coalition — 11× faster reduction and
+      no `M`, but only equal to ~1e-15, not bit-identical.
+      **`arrays/` was never written** by the superset path — `save_arrays_ids` was accepted but
+      unused since `a428ee7`, so `15A` had no input. Restored: `12F` returns national
+      `[n_boot × n_scen]` `obs_total/obs_on_coal/bf_on_coal` matrices for the 9 target coalitions
+      and `12D` writes `arrays/{species}_{year}_coalition_{cid}_arrays.rds`. Unlike the tables
+      (and the retired code, which dropped the BCR), a BCR with no footprint for that coalition
+      contributes its real `obs_total` to the arrays, so 15A's national observed total stays whole.
+      **Smoke 6 PASSED** (job `61306338`, CAWA can60, 2 boots; 2026-09-24): 20931 / 20931 weight > 0
+      complete (as smoke 4), `predicting 20931 … skipping 4095 with weight 0`, M NA audit silent,
+      `wrote 255 coalition tables`, `wrote 9 array files`, `nice.`. Sampling 55 s vs smoke 4's 91 s
+      (1.65×); observed+draw load 66 s vs 98 s. Arrays are 2 × 100 and their means equal the tables'
+      subbasin sums exactly (cid 256, 2, 9); cid 9 has no can60 footprint and correctly carries the
+      real `obs_total` with zero on/bf. The mean-only-covariate path did not fire in can60 — first
+      real exercise is C1. (Smoke 61304676 before it was an `--mem=192M` typo, not a code fault.)
 
 ## C. Converge
 
