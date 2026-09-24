@@ -46,7 +46,7 @@ Two mechanical gotchas found the same way:
 - Globus refuses sources outside the local endpoint's configured root, so a temp-dir staging
   copy fails with `Path not allowed`. Stage from inside the repo tree.
 
-**Current state (2026-09-24)**: `/Rscripts` on Fir matches `c41b17a`, including the workstream-D
+**Current state (2026-09-24)**: `/Rscripts` on Fir matches `bbe252b`, including the workstream-D
 files (`12D` `.R`+`.sh`, `12F`, `12G` `.R`+`.cpp`, `12H` `.R`+`.sh`).
 `/Rscripts/12*` is now ten files (`12A` is local-only by design).
 
