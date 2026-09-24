@@ -93,3 +93,6 @@ data/raw_data/deviation_from_expected/
 # gdb above if it is ever extracted or copied outside its own folder).
 *.gdb/
 *.gdb.zip
+
+# Manuscript drafts and links (private; never pushed to the public repo)
+writing/
