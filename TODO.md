@@ -146,11 +146,17 @@ CAWA can11's real models and stack (harnesses in the session scratchpad; see mem
       is where it bites. Sampling 320 s → 75 s on one core (4.3×).
 - [x] **Staged** 2026-09-24 (checksum sync, LF verified): `12D` `.R`+`.sh`, `12E` (0 bytes — equal),
       `12F`, `12G` `.R`+`.cpp`, `12H` `.R`+`.sh`. Rcpp is in Fir's R library.
-- [ ] **Smoke 7**: the smoke pair in CLAUDE.md (12D `--array=1` with
-      `TEST_BCR=can60,TEST_N_BOOT=2`, then 12H with `TEST_BCR=can60`). Check: `identity gate ...
-      match V5` for bootstraps 1 and 2, no `gbm_tree_walk differs`, `wrote .../by_bcr/CAWA_2020_can60.rds`,
-      12H `wrote 255 coalition tables` + `wrote 9 array files` + `nice.`. First real test of
-      `Rcpp::sourceCpp` on Fir. Then `seff` it for memory.
+- [ ] **Smoke 7.** 12D task 1 PASSED (job `61340018`, CAWA can60, 2 boots, 8 cores): `sourceCpp`
+      compiled on Fir, every worker's fast-vs-`predict.gbm` check passed, identity gate 2469/2469
+      for both bootstraps, sampling 17 s (smoke 6: 55 s), `nice.`. Its per-BCR file, pulled back,
+      is `identical()` to the local rewrite on all 255 tables and 9 arrays, and its `code_md5`
+      equals HEAD. 12H (`61340019`) correctly refused: `TEST_BCR=can60` also matches OVEN's can60,
+      so the table has 2 tasks and only task 1 had run. Fixed: CLAUDE.md smoke is now
+      `--array=1-2`; 12H's resubmit hint now carries `TEST_BCR`/`TEST_N_BOOT` (without them
+      "task 2" would have been full-bootstrap CAWA can11), and 12H refuses a merge whose
+      `TEST_N_BOOT` differs from the files'. All three behaviours checked locally.
+      **Remaining:** 12D task 2 (OVEN can60) + 12H with both TEST vars → `wrote 255 coalition
+      tables` for each species, `wrote 9 array files`, `nice.`.
 - [ ] **Decision (yours): BART draws per bootstrap.** 100 scenarios drawn with replacement give
       ~64 distinct draws per bootstrap. Smoke-6 arrays (CAWA can60, 2 boots): for the full
       coalition the bootstrap spread is 5× the BART spread, so scenario count barely matters;

@@ -151,9 +151,11 @@ sbatch --dependency=afterany:<12D job id> 12H_merge_bcr_tables.sh      # tables 
 
 # If 12H reports missing BCRs it prints the exact `sbatch --array=<indices> ...` to resubmit.
 
-# Smoke test (CAWA can60, 2 bootstraps; TEST_BCR filters the task table, so it is task 1):
-sbatch --array=1 --time=01:00:00 --export=ALL,TEST_BCR=can60,TEST_N_BOOT=2 12D_repredict_all_coalitions.sh
-sbatch --dependency=afterany:<smoke job id> --export=ALL,TEST_BCR=can60 12H_merge_bcr_tables.sh
+# Smoke test (can60, 2 bootstraps). TEST_BCR filters the task table to every species' can60,
+# so it has TWO tasks (1 = CAWA, 2 = OVEN) and 12H expects both. Give 12H the same TEST_BCR
+# AND TEST_N_BOOT: it refuses to merge smoke files under production settings.
+sbatch --array=1-2 --time=01:00:00 --export=ALL,TEST_BCR=can60,TEST_N_BOOT=2 12D_repredict_all_coalitions.sh
+sbatch --dependency=afterany:<smoke job id> --export=ALL,TEST_BCR=can60,TEST_N_BOOT=2 12H_merge_bcr_tables.sh
 ```
 
 ## Fir Cluster Specifications

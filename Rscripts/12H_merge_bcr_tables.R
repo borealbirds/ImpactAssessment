@@ -14,7 +14,8 @@
 # one-job-per-species 12D summed them in - so the national arrays' floating-point sums, and
 # every table, are bit-identical to that single-job run.
 #
-# Honours TEST_BCR like 12D, so a smoke test merges just its own BCR(s).
+# Honours TEST_BCR like 12D, so a smoke test merges just its own BCR(s). Pass the smoke's
+# TEST_N_BOOT too: 12H refuses a merge whose TEST_N_BOOT differs from the per-BCR files'.
 
 suppressPackageStartupMessages({ library(tidyverse) })
 
@@ -40,11 +41,18 @@ tasks$file <- file.path(dt_dir, "by_bcr", paste0(tasks$species, "_", year, "_", 
 message(Sys.time(), " | expecting ", nrow(tasks), " per-BCR result(s)")
 
 # completeness: every expected species x BCR must have a result (or a "skipped" record) ----
+# The resubmit hint must carry the smoke settings: task indices are positions in the
+# TEST_BCR-filtered table, so without TEST_BCR the same index is a different BCR.
+test_bcr    <- Sys.getenv("TEST_BCR", "")
+test_n_boot <- Sys.getenv("TEST_N_BOOT", "")
+test_export <- if (nchar(test_bcr) > 0L)
+  paste0(" --export=ALL,TEST_BCR=", test_bcr,
+         if (nchar(test_n_boot) > 0L) paste0(",TEST_N_BOOT=", test_n_boot) else "") else ""
 missing <- tasks[!file.exists(tasks$file), ]
 if (nrow(missing) > 0L)
   stop(nrow(missing), " per-BCR result(s) missing: ",
        paste0(missing$species, " ", missing$bcr, collapse = ", "),
-       " - resubmit with: sbatch --array=", paste(missing$task, collapse = ","),
+       " - resubmit with: sbatch --array=", paste(missing$task, collapse = ","), test_export,
        " 12D_repredict_all_coalitions.sh")
 
 recs <- lapply(tasks$file, readRDS)
@@ -69,6 +77,10 @@ if (length(unique(prov$code_md5)) > 1L)
        "density_tables/by_bcr/*.rds and re-run 12D, or re-run the odd tasks out.")
 if (length(unique(prov$n_boot)) > 1L)
   stop("per-BCR results mix TEST_N_BOOT settings: ", paste(unique(prov$n_boot), collapse = ", "))
+if (!identical(prov$n_boot[1], if (nchar(test_n_boot) > 0L && test_n_boot != "0") test_n_boot else "all"))
+  stop("per-BCR results were run with TEST_N_BOOT=", prov$n_boot[1], " but this merge has TEST_N_BOOT=",
+       if (nchar(test_n_boot) > 0L) test_n_boot else "(unset)",
+       " - pass the same TEST_N_BOOT to 12H as to 12D, so a smoke is never merged as production")
 if (any(prov$n_boot != "all"))
   message(Sys.time(), " | NOTE: these are TEST_N_BOOT=", prov$n_boot[1], " smoke results")
 
