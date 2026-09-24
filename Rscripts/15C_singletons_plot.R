@@ -27,7 +27,7 @@ if (!cc && local)  { ia_dir <- getwd() }
 if (!cc && !local) { ia_dir <- file.path("G:/Shared drives/BAM_NationalModels5", "data", "Extras", "sandbox_data", "impactassessment_sandbox") }
 
 csv_path <- file.path(ia_dir, "logs", "15B_singletons_summary.csv")
-fig_dir  <- file.path(ia_dir, "figures")
+fig_dir  <- file.path(ia_dir, "output_figures", "sector_singletons")
 dir.create(fig_dir, showWarnings = FALSE, recursive = TRUE)
 
 
@@ -325,7 +325,7 @@ fig1 <- ggplot() +
   impact_fill(lim1) + impact_theme +
   theme(aspect.ratio = 1)
 
-out1 <- file.path(fig_dir, paste0("12F_spatial_watersheds_", sector_label, ".png"))
+out1 <- file.path(fig_dir, paste0("15C_spatial_watersheds_", sector_label, ".png"))
 ggsave(out1, fig1, width = 10, height = 10, dpi = 200)
 cat("wrote", out1, "\n")
 
@@ -360,7 +360,7 @@ fig2 <- ggplot() +
   coord_equal() +
   impact_fill(lim2) + impact_theme
 
-out2 <- file.path(fig_dir, paste0("12F_spatial_", target_bcr, "_", sector_label, ".png"))
+out2 <- file.path(fig_dir, paste0("15C_spatial_", target_bcr, "_", sector_label, ".png"))
 ggsave(out2, fig2, width = 11, height = 8, dpi = 200)
 cat("wrote", out2, "\n")
 
@@ -418,7 +418,7 @@ fig3 <- ggplot() +
   ) +
   impact_theme
 
-out3 <- file.path(fig_dir, paste0("12F_spatial_national_", sector_label, ".png"))
+out3 <- file.path(fig_dir, paste0("15C_spatial_national_", sector_label, ".png"))
 ggsave(out3, fig3, width = 12, height = 9, dpi = 200)
 cat("wrote", out3, "\n")
 
@@ -438,6 +438,6 @@ fig4 <- ggplot(fig4_df, aes(x = x, y = y, fill = impact)) +
   impact_fill(lim4) + impact_theme +
   theme(aspect.ratio = 1)
 
-out4 <- file.path(fig_dir, paste0("12F_spatial_footprints_", sector_label, ".png"))
+out4 <- file.path(fig_dir, paste0("15C_spatial_footprints_", sector_label, ".png"))
 ggsave(out4, fig4, width = 10, height = 10, dpi = 200)
 cat("wrote", out4, "\n")

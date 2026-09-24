@@ -70,9 +70,6 @@ logs/
 # Generated output tables (data artifacts, not versioned)
 output_tables/
 
-# Generated figures (regenerable outputs, not versioned)
-figures/
-
 # Staged raw V5 GIS masking layers (large; staged from G:, not versioned)
 data/raw_data/v5_gis/
 
@@ -87,3 +84,12 @@ slurm-*.out
 
 # Cluster logs and artifacts fetched via Globus for inspection
 cluster_logs/
+
+# ABMI Wall-to-Wall Vegetation Layer V7.1 backfill geodatabase (confidential,
+# DS-003-2026; large). Never versioned, never pushed.
+data/raw_data/deviation_from_expected/
+
+# Esri file geodatabases anywhere in the tree (covers the ABMI V7.1 backfill
+# gdb above if it is ever extracted or copied outside its own folder).
+*.gdb/
+*.gdb.zip

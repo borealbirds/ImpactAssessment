@@ -22,15 +22,23 @@
 # rasterize calls below.
 #
 # ADDED 2026-09-11 -- the BCR term was missing and it is the LARGEST of the four.
-# V5 predicts each subunit on a BUFFERED grid and cuts it back at 10.Truncate.R:146
-# (`crop(vect(sf.i), mask = TRUE)`, sf.i from Subregions_Mosaics_EPSG3978.shp)
-# before mosaicking. Measured on our own staged stacks, 59-71% of non-NA pixels in
+# V5 predicts each subunit on a BUFFERED grid (04.Stratify.R buffers every BCR by
+# 100 km, deliberately, so adjacent subunits overlap and can be feathered together
+# in 08.MosaicPredictions.R's distance-weighted border blend). It cuts each grid
+# back to its own polygon only later, at 10.Truncate.R:146
+# (`crop(vect(sf.i), mask = TRUE)`, sf.i from Subregions_Mosaics_EPSG3978.shp),
+# when packaging the per-subunit deliverables -- i.e. AFTER mosaicking, not before.
+# We read the pre-mosaic per-BCR grids directly, so the buffer is fully present in
+# what we see and we must apply that cut ourselves.
+# Measured on our own staged stacks, 59-71% of non-NA pixels in
 # {bcr}_2020.tif lie OUTSIDE the subunit's unbuffered polygon, carrying 41-84% of
 # the raw density sum. Without this term those buffer pixels enter the density
 # tables, and because 12D assigns a subbasin to EVERY BCR it intersects (329 of 674
 # subbasins intersect >1 Canadian BCR; 59% of total area), a straddling subbasin was
 # summed in full under each of them -- a straight double count at every BCR seam.
-# Cropping here reproduces V5's mosaic cut: each BCR contributes only its own share
+# Cropping here reproduces V5's per-subunit delivery crop, which is the right
+# analogue because we consume per-BCR grids rather than the blended national
+# mosaic: each BCR contributes only its own share
 # and the per-BCR rows in density_tables sum to the subbasin once.
 #
 # Subregions_Mosaics_EPSG3978.shp and our staged Regions/BAM_BCR_NationalModel_

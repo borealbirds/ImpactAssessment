@@ -191,7 +191,7 @@ sbatch --array=1 --time=01:00:00 --mem=192G --export=ALL,TEST_BCR=can60,TEST_N_B
 
 **Coordinate scaling**: Within each subbasin, lat/lon are centered and scaled before being added as predictors to improve BART performance.
 
-**Output per subbasin**: `data/derived_data/bart_models/{year}/subbasin_{i}/subbasin_{i}_backfill.tif`, `_metrics.rds`, `_confusion.rds`. Note **not every continuous biotic covariate has `_draw_*` layers**: where a covariate is constant across a subbasin's low-HF pixels, `08A` skips BART and writes `<cov>_mean`/`<cov>_sd` instead (all-NA if there were no valid training rows). That is harmless — `12F` consults a `_mean` layer only for *categorical* vars, so a continuous covariate with no draws simply keeps its observed value on both sides of the contrast.
+**Output per subbasin**: `data/derived_data/bart_models/{year}/subbasin_{i}/subbasin_{i}_backfill.tif`, `_metrics.rds`, `_confusion.rds`. Note **not every continuous biotic covariate has `_draw_*` layers**: where a covariate is constant across a subbasin's low-HF pixels, `08A` skips BART and writes `<cov>_mean`/`<cov>_sd` instead (all-NA if there were no valid training rows). This is NOT harmless by default: the BCR mosaic unions layers across subbasins, so a covariate with draws in some subbasins is NA in the constant ones, and `12F`'s complete-case gate dropped them (CAWA can60: 43% of weight > 0 footprint pixels, all from `SCANFIBalsamFir_5x5`). `12F` now fills draw-less pixels from `<cov>_mean` (raw scale — no `expm1`) for every draw. A covariate with no draws anywhere in the BCR (constant in every subbasin) is carried as a one-draw covariate from `<cov>_mean`, so it too gets the low-HF constant rather than its observed value.
 
 **Re-prediction**: `11_premosaic` mosaics backfilled subbasin rasters into BCR-wide stacks. `12A_observed.R` runs locally and writes the truncated `observed_bootstraps.tif` per species×BCR (see the pipeline table); these are Globus-transferred to the cluster, where they are a hard dependency for `12D`/`12F`. `12D_repredict_all_coalitions.R` runs ONE job per species and computes all 255 coalitions in a single pass: it sources `12F_predict_species_all_coalitions.R`, which builds the backfilled field ONCE per species×BCR over the all-8-sectors superset and reduces every coalition as a cheap masked `rowsum`. For a given coalition S of sectors, pixels where any sector in S has footprint (AND CanHF ≥ 1) use backfilled covariates; all other pixels use observed. Joint BART×BRT sampling nests BART posterior draws inside BRT bootstrap iterations.
 
@@ -333,14 +333,22 @@ Large spatial files (`.tif`, `.gpkg`, `.shp`) and most `.rds` files are gitignor
 7. **Two masking defects in `weight.tif` — both fixed 2026-09-11, weights rebuilt 25/25**. Kept
    here because both are easy to reintroduce:
 
-   (a) **V5 prediction grids are BUFFERED well past their subunit.** V5 crops each back to the
-   subunit's own polygon at `10.Truncate.R:146` before mosaicking; `12C` originally replicated
-   V5's range / water / data-limit masks but not that crop. On our staged stacks **59–71% of
-   non-NA pixels** lie outside the subunit polygon. Because `12D:38` assigns a subbasin to *every* BCR it intersects, and **329 of 674 subbasins
+   (a) **V5 prediction grids are BUFFERED well past their subunit.** The buffer is deliberate and
+   load-bearing: `04.Stratify.R` buffers every BCR by 100 km "so that we can feather predictions
+   from adjacent regions together", and `08.MosaicPredictions.R` consumes that overlap in a
+   distance-weighted border blend (`p * w`, `mosaic(fun = "sum")`, then divide by the summed
+   weights). The per-subunit crop at `10.Truncate.R:146` runs **after** mosaicking, on the
+   delivery products — it is not a pre-stitch discard of the overlap. We stage the pre-mosaic
+   `07_predictions` stacks, so the buffer is fully present in what `12C` sees; `12C` originally
+   replicated V5's range / water / data-limit masks but not that crop. On our staged stacks
+   **59–71% of non-NA pixels** lie outside the subunit polygon. Because `12D:38` assigns a subbasin to *every* BCR it intersects, and **329 of 674 subbasins
    (59% of area) straddle more than one Canadian BCR**, each straddling subbasin was summed in
    full under each of its BCRs — inflating populations **2.2×–14.6×**. `12C` now multiplies in an
    `inbcr` term from `Regions/BAM_BCR_NationalModel_Unbuffered.shp` (verified identical geometry
    to V5's `Subregions_Mosaics_EPSG3978.shp`: per-BCR areas agree to <1 km², IoU = 1.0000).
+   (Wording corrected 2026-09-21: this used to say V5 crops back "before mosaicking", which
+   wrongly implied the buffered overlap is thrown away rather than feathered. The defect and the
+   `inbcr` fix are unaffected — only V5's order of operations was misdescribed.)
 
    (b) **`terra::rasterize()` defaults to `touches = FALSE`** (cell-centre rule), while V5's
    `mask(vect, inverse = TRUE)` and `crop(vect, mask = TRUE)` both behave as `touches = TRUE`.
