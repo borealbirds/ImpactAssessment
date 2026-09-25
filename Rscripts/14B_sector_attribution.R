@@ -202,10 +202,22 @@ for (sy in seq_len(nrow(species_years))) {
       key <- paste(dt$bcr[r], dt$subbasin[r], sep = "::")
       if (!key %in% sub_keys) next
 
-      impact_mean <- dt$bf_on_coalition_mean[r] - dt$obs_on_coalition_mean[r]
-      impact_sd   <- sqrt(dt$bf_on_coalition_sd[r]^2 + dt$obs_on_coalition_sd[r]^2)
-      if (is.nan(impact_mean)) impact_mean <- 0
-      if (is.nan(impact_sd))   impact_sd   <- 0
+      # 12F marks a subbasin with no kept pixels for this coalition by a NaN obs_on mean
+      # and an NA (not NaN) obs_on sd; nothing is backfilled there, so v(S) = 0 +- 0.
+      # Keying the zero on that marker, and stopping on any other NA, keeps a real NA
+      # from being zeroed silently (an is.nan() test on the sd let NA through instead).
+      if (is.nan(dt$obs_on_coalition_mean[r])) {
+        if (dt$bf_on_coalition_mean[r] != 0)
+          stop(sp, " ", key, " coalition ", cid, ": no observed pixels but bf_on = ",
+               dt$bf_on_coalition_mean[r])
+        impact_mean <- 0
+        impact_sd   <- 0
+      } else {
+        impact_mean <- dt$bf_on_coalition_mean[r] - dt$obs_on_coalition_mean[r]
+        impact_sd   <- sqrt(dt$bf_on_coalition_sd[r]^2 + dt$obs_on_coalition_sd[r]^2)
+      }
+      if (is.na(impact_mean) || is.na(impact_sd))
+        stop(sp, " ", key, " coalition ", cid, ": NA impact with observed pixels present")
 
       v_mean_mat[key, as.character(cid)] <- impact_mean
       v_sd_mat[key, as.character(cid)]   <- impact_sd
@@ -258,13 +270,13 @@ for (sy in seq_len(nrow(species_years))) {
     full_id <- n_coal
     v_full  <- v_mean_mat[key, as.character(full_id)]
 
-    obs_pop <- obs_total_mean[key]
+    obs_pop <- unname(obs_total_mean[key])
 
     shapley_sub[[si]] <- data.frame(
       species         = sp,
-      bcr             = bcr_lookup[key],
+      bcr             = unname(bcr_lookup[key]),
       year            = yr,
-      subbasin        = sub_lookup[key],
+      subbasin        = unname(sub_lookup[key]),
       HYBAS_ID        = hydrobasins$first_HYBAS_ID[as.integer(sub_lookup[key])],
       obs_population  = round(obs_pop),
       total_HF_impact = round(v_full),

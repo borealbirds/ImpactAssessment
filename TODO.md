@@ -9,11 +9,13 @@ the `project_pipeline_history` memory.
 
 ```
 cluster:  [A7 DONE] ─► [D DONE] ─► [smoke 7 PASSED] ─► [C1 12D+12H DONE] ─┐
-local:    [B, G1–G4 DONE]                                                   ├─► C2 14B ─► C3
+local:    [B, G1–G4 DONE]                                                   ├─► [C2 means DONE; SDs open] ─► C3
 ```
 
-**Next action: C2** — pull the merged `density_tables/` (510 tables + 18 array files) from Fir
-and run `14B` locally. C1 (attempt 2, `61367890` + `61367891`) passed on all 25 tasks; see C.
+**Next action: decide what goes into a C1 rerun** (see C2's open items). C1 passed on all 25
+tasks and C2's Shapley means are in `sector_effects/`, but `shapley_sd` needs per-sample
+coalition arrays from 12F. The BART-draws change (S = 16) and per-species draw seeding would
+fit in the same rerun, which costs ~1 h of wall time.
 
 **Blocker for every cluster step**: SSH is keyboard-interactive (2FA), so cluster commands must
 be run from your own authenticated session. Globus works (one file per call, **never** `--batch`).
@@ -198,6 +200,19 @@ CAWA can11's real models and stack (harnesses in the session scratchpad; see mem
       for a small single sector BART dominates, but 10–20 distinct draws per bootstrap still leave
       Monte Carlo error < 1% of the impact. 16 distinct draws (no replacement) would cut gbm calls
       ~4× but changes numbers within MC noise. Confirm on C1's 32-boot arrays before adopting.
+      **Confirmed on C1's national arrays (2026-09-24), all 9 array coalitions × 2 species.** BART
+      is 3–28% of the per-sample variance (CAWA) and 10–34% (OVEN); the MC error of the mean is set
+      by the 32 bootstraps (σ_B/√32 ≈ 17% of the reported SD, ~1–6% of the impact) plus a term
+      from the 100 stored draws that every design shares. Moving to S distinct draws raises that
+      MC error by at most 0.9% (S = 16) or 2.3% (S = 8), worst case OVEN mines. Empirically,
+      subsampling 16 of the 100 scenarios per bootstrap moves the all-sector mean by 0.08% (CAWA)
+      and 0.18% (OVEN) of the impact. Cost: sampling was 4.25 of C1's 5.17 task-hours, so S = 16
+      should cut a C1 to ~2 task-hours (~25 billed core-equivalent-hours at 48G, from ~64).
+      Side finding: `chosen_k` is seeded per species × BCR, so a subbasin straddling two BCRs is
+      given independent draws on each side, though draw j is ONE joint posterior sample across the
+      whole subbasin. Means are unaffected; the BART spread of straddling subbasins is slightly
+      understated. Seeding on species × bootstrap only would give every BCR the same draw indices.
+      Harness: session scratchpad `draws_analysis.R`.
 - [x] **Profiled C1 and resized 12D to 8 cores / 48G / 3 h** (was 64G / 12 h). `sacct` over all 25
       tasks: 5.17 h of task time in total; longest CAWA can11 42 min, OVEN can11 38, OVEN can61 33;
       16 of 25 under 15 min. Peak MaxRSS 28.8 GiB (OVEN can61); can11/can61 22–29 GiB, mid-sized
@@ -233,7 +248,32 @@ CAWA can11's real models and stack (harnesses in the session scratchpad; see mem
       Speedup: CAWA can10 sampling 4.7 min vs 5 min in attempt 1, so the memory fixes cost nothing.
       Old tables were stale on four counts: pre-weighting, pre-gate-change (A),
       pre-truncation-conformance (B), pre-NaN-fix (D).
-- [ ] **C2.** `14B_sector_attribution.R` locally → corrected Shapley CSVs.
+- [x] **C2 run (2026-09-24): Shapley MEANS are good; `shapley_sd` is not fit to report.**
+      Pulled C1's 510 tables + 18 arrays + `extrapolation_flags.csv` (local gpkg checksum-equal to
+      Fir's; merged tables `identical()` to the 7 per-BCR files held locally). 14B then ran in 7 min.
+      **Fixed in 14B:** 12F marks "no kept pixels" by obs_on mean `NaN` with sd `NA` (sd of NaNs is
+      NA), and 14B zeroed only `is.nan()`, so every subbasin with an empty coalition carried NA
+      Shapley SDs and every national SD was NA. 14B now zeroes on the NaN-mean marker, stops if bf
+      is non-zero there, and stops on any other NA. Means were `identical()` before and after.
+      National (CAWA can40 withheld): CAWA v(N) = +574,377 birds on 4.47 M observed (12.9%): roads
+      33.6%, pasture 22.4%, crop 21.0%, built 17.6%, rail 3.4%, mines 1.0%, dams 0.5%,
+      oil_gas 0.4%. OVEN v(N) = +3,527,058 on 37.65 M (9.4%): crop 32.9%, pasture 31.7%,
+      built 20.6%, roads 10.8%, rail 3.0%, mines 0.6%, oil_gas 0.6%, dams −0.2%. Additivity
+      residual −6.2 / +2.4 birds is rounding only (every subbasin is within 0.5).
+      **Open, for review before anything is reported:**
+      (1) **`shapley_sd` is wrong in both directions.** It assumes subbasins are independent, but
+      within a BCR they share the same 32 bird models: against the joint (bootstrap × scenario)
+      arrays, 14B-style SDs of v(S) are 0.37–0.89× the true ones. And it treats v(S ∪ j) and v(S)
+      as independent, though they come from the same samples and differ only on j's exclusive
+      pixels, so a small sector inherits the big coalitions' noise: CAWA dams ±4,911 vs roads
+      ±5,482, on means of 2,978 vs 192,957. Correct SDs need Shapley computed per sample, i.e. 12F
+      saving BCR-level `[n_boot × n_scen]` sums for all 255 coalitions, not just 9 (~20 MB per BCR
+      uncompressed), which means a C1 rerun.
+      (2) **Extrapolation flags are uninformative:** 10C flags 667 / 667 subbasins (`ks_max > 0.5`
+      OR Mahalanobis exceedance > 0.3; min `ks_max` is 0.52; median exceedance 0.93).
+      (3) **Very large and negative BCR impacts deserve ecological scrutiny:** CAWA can11 +227%
+      and can13 +301% of observed, OVEN can11 +275% and can13 +89% (the most converted BCRs).
+      Negative: OVEN can12 −828k (−8.5%), can81 −201k (−6.3%), can80 −68k.
 - [ ] **C3.** Sensitivity pass with the `q99.9` stage disabled; report the spread. The frozen cap
       has a known-direction bias — counterfactual densities are higher, so they hit the frozen
       ceiling more often than observed, systematically **under-estimating impact in the
