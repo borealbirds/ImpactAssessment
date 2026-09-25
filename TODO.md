@@ -1,4 +1,4 @@
-# TODO — consolidated plan (last updated 2026-09-23)
+# TODO — consolidated plan (last updated 2026-09-24)
 
 Open work is the cluster backfill re-run (**A**) and the converge steps (**C**). Workstream
 **B** (conform density to current V5 packaging) is finished and validated — gates G1–G4 all
@@ -8,13 +8,12 @@ the `project_pipeline_history` memory.
 ## Critical path
 
 ```
-cluster:  [A7 DONE] ─► [D: NaN fix + 12F/12G speedups + per-BCR split] ─► smoke 7 ─► wipe ─► C1 12D+12H ─┐
-local:    [B, G1–G4 DONE]                                                                                  ├─► C2 14B ─► C3
+cluster:  [A7 DONE] ─► [D DONE] ─► [smoke 7 PASSED] ─► [C1 12D+12H DONE] ─┐
+local:    [B, G1–G4 DONE]                                                   ├─► C2 14B ─► C3
 ```
 
-**Next action: stage the fixed 12F/12G, wipe, then C1** (see C below). C1 attempt 1 (2026-09-24)
-found two defects in its first 11 tasks — worker OOM and per-bootstrap categorical levels — both
-fixed (see D). Every earlier C1 was pre-NaN-fix and was cancelled.
+**Next action: C2** — pull the merged `density_tables/` (510 tables + 18 array files) from Fir
+and run `14B` locally. C1 (attempt 2, `61367890` + `61367891`) passed on all 25 tasks; see C.
 
 **Blocker for every cluster step**: SSH is keyboard-interactive (2FA), so cluster commands must
 be run from your own authenticated session. Globus works (one file per call, **never** `--batch`).
@@ -47,7 +46,8 @@ Two mechanical gotchas found the same way:
   copy fails with `Path not allowed`. Stage from inside the repo tree.
 
 **Current state (2026-09-24)**: `/Rscripts` on Fir matches `bbe252b`, including the workstream-D
-files (`12D` `.R`+`.sh`, `12F`, `12G` `.R`+`.cpp`, `12H` `.R`+`.sh`).
+files (`12D` `.R`+`.sh`, `12F`, `12G` `.R`+`.cpp`, `12H` `.R`+`.sh`). `density_tables/` on Fir
+holds C1's merged production output (and `by_bcr/` its 25 per-BCR files).
 `/Rscripts/12*` is now ten files (`12A` is local-only by design).
 
 ---
@@ -199,24 +199,31 @@ CAWA can11's real models and stack (harnesses in the session scratchpad; see mem
       Monte Carlo error < 1% of the impact. 16 distinct draws (no replacement) would cut gbm calls
       ~4× but changes numbers within MC noise. Confirm on C1's 32-boot arrays before adopting.
 - [ ] Profile C1's tasks (`seff` / `sacct --format=JobID,Elapsed,MaxRSS,TotalCPU`) and tighten
-      `--mem` / `--time` per BCR size.
+      `--mem` / `--time` per BCR size. Wall times from the attempt-2 logs (32 boots, 8 cores):
+      longest CAWA can11 42 min (sampling 39), OVEN can11 38, OVEN can61 33, OVEN can12 23; 16 of
+      25 under 15 min; prep ≤ 3 min everywhere. `--time=12:00:00` is ~17× the worst task.
+      MaxRSS still needed from `sacct` before touching `--mem=64G`.
 - [ ] Out of 12D's scope but on the multi-year path: `07` (backfill) must re-run per year at the
       same 128G-per-core ratio; pre-2020 years need historical footprint layers, not the 2020 mask.
 
 ## C. Converge
 
-- [ ] **C1.** Wipe `density_tables/*.rds`, `arrays/*.rds` **and** `by_bcr/*.rds`, then
-      `sbatch 12D_repredict_all_coalitions.sh` (25 tasks) and
-      `sbatch --dependency=afterany:<jobid> 12H_merge_bcr_tables.sh`.
-      Old tables are stale on four counts: pre-weighting, pre-gate-change (A),
-      pre-truncation-conformance (B), pre-NaN-fix (D). The C1 submitted 2026-09-24 is pre-D.
-
-      **Watch for one guarded-not-fixed condition.** `complete_mask` is built from draw column 1
-      as a proxy for all 100 draws, but each scenario samples a different draw — so a pixel
-      complete in draw 1 can be NA in the draw actually used, and the bf side's
-      per-coalition `rowsum()` has no `na.rm`, so a single NA would NA out a whole subbasin on the
-      backfilled side only. `12F` audits each bootstrap's bf field (NA count) and `stop()`s with a
-      count. If it fires, widen the gate to all draws.
+- [x] **C1 PASSED (attempt 2: 12D `61367890`, 12H `61367891`, 2026-09-24, Fir at `bbe252b`).**
+      All 25 tasks `nice.`, 0 errors / OOM / dead workers at 64G, including the 9 that OOM-ed in
+      attempt 1. Identity gate: all 32 bootstraps reproduce V5 on every task (1,258–3,122
+      observed-design pixels each; the odd-class over-sample was non-empty in 17 of 25, 138 pixels
+      in can14). Weight > 0 superset 100% complete everywhere except can14 (130,502 / 130,504, both
+      species), whose 2 lost pixels lie in no subbasin zone, so they could never enter a table.
+      The bf-field NA audit never fired, so drawing `complete_mask` from draw 1 is safe as
+      guarded. 12H: 25 per-BCR files, one `code_md5`, 255 tables + 9 array files per species.
+      **Fir-vs-Fir against attempt 1** (`cluster_logs/c1_old` vs `c1_new`): CAWA can10/40/60/71
+      and OVEN can13/60 `identical()` in every table and array. OVEN can40 differs exactly where
+      predicted: only the 128 coalitions containing `roads` (cid 129–256), in 3 subbasins
+      (192, 193, 263), with `obs_total` untouched. Those are the 10 road pixels bootstrap 1's levels
+      had dropped. Effect on the all-sector BCR impact: −1277.78 → −1275.79 (0.16%).
+      Speedup: CAWA can10 sampling 4.7 min vs 5 min in attempt 1, so the memory fixes cost nothing.
+      Old tables were stale on four counts: pre-weighting, pre-gate-change (A),
+      pre-truncation-conformance (B), pre-NaN-fix (D).
 - [ ] **C2.** `14B_sector_attribution.R` locally → corrected Shapley CSVs.
 - [ ] **C3.** Sensitivity pass with the `q99.9` stage disabled; report the spread. The frozen cap
       has a known-direction bias — counterfactual densities are higher, so they hit the frozen
