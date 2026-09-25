@@ -637,6 +637,17 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     # them (14B/15A/15B consume only the .rds tables). If needed, emit them only for
     # the save_arrays_ids coalitions from the workers' weighted fields, which are capped.
 
+    # ---- per-sample Shapley values per subbasin, for 14B's uncertainty ----------------
+    # Shapley values are linear in v (phi = W %*% v, 12E), so they can be taken per
+    # (bootstrap, scenario) sample and then summarised. Sums of these samples over
+    # subbasins and BCRs keep two covariances that SDs propagated from the tables lose:
+    # every subbasin of a BCR is predicted by the same 32 bird models, and v(S) and
+    # v(S + j) come from the same samples. Columns run scenario-within-bootstrap, like
+    # bf_mat. 12H stacks these across BCRs in table row order.
+    W_shap      <- shapley_weight_matrix(sectors)
+    phi_samples <- array(0, c(n_sub, n_sectors, n_boot * n_scen),
+                         dimnames = list(NULL, sectors, NULL))
+
     # ---- assemble every coalition (the workers already did the grouped sums) ------
     coalition_tables <- vector("list", length(all_cids))
     names(coalition_tables) <- as.character(all_cids)
@@ -697,6 +708,18 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
         obs_on_mat <- matrix(NA_real_, n_sub, n_boot)[, bcols, drop = FALSE]
       }
 
+      # v(S) per sample. A subbasin with no kept pixel has nothing backfilled, so its
+      # v(S) is 0 (14B's rule for the tables' NaN obs_on mean); its bf sum must be 0 too.
+      imp   <- bf_mat - obs_on_mat
+      empty <- is.na(obs_on_mat)
+      if (any(bf_mat[empty] != 0))
+        stop(species, " ", bcr_code, " coalition ", cid, ": non-zero bf_on in a subbasin ",
+             "with no kept pixels")
+      imp[empty] <- 0
+      for (j in seq_len(n_sectors))
+        phi_samples[, j, ] <- phi_samples[, j, ] + W_shap[j, cid] * imp
+      rm(imp, empty)
+
       bf_stats      <- combine_stats(bf_mat)
       ooc_stats     <- combine_stats(obs_on_mat)
       if (as.character(cid) %in% arr_cids)
@@ -713,6 +736,9 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
 
     list(coalition_tables = coalition_tables,
          bcr_arrays       = bcr_arrays,
+         shapley_samples  = list(phi = phi_samples,              # [n_sub x sector x sample]
+                                 obs_total = obs_total_byboot,   # [n_sub x n_boot]
+                                 subbasin = sub_ids, n_boot = n_boot, n_scen = n_scen),
          bcr_code         = bcr_code)
   })
 
@@ -744,8 +770,33 @@ combine_bcr_results <- function(per_bcr, save_arrays_ids = integer(0)) {
            function(f) Reduce(`+`, lapply(parts, `[[`, f)))
   }), arr_keys)
 
-  list(tables_by_cid = tables_by_cid,             # named list: "2".."256" -> tibble
-       arrays_by_cid = arrays_by_cid)             # save_arrays_ids -> 3 national matrices
+  # ---- per-sample subbasin Shapley values, stacked across BCRs in table row order ----
+  # 14B sums them over subbasins and BCRs sample by sample, which is only meaningful if
+  # every BCR has the same (bootstrap, scenario) grid.
+  if (length(per_bcr) == 0L)
+    return(list(tables_by_cid = tables_by_cid, arrays_by_cid = arrays_by_cid,
+                shapley_samples = NULL))
+  ss <- lapply(per_bcr, `[[`, "shapley_samples")
+  n_samp <- vapply(ss, function(s) dim(s$phi)[3L], integer(1L))
+  if (length(unique(n_samp)) > 1L)
+    stop("per-BCR Shapley samples differ in size (",
+         paste0(vapply(per_bcr, `[[`, character(1L), "bcr_code"), "=", n_samp, collapse = ", "),
+         "): BCRs with different bootstrap counts cannot be summed per sample")
+  n_rows <- vapply(ss, function(s) dim(s$phi)[1L], integer(1L))
+  phi    <- array(0, c(sum(n_rows), dim(ss[[1L]]$phi)[2:3]),
+                  dimnames = list(NULL, dimnames(ss[[1L]]$phi)[[2L]], NULL))
+  ends   <- cumsum(n_rows)
+  for (b in seq_along(ss)) phi[(ends[b] - n_rows[b] + 1L):ends[b], , ] <- ss[[b]]$phi
+  shapley_samples <- list(
+    bcr       = rep(vapply(per_bcr, `[[`, character(1L), "bcr_code"), n_rows),
+    subbasin  = unlist(lapply(ss, `[[`, "subbasin")),
+    phi       = phi,                                             # [row x sector x sample]
+    obs_total = do.call(rbind, lapply(ss, `[[`, "obs_total")),   # [row x bootstrap]
+    n_boot    = ss[[1L]]$n_boot, n_scen = ss[[1L]]$n_scen)
+
+  list(tables_by_cid   = tables_by_cid,           # named list: "2".."256" -> tibble
+       arrays_by_cid   = arrays_by_cid,           # save_arrays_ids -> 3 national matrices
+       shapley_samples = shapley_samples)         # per-sample subbasin Shapley values (14B)
 }
 
 # Coalitions whose national bootstrap x scenario arrays are kept for 15A: the full

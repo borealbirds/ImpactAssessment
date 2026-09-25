@@ -70,6 +70,29 @@ compute_shapley <- function(v, sectors) {
   phi
 }
 
+#' Shapley values as a linear map: phi = W %*% v
+#'
+#' Shapley values are linear in v, so compute_shapley() is a fixed [N x 2^N] matrix
+#' applied to the vector of coalition impacts. Row j, column T (coalition ID) holds
+#' +w(|T| - 1) if j is in T and -w(|T|) if not, with w(s) = s! (N - s - 1)! / N!.
+#' Every column sums to 0 except the full coalition's, which sums to 1 (efficiency).
+#' 12F applies it to each (bootstrap, scenario) sample, which a function of the mean
+#' v cannot do.
+#' @param sectors Character vector of all sector names (fixed, sorted order).
+#' @return Numeric matrix [N sectors x 2^N coalition IDs], dimnames sectors x "1".."2^N".
+shapley_weight_matrix <- function(sectors) {
+  n <- length(sectors)
+  w <- function(s) factorial(s) * factorial(n - s - 1L) / factorial(n)
+  W <- matrix(0, n, 2L^n, dimnames = list(sectors, as.character(seq_len(2L^n))))
+  for (id in seq_len(2L^n)) {
+    in_T <- sectors %in% coalition_id_to_sectors(id, sectors)
+    s    <- sum(in_T)
+    if (s > 0L) W[in_T, id]  <- w(s - 1L)
+    if (s < n)  W[!in_T, id] <- -w(s)
+  }
+  W
+}
+
 #' Canonical sector list used throughout the pipeline
 #' Order matters: coalition IDs depend on this fixed ordering.
 canonical_sectors <- function() {

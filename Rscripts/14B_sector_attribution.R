@@ -7,12 +7,18 @@
 # to the total HF impact v(N) = cf(all sectors) - observed.
 #
 # Architecture:
-#   - Reads coalition density tables (one per coalition x species x year)
-#     produced by 12D.
-#   - For each coalition, computes v(S) = cf(S) - obs at subbasin level.
-#   - Applies the Shapley formula per sector per subbasin.
-#   - Aggregates bottom-up: subbasin -> BCR -> national.
-#   - Optionally filters by abiotic extrapolation flags.
+#   - Reads 12H's per-sample subbasin Shapley values ({species}_{year}_shapley_samples.rds:
+#     one value per subbasin x sector x (bootstrap, scenario) sample, computed in 12F).
+#   - Sums the samples bottom-up: subbasin -> BCR -> national, sample by sample, and
+#     summarises each level over the samples (mean, SD, 5th/95th percentiles).
+#   - Cross-checks the sample means against the Shapley values of the coalition density
+#     tables' means (both are exact; they agree to floating-point error).
+#   - Annotates subbasins with 10C's abiotic extrapolation flags.
+#
+# Why samples, not table SDs: every subbasin of a BCR is predicted by the same 32 bird
+# models, and v(S) and v(S + j) come from the same samples, so both are strongly
+# correlated. Propagating the tables' SDs as if independent understated v(S) SDs 1.1-2.7x
+# and gave small sectors the large coalitions' noise (C2, 2026-09-24; see TODO.md).
 #
 # Outputs (data/derived_data/sector_effects/):
 #   shapley_subbasin.csv  — per-sector Shapley values at each subbasin
@@ -80,12 +86,19 @@ withheld_models <- data.frame(
 )
 
 # ---- Load extrapolation flags (optional) -------------------------------------
+# 10C, one row per subbasin (gpkg row index = 12D's sub_index): the share of its
+# backfilled pixels outside the training pixels' area of applicability, and the flag
+# (> 0.5) built from it. A subbasin 10C could not assess (< 10 training pixels) is NA.
 
 extrap_flags <- NULL
 if (file.exists(flag_path)) {
   extrap_flags <- read.csv(flag_path, stringsAsFactors = FALSE)
+  if (!"frac_outside_aoa" %in% names(extrap_flags))
+    stop(flag_path, " predates the 2026-09-25 AOA rewrite of 10C - re-run 10C")
   message("Loaded extrapolation flags for ", nrow(extrap_flags), " subbasins (",
           sum(extrap_flags$flag, na.rm = TRUE), " flagged)")
+  extrap_flags <- extrap_flags[, c("subbasin", "flag", "frac_outside_aoa")]
+  names(extrap_flags)[names(extrap_flags) == "flag"] <- "extrapolation_flag"
 }
 
 # ---- Discover available species x year combinations --------------------------
@@ -109,14 +122,26 @@ species_years <- unique(dt_index[, c("species", "year")])
 message("Found ", nrow(species_years), " species x year combinations, ",
         nrow(dt_index), " coalition files total")
 
-sectors <- canonical_sectors()
+sectors   <- canonical_sectors()
 n_sectors <- length(sectors)
 n_coal    <- n_coalitions(sectors)
+W_shap    <- shapley_weight_matrix(sectors)          # phi = W %*% v (12E)
+
+# summaries over samples of a [unit x sector x sample] array -> [unit x sector] each
+summarise_samples <- function(x) list(
+  mean = apply(x, c(1, 2), mean),
+  sd   = apply(x, c(1, 2), sd),
+  q05  = apply(x, c(1, 2), quantile, 0.05, names = FALSE),
+  q95  = apply(x, c(1, 2), quantile, 0.95, names = FALSE))
+
+# one row per unit x sector (sector fastest), as the output CSVs are laid out
+long <- function(m) as.vector(t(m))
 
 # ---- Main processing: one species x year at a time ---------------------------
 
 shapley_sub_rows <- vector("list", nrow(species_years))
 shapley_bcr_rows <- vector("list", nrow(species_years))
+shapley_nat_rows <- vector("list", nrow(species_years))
 
 for (sy in seq_len(nrow(species_years))) {
 
@@ -130,15 +155,13 @@ for (sy in seq_len(nrow(species_years))) {
   avail_ids <- dt_index$coalition_id[idx]
   avail_paths <- dt_index$path[idx]
 
-  # check completeness (need all 2^N - 1 non-empty coalitions; ID 1 = empty, v=0)
+  # all 2^N - 1 non-empty coalitions are needed (ID 1 = empty, v = 0); the cross-check
+  # against the samples below fails on any that are missing
   expected_ids <- 2:n_coal
   missing_ids  <- setdiff(expected_ids, avail_ids)
-  if (length(missing_ids) > 0) {
-    message("  WARNING: missing ", length(missing_ids), " coalitions: ",
-            paste(head(missing_ids, 10), collapse = ", "),
-            if (length(missing_ids) > 10) "..." else "")
-    message("  Shapley values will be approximate (missing coalitions treated as v=0)")
-  }
+  if (length(missing_ids) > 0)
+    stop(sp, " ", yr, ": missing ", length(missing_ids), " coalition table(s): ",
+         paste(head(missing_ids, 10), collapse = ", "), if (length(missing_ids) > 10) "...")
 
   # read all coalition density tables into a list keyed by coalition_id,
   # dropping any BCR whose model BAM withheld (see withheld_models above)
@@ -174,195 +197,176 @@ for (sy in seq_len(nrow(species_years))) {
   # get the set of all BCRs x subbasins across coalitions
   all_rows <- bind_rows(dt_list, .id = "coal_id")
   bcr_sub_ref <- distinct(all_rows, bcr, subbasin)
+  sub_keys   <- paste(bcr_sub_ref$bcr, bcr_sub_ref$subbasin, sep = "::")
+  bcr_lookup <- setNames(bcr_sub_ref$bcr, sub_keys)
+  sub_lookup <- setNames(bcr_sub_ref$subbasin, sub_keys)
 
-  # ---- Compute v(S) = cf(S) - obs per subbasin per coalition ----
-  # v(S) = (obs - obs_on_coalition + bf_on_coalition) - obs
-  #       = bf_on_coalition - obs_on_coalition
+  # ---- v(S) = cf(S) - obs = bf_on_coalition - obs_on_coalition, from the tables' means ----
   # (impact of removing coalition S: positive means more birds without S)
-
-  # build a matrix: rows = subbasin key, columns = coalition IDs, values = v(S) mean
-  # and a parallel matrix for v(S) sd
-  sub_keys <- paste(bcr_sub_ref$bcr, bcr_sub_ref$subbasin, sep = "::")
-  v_mean_mat <- matrix(0, nrow = length(sub_keys), ncol = n_coal,
-                        dimnames = list(sub_keys, as.character(1:n_coal)))
-  v_sd_mat   <- matrix(0, nrow = length(sub_keys), ncol = n_coal,
-                        dimnames = list(sub_keys, as.character(1:n_coal)))
-
-  # also store obs_total per subbasin (from any coalition; should be identical)
+  v_mean_mat     <- matrix(0, nrow = length(sub_keys), ncol = n_coal,
+                           dimnames = list(sub_keys, as.character(1:n_coal)))
   obs_total_mean <- setNames(numeric(length(sub_keys)), sub_keys)
-  obs_total_sd   <- setNames(numeric(length(sub_keys)), sub_keys)
-  bcr_lookup     <- setNames(bcr_sub_ref$bcr, sub_keys)
-  sub_lookup     <- setNames(bcr_sub_ref$subbasin, sub_keys)
 
   for (cid_str in names(dt_list)) {
-    dt <- dt_list[[cid_str]]
-    cid <- as.integer(cid_str)
+    dt   <- dt_list[[cid_str]]
+    keys <- paste(dt$bcr, dt$subbasin, sep = "::")
 
-    for (r in seq_len(nrow(dt))) {
-      key <- paste(dt$bcr[r], dt$subbasin[r], sep = "::")
-      if (!key %in% sub_keys) next
+    # 12F marks a subbasin with no kept pixels for this coalition by a NaN obs_on mean
+    # and an NA (not NaN) obs_on sd; nothing is backfilled there, so v(S) = 0.
+    # Keying the zero on that marker, and stopping on any other NA, keeps a real NA
+    # from being zeroed silently (an is.nan() test on the sd let NA through instead).
+    empty <- is.nan(dt$obs_on_coalition_mean)
+    if (any(dt$bf_on_coalition_mean[empty] != 0))
+      stop(sp, " coalition ", cid_str, ": no observed pixels but bf_on != 0 at ",
+           paste(keys[empty & dt$bf_on_coalition_mean != 0], collapse = ", "))
+    v <- dt$bf_on_coalition_mean - dt$obs_on_coalition_mean
+    v[empty] <- 0
+    if (anyNA(v))
+      stop(sp, " coalition ", cid_str, ": NA impact with observed pixels present at ",
+           paste(keys[is.na(v)], collapse = ", "))
+    v_mean_mat[keys, cid_str] <- v
 
-      # 12F marks a subbasin with no kept pixels for this coalition by a NaN obs_on mean
-      # and an NA (not NaN) obs_on sd; nothing is backfilled there, so v(S) = 0 +- 0.
-      # Keying the zero on that marker, and stopping on any other NA, keeps a real NA
-      # from being zeroed silently (an is.nan() test on the sd let NA through instead).
-      if (is.nan(dt$obs_on_coalition_mean[r])) {
-        if (dt$bf_on_coalition_mean[r] != 0)
-          stop(sp, " ", key, " coalition ", cid, ": no observed pixels but bf_on = ",
-               dt$bf_on_coalition_mean[r])
-        impact_mean <- 0
-        impact_sd   <- 0
-      } else {
-        impact_mean <- dt$bf_on_coalition_mean[r] - dt$obs_on_coalition_mean[r]
-        impact_sd   <- sqrt(dt$bf_on_coalition_sd[r]^2 + dt$obs_on_coalition_sd[r]^2)
-      }
-      if (is.na(impact_mean) || is.na(impact_sd))
-        stop(sp, " ", key, " coalition ", cid, ": NA impact with observed pixels present")
-
-      v_mean_mat[key, as.character(cid)] <- impact_mean
-      v_sd_mat[key, as.character(cid)]   <- impact_sd
-
-      # store obs_total (same across coalitions; take max to handle rounding)
-      if (obs_total_mean[key] == 0) {
-        obs_total_mean[key] <- dt$obs_total_mean[r]
-        obs_total_sd[key]   <- dt$obs_total_sd[r]
-      }
-    }
+    # obs_total is coalition-free, except that 12F zeroes it in a coalition with no
+    # footprint in the BCR (kept for bit-identity with the retired per-coalition path)
+    obs_total_mean[keys] <- pmax(obs_total_mean[keys], dt$obs_total_mean, na.rm = TRUE)
   }
 
-  # coalition 1 (empty set) has v = 0 by definition — already initialized
-
-  # ---- Compute Shapley values per subbasin ----
-
-  shapley_sub <- vector("list", length(sub_keys))
-
-  for (si in seq_along(sub_keys)) {
-    key <- sub_keys[si]
-
-    # named vector of v(S) for all coalitions
-    v_vec <- setNames(v_mean_mat[key, ], as.character(1:n_coal))
-
-    # compute Shapley values
-    phi <- compute_shapley(v_vec, sectors)
-
-    # Shapley SD: propagate from coalition SDs using the Shapley weights
-    # phi_j = sum_S w(S) * [v(S+j) - v(S)]
-    # Var(phi_j) ≈ sum_S w(S)^2 * [Var(v(S+j)) + Var(v(S))]
-    phi_sd <- setNames(numeric(n_sectors), sectors)
-    for (j in seq_len(n_sectors)) {
-      others <- sectors[-j]
-      var_j <- 0
-      for (bits in 0:(2^(n_sectors - 1) - 1)) {
-        S      <- others[which(as.logical(intToBits(bits)[1:(n_sectors - 1)]))]
-        s_size <- length(S)
-        w <- factorial(s_size) * factorial(n_sectors - s_size - 1L) / factorial(n_sectors)
-
-        id_with    <- sectors_to_coalition_id(c(S, sectors[j]), sectors)
-        id_without <- sectors_to_coalition_id(S, sectors)
-
-        var_j <- var_j + w^2 * (v_sd_mat[key, as.character(id_with)]^2 +
-                                 v_sd_mat[key, as.character(id_without)]^2)
-      }
-      phi_sd[j] <- sqrt(var_j)
-    }
-
-    # full coalition impact (total HF impact at this subbasin)
-    full_id <- n_coal
-    v_full  <- v_mean_mat[key, as.character(full_id)]
-
-    obs_pop <- unname(obs_total_mean[key])
-
-    shapley_sub[[si]] <- data.frame(
-      species         = sp,
-      bcr             = unname(bcr_lookup[key]),
-      year            = yr,
-      subbasin        = unname(sub_lookup[key]),
-      HYBAS_ID        = hydrobasins$first_HYBAS_ID[as.integer(sub_lookup[key])],
-      obs_population  = round(obs_pop),
-      total_HF_impact = round(v_full),
-      sector          = sectors,
-      shapley_mean    = round(phi, 2),
-      shapley_sd      = round(phi_sd, 2),
-      shapley_pct     = round(phi / obs_pop * 100, 4),
-      shapley_check   = round(sum(phi), 2),  # should equal v_full
-      stringsAsFactors = FALSE
-    )
+  # Shapley values of the mean v(S): the cross-check for the samples below
+  phi_tab <- v_mean_mat %*% t(W_shap)
+  for (k in head(sub_keys, 3L)) {
+    ref <- compute_shapley(setNames(v_mean_mat[k, ], colnames(v_mean_mat)), sectors)
+    if (max(abs(ref - phi_tab[k, ])) > 1e-9 * max(1, abs(v_mean_mat[k, ])))
+      stop("shapley_weight_matrix() disagrees with compute_shapley() at ", k)
   }
 
-  shapley_sub_df <- bind_rows(shapley_sub)
+  # ---- per-sample subbasin Shapley values (12F -> 12H) ----
+  ss_path <- file.path(dt_dir, paste0(sp, "_", yr, "_shapley_samples.rds"))
+  if (!file.exists(ss_path))
+    stop("missing ", ss_path, " - it is written by 12H from 12D's per-BCR files. 12F saves ",
+         "per-sample Shapley values only since 2026-09-25, so older tables need a 12D + 12H rerun.")
+  ss      <- readRDS(ss_path)
+  ss_keys <- paste(ss$bcr, ss$subbasin, sep = "::")
+  keep    <- !(DROP_WITHHELD & ss$bcr %in% drop_bcrs)
+  if (!setequal(ss_keys[keep], sub_keys) || anyDuplicated(ss_keys[keep]))
+    stop(sp, " ", yr, ": the Shapley samples and the coalition tables cover different ",
+         "subbasins - they come from different 12H merges")
+  rows <- which(keep)[match(sub_keys, ss_keys[keep])]
+  phi  <- ss$phi[rows, , , drop = FALSE]                   # [subbasin x sector x sample]
+  if (!identical(dimnames(phi)[[2L]], sectors))
+    stop(sp, " ", yr, ": Shapley samples carry sectors ", paste(dimnames(phi)[[2L]], collapse = ", "))
+  n_samp <- dim(phi)[3L]
+  message("  ", length(sub_keys), " subbasin rows x ", n_samp, " samples (",
+          ss$n_boot, " bootstraps x ", ss$n_scen, " scenarios)")
 
-  # attach extrapolation flag if available
-  if (!is.null(extrap_flags)) {
-    shapley_sub_df <- left_join(
-      shapley_sub_df,
-      extrap_flags[, c("subbasin", "flag", "ks_max", "mahal_exceedance")],
-      by = "subbasin"
-    )
-    names(shapley_sub_df)[names(shapley_sub_df) == "flag"] <- "extrapolation_flag"
-  }
+  # the samples must reproduce the tables: mean of per-sample Shapley = Shapley of means
+  st_sub <- summarise_samples(phi)
+  gap    <- max(abs(st_sub$mean - phi_tab))
+  if (gap > 1e-8 * max(1, abs(v_mean_mat)))
+    stop(sp, " ", yr, ": mean of the Shapley samples is ", signif(gap, 3), " off the Shapley ",
+         "values of the tables' means - samples and tables are from different runs")
+  message("  sample means match the tables' Shapley values (max abs diff ", signif(gap, 3), ")")
 
+  # total HF impact v(N) per sample = sum over sectors (efficiency holds per sample)
+  tot_sub <- apply(phi, c(1, 3), sum)                      # [subbasin x sample]
+
+  # ---- subbasin table ----
+  obs_pop <- unname(obs_total_mean)
+  shapley_sub_df <- data.frame(
+    species            = sp,
+    bcr                = rep(unname(bcr_lookup), each = n_sectors),
+    year               = yr,
+    subbasin           = rep(unname(sub_lookup), each = n_sectors),
+    HYBAS_ID           = rep(hydrobasins$first_HYBAS_ID[as.integer(sub_lookup)], each = n_sectors),
+    obs_population     = rep(round(obs_pop), each = n_sectors),
+    total_HF_impact    = rep(round(rowMeans(tot_sub)), each = n_sectors),
+    total_HF_impact_sd = rep(round(apply(tot_sub, 1, sd)), each = n_sectors),
+    sector             = rep(sectors, times = length(sub_keys)),
+    shapley_mean       = round(long(st_sub$mean), 2),
+    shapley_sd         = round(long(st_sub$sd), 2),
+    shapley_q05        = round(long(st_sub$q05), 2),
+    shapley_q95        = round(long(st_sub$q95), 2),
+    shapley_pct        = round(long(st_sub$mean / obs_pop * 100), 4),
+    shapley_check      = rep(round(rowSums(st_sub$mean), 2), each = n_sectors),  # = v(N)
+    stringsAsFactors   = FALSE
+  )
+  if (!is.null(extrap_flags))
+    shapley_sub_df <- left_join(shapley_sub_df, extrap_flags, by = "subbasin")
   shapley_sub_rows[[sy]] <- shapley_sub_df
 
-  # ---- Aggregate to BCR (sum of subbasin Shapley values) ----
+  # ---- BCR: sum the subbasin samples within each BCR, sample by sample ----
+  phi_bcr <- rowsum(matrix(phi, nrow = length(sub_keys)), unname(bcr_lookup), reorder = FALSE)
+  bcrs    <- rownames(phi_bcr)
+  phi_bcr <- array(phi_bcr, c(length(bcrs), n_sectors, n_samp))
+  st_bcr  <- summarise_samples(phi_bcr)
+  tot_bcr <- apply(phi_bcr, c(1, 3), sum)
+  bcr_of  <- unname(bcr_lookup)
+  obs_bcr <- vapply(bcrs, function(b) sum(obs_pop[bcr_of == b]), numeric(1L))
+  n_sub_b <- vapply(bcrs, function(b) sum(bcr_of == b), integer(1L))
+  # extrapolation: how many subbasins are flagged, and how much of the impact they carry
+  flagged <- if (is.null(extrap_flags)) rep(NA, length(sub_keys)) else
+    extrap_flags$extrapolation_flag[match(as.integer(sub_lookup), extrap_flags$subbasin)]
+  imp_sub <- rowMeans(tot_sub)
+  n_flg_b <- vapply(bcrs, function(b) if (is.null(extrap_flags)) NA_integer_ else
+    sum(flagged[bcr_of == b], na.rm = TRUE), integer(1L))
+  imp_flg_b <- vapply(bcrs, function(b) if (is.null(extrap_flags)) NA_real_ else
+    sum(imp_sub[bcr_of == b & flagged %in% TRUE]), numeric(1L))
+  shapley_bcr_rows[[sy]] <- data.frame(
+    species            = sp,
+    bcr                = rep(bcrs, each = n_sectors),
+    year               = yr,
+    sector             = rep(sectors, times = length(bcrs)),
+    obs_population     = rep(round(obs_bcr), each = n_sectors),
+    total_HF_impact    = rep(round(rowMeans(tot_bcr)), each = n_sectors),
+    total_HF_impact_sd = rep(round(apply(tot_bcr, 1, sd)), each = n_sectors),
+    shapley_mean       = round(long(st_bcr$mean), 2),
+    shapley_sd         = round(long(st_bcr$sd), 2),
+    shapley_q05        = round(long(st_bcr$q05), 2),
+    shapley_q95        = round(long(st_bcr$q95), 2),
+    shapley_pct        = round(long(st_bcr$mean / obs_bcr * 100), 4),
+    n_subbasins        = rep(n_sub_b, each = n_sectors),
+    n_flagged          = rep(n_flg_b, each = n_sectors),
+    total_HF_impact_flagged = rep(round(imp_flg_b), each = n_sectors),
+    stringsAsFactors   = FALSE
+  )
 
-  shapley_bcr <- shapley_sub_df |>
-    group_by(species, bcr, year, sector) |>
-    summarise(
-      obs_population  = round(sum(obs_population)),
-      total_HF_impact = round(sum(total_HF_impact)),
-      shapley_mean    = round(sum(shapley_mean), 2),
-      shapley_sd      = round(sqrt(sum(shapley_sd^2)), 2),
-      shapley_pct     = round(sum(shapley_mean) / sum(obs_population) * 100, 4),
-      n_subbasins     = n(),
-      n_flagged       = if ("extrapolation_flag" %in% names(shapley_sub_df))
-                          sum(extrapolation_flag, na.rm = TRUE) else NA_integer_,
-      .groups = "drop"
-    )
+  # ---- national: sum the BCR samples, sample by sample ----
+  # Bootstrap i is paired across BCRs, as V5's national estimate pairs them (mosaic of
+  # bootstrap i); that is right whether or not BCRs' bootstrap i share a resample.
+  phi_nat <- array(apply(phi_bcr, c(2, 3), sum), c(1L, n_sectors, n_samp))
+  st_nat  <- summarise_samples(phi_nat)
+  tot_nat <- apply(phi_nat, c(1, 3), sum)
+  shapley_nat_rows[[sy]] <- data.frame(
+    species            = sp,
+    year               = yr,
+    sector             = sectors,
+    obs_population     = round(sum(obs_pop)),
+    total_HF_impact    = round(mean(tot_nat)),
+    total_HF_impact_sd = round(sd(tot_nat)),
+    total_HF_impact_q05 = round(quantile(tot_nat, 0.05, names = FALSE)),
+    total_HF_impact_q95 = round(quantile(tot_nat, 0.95, names = FALSE)),
+    shapley_mean       = round(long(st_nat$mean), 2),
+    shapley_sd         = round(long(st_nat$sd), 2),
+    shapley_q05        = round(long(st_nat$q05), 2),
+    shapley_q95        = round(long(st_nat$q95), 2),
+    shapley_pct        = round(long(st_nat$mean / sum(obs_pop) * 100), 4),
+    n_bcrs             = length(bcrs),
+    n_flagged          = if (is.null(extrap_flags)) NA_integer_ else sum(flagged, na.rm = TRUE),
+    total_HF_impact_flagged = round(sum(imp_flg_b)),
+    stringsAsFactors   = FALSE
+  )
 
-  shapley_bcr_rows[[sy]] <- shapley_bcr
-
+  message(sprintf("  additivity: sum(phi) = %.3f, v(N) = %.3f (per-sample max |residual| %.2e)",
+                  sum(st_nat$mean), mean(tot_nat),
+                  max(abs(colSums(phi_nat[1, , ]) - tot_nat[1, ]))))
   message("  ", sp, " ", yr, ": ", nrow(shapley_sub_df), " subbasin rows, ",
-          nrow(shapley_bcr), " BCR rows")
+          nrow(shapley_bcr_rows[[sy]]), " BCR rows")
 }
 
-# ---- Assemble final tables ---------------------------------------------------
+# ---- Assemble and write ------------------------------------------------------
 
-shapley_sub_all <- bind_rows(shapley_sub_rows)
-shapley_bcr_all <- bind_rows(shapley_bcr_rows)
-
-# ---- National scale (sum of BCR Shapley values) -----------------------------
-
-shapley_national <- shapley_bcr_all |>
-  group_by(species, year, sector) |>
-  summarise(
-    obs_population  = round(sum(obs_population)),
-    total_HF_impact = round(sum(total_HF_impact)),
-    shapley_mean    = round(sum(shapley_mean), 2),
-    shapley_sd      = round(sqrt(sum(shapley_sd^2)), 2),
-    shapley_pct     = round(sum(shapley_mean) / sum(obs_population) * 100, 4),
-    n_bcrs          = n(),
-    .groups = "drop"
-  )
-
-# ---- Verify additivity -------------------------------------------------------
-
-check <- shapley_national |>
-  group_by(species, year) |>
-  summarise(
-    sum_shapley     = sum(shapley_mean),
-    total_HF_impact = first(total_HF_impact),
-    residual        = sum_shapley - total_HF_impact,
-    .groups = "drop"
-  )
-
-message("\n=== Shapley additivity check ===")
-for (i in seq_len(nrow(check))) {
-  message(sprintf("  %s %s: sum(phi) = %.1f, v(N) = %.1f, residual = %.1f",
-                  check$species[i], check$year[i],
-                  check$sum_shapley[i], check$total_HF_impact[i], check$residual[i]))
-}
-
-# ---- Write outputs -----------------------------------------------------------
+shapley_sub_all  <- bind_rows(shapley_sub_rows)
+shapley_bcr_all  <- bind_rows(shapley_bcr_rows)
+shapley_national <- bind_rows(shapley_nat_rows)
 
 write.csv(shapley_sub_all, file.path(out_dir, "shapley_subbasin.csv"), row.names = FALSE)
 write.csv(shapley_bcr_all, file.path(out_dir, "shapley_bcr.csv"),      row.names = FALSE)

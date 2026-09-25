@@ -10,6 +10,7 @@
 # Reads  density_tables/by_bcr/{species}_{year}_{bcr}.rds  (one per 12D task) and writes
 #   density_tables/{species}_{year}_coalition_{cid}.rds             (cid 2..256)
 #   density_tables/arrays/{species}_{year}_coalition_{cid}_arrays.rds (full coalition + 8 singletons)
+#   density_tables/{species}_{year}_shapley_samples.rds             (per-sample subbasin Shapley, 14B)
 # BCRs are bound in each species' 06_bootstraps list.files() order - the order the
 # one-job-per-species 12D summed them in - so the national arrays' floating-point sums, and
 # every table, are bit-identical to that single-job run.
@@ -112,6 +113,15 @@ for (sp in unique(tasks$species)) {
   }
   message(Sys.time(), " | ", sp, " | wrote ", length(Filter(Negate(is.null), res$arrays_by_cid)),
           " array files")
+
+  # per-sample subbasin Shapley values for 14B's uncertainty
+  if (is.null(res$shapley_samples)) {
+    message(Sys.time(), " | WARNING: no Shapley samples for ", sp, " — not written")
+  } else {
+    saveRDS(res$shapley_samples, file = file.path(dt_dir, paste0(sp, "_", year, "_shapley_samples.rds")))
+    message(Sys.time(), " | ", sp, " | wrote Shapley samples: ", dim(res$shapley_samples$phi)[1L],
+            " subbasin rows x ", dim(res$shapley_samples$phi)[3L], " samples")
+  }
 }
 
 message(Sys.time(), " nice.")
