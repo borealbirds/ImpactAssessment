@@ -1,4 +1,17 @@
-# TODO — consolidated plan (last updated 2026-09-25)
+# TODO — consolidated plan (last updated 2026-09-25, end of session)
+
+> **Where we left off (2026-09-25).** All code for C2a–C2e is committed, pushed (`main` at
+> `30f6a85` or later) and staged on Fir (`8487982`). Waiting on two things:
+> 1. **The user submits the 2020 backfill rerun** (Next action 2 below): 07 + 11, because 08A
+>    now backfills with the footprint covariates at 0. It has not been submitted yet.
+> 2. **The user decides C2f** (what counts as a sector's footprint). Claude's proposal is the
+>    two-mask design in C2f below. The user leans towards a strict threshold and asked whether
+>    backfilling intact road-influence pixels is "like-for-like" (it is not; evidence in C2f).
+>    To build a strict mask Claude needs the original 300 m Hirsh-Pearson sector layers (14A
+>    overwrote our copies with bilinear 1 km versions) and a rule for how much of a 1 km cell
+>    must be converted to count.
+> C1 is rerun only after both. The user also asked earlier to keep `writing/` off the internet:
+> it is untracked and gitignored, never commit or push it.
 
 Backfill (**A**), V5 packaging conformance (**B**), the 12D rework (**D**) and C1 are done, and
 C2 produced Shapley means. C2's review (**C**, C2a–C2f) changed the design: footprint
@@ -64,6 +77,12 @@ never been edited — and so appeared in no diff-derived list — turned out to 
 - The closure includes **data files**, not just scripts: `SpeciesPredictionTruncationValues.Rdata`
   was recorded as "restaged" in B but Fir still had the old-schema copy, and the A7 smoke died
   on `12F`'s `densmax` guard.
+
+Before staging a 12F change, run the local regression on Fir's real CAWA can60 inputs:
+`Rscript Rscripts/misc/verify_12f_can60_local.R` (~4 min). It checks tables and arrays against
+Fir's smoke 7 (they must be `identical()` unless 12F's predictions or masks changed on purpose)
+and checks the direct part against an independent recomputation. Inputs are
+`cluster_logs/localtest/` and `cluster_logs/smoke7/` (gitignored, local only).
 
 Two mechanical gotchas found the same way:
 
@@ -203,17 +222,51 @@ design questions that are yours (C2e, C2f).
       - `--export=ALL,YEARS=a,b` would have been split at the comma, so YEARS travels in the
         environment.
       11's freshness check and atomic rename parse but were not run locally.
-- [ ] **C2f. Decision (yours): what counts as a sector's footprint.** 12F puts a pixel in sector
-      j's footprint when j's Hirsh-Pearson pressure is > 0 (after 14A's reprojection) and
-      CanHF ≥ 1. The pressure layers are continuous and include indirect-influence zones:
-      roads.tif is > 0 on 19% of Canada's cells, with a median of 4.55 and a tenth under 0.26;
-      roads-only footprint pixels have a median of 2.7–3.4. Hirsh-Pearson scores roads, rail,
-      mines and waterways by type and distance band (Woolmer et al. 2008 access weights) and oil
-      and gas from 10 at the site to 0 at 5 km; 14A then resampled 300 m to 1 km bilinearly. On those
-      pixels the 1 km vegetation is largely intact, so backfilling them measures how roaded land
-      differs from unroaded land, not habitat the road converted. Options: a pressure threshold
-      per sector (e.g. its direct score, or ≥ 4); or keep > 0 and report the indirect zone as
-      its own term. Changing it touches only 12F's masks, so it costs a C1, not a 07 rerun.
+- [ ] **C2f. Decision (yours, in discussion): what counts as a sector's footprint.** 12F puts a
+      pixel in sector j's footprint when j's Hirsh-Pearson pressure is > 0 (after 14A's
+      reprojection) and CanHF ≥ 1. The pressure layers are continuous and include
+      indirect-influence zones:
+      - roads.tif is > 0 on 19% of Canada's cells (median 4.55, a tenth under 0.26), and
+        roads-only footprint pixels have a median of 2.7–3.4;
+      - in boreal BCRs 46–61% of the footprint has no sector above pressure 4.
+      Hirsh-Pearson (2022) at 300 m: built 10, crop 7 and pasture 4 have no buffers; roads, rail,
+      mines and waterways are scored by type and distance band (Woolmer et al. 2008 access
+      weights); oil and gas decays from 10 at the site to 0 at 5 km. 14A then resampled the layers
+      bilinearly to 1 km IN PLACE, so the local and Fir copies no longer separate direct from
+      indirect footprint.
+      **The user's question (2026-09-25):** is a strict threshold harmless, since intact
+      road-influence pixels would be backfilled like-for-like and show no effect? **No:**
+      - The backfill is BART's expectation for the pixel's abiotic setting, learned on low-HF
+        land, not the pixel's own vegetation. On intact pixels backfill − observed is the model
+        residual, which averages to zero only if roaded pixels resemble the training pixels.
+        They do not: roads follow uplands and productive forest, and can80/81 footprint pixels
+        already hold 3–4× the OVEN density of low-HF land.
+      - Evidence: CAWA can60 (83% of its footprint is roads-only), roads = −3,037 birds, of
+        which −3,175 is vegetation (2-boot test, pre-C2e backfill). OVEN can12's backfill moves
+        road pixels from 25% to 18% deciduous and from 45% to 67% mixed.
+      - The direct term is non-zero too: 12F zeroes the footprint covariates wherever it
+        backfills (−20% of OVEN on can12's road pixels).
+      **Trade-off:** a strict threshold removes that spurious vegetation effect on intact pixels.
+      But influence-zone pixels would then keep their observed CanHF/canroad in a "no roads"
+      counterfactual, which breaks the one-or-the-other principle of C2e at landscape scale. It
+      would also drop the direct (Mahon-type) response near roads and wells, the only way the
+      method sees effects beyond the footprint (CLAUDE.md Open Limitation #3).
+      **Claude's proposal: two masks per sector.**
+      - Vegetation is backfilled (`bf`) only where the footprint is DIRECT (strict threshold).
+      - Footprint covariates are zeroed on observed vegetation (`d0`) over the whole influence
+        zone (pressure > 0).
+      12F already computes `d0` for the direct/vegetation split, and both fields are
+      coalition-free, so this is a mask change in 12F: no extra predictions, and no 07 rerun.
+      Each coalition then sums `bf` on its direct pixels and `d0` on its influence-only pixels.
+      The split then reads cleanly: vegetation on converted pixels, direct over the influence
+      zone.
+      **Needed from the user:**
+      1. The original 300 m Hirsh-Pearson layers (location; G: or re-download).
+      2. The rule for a 1 km cell to count as direct: any 300 m cell at the sector's direct
+         score, or at least a given share (e.g. 50%) of its area.
+      3. HP's Tables 1–4 (the direct scores for roads/rail/mines/waterways), if thresholds are
+         set by score.
+      **Must be implemented and tested before the C1 rerun.**
 - [ ] **C3.** Sensitivity pass with the `q99.9` stage disabled; report the spread. The frozen cap
       has a known-direction bias — counterfactual densities are higher, so they hit the frozen
       ceiling more often than observed, systematically **under-estimating impact in the
@@ -238,6 +291,12 @@ design questions that are yours (C2e, C2f).
       per species) just to read `attr(b.list[[1]], "bcr")`; it parses the BCR from the
       filename. `12F`, which loads `b.list` anyway, now `stop()`s if the attribute and the
       filename disagree. Verified equal for all 25 CAWA/OVEN pairs.
+- [ ] Local C2 diagnostics (gitignored), kept for C2f and the write-up; delete when done:
+      - `cluster_logs/sanity/` (~7 GB): 25 weights, can11/12/13 backfill mosaics, 5 bird
+        models, 3 stacks and the three `diag_extreme_bcr_*.rds` results. The harnesses that read
+        them are `Rscripts/misc/diag_extreme_bcr_*.R`.
+      - `cluster_logs/sub1_zeroed/`: the local 07 run of subbasin 1 with C2e's zeroing.
+      - `cluster_logs/extrapolation_flags_KS_mahal_2026-09-24.csv`: the old 10C flags.
 - [ ] Decide the fate of local `covariates_mosaiced_2020_PREORIG.tif` (1.5 G) — the only
       surviving pre-CAfire-fix 2020 mosaic.
 - [ ] `15C_singletons_plot.R:150` reads `predictions_coalitions/`, deleted on both ends, so the
