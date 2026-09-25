@@ -129,7 +129,7 @@ CAWA can11's real models and stack (harnesses in the session scratchpad; see mem
   re-checks this).
 - **No `M`.** Workers reduce their own bootstrap to per-coalition subbasin sums (bit-identical:
   `rowsum` is column-independent), removing the ~17 GB can11 matrix and its 2–3 copies.
-- **Per-BCR tasks.** 12D is one array task per species × BCR at 8 cores / 64G / 12 h (was one
+- **Per-BCR tasks.** 12D is one array task per species × BCR at 8 cores / 48G / 3 h (was one
   16-core / 384G job per species running BCRs in series); 12H merges in the old BCR order.
   Alliance bills memory as core-equivalents (~3.9 GB each on Fir), so 384G on 16 cores was
   charged like ~98 cores.
@@ -198,11 +198,20 @@ CAWA can11's real models and stack (harnesses in the session scratchpad; see mem
       for a small single sector BART dominates, but 10–20 distinct draws per bootstrap still leave
       Monte Carlo error < 1% of the impact. 16 distinct draws (no replacement) would cut gbm calls
       ~4× but changes numbers within MC noise. Confirm on C1's 32-boot arrays before adopting.
-- [ ] Profile C1's tasks (`seff` / `sacct --format=JobID,Elapsed,MaxRSS,TotalCPU`) and tighten
-      `--mem` / `--time` per BCR size. Wall times from the attempt-2 logs (32 boots, 8 cores):
-      longest CAWA can11 42 min (sampling 39), OVEN can11 38, OVEN can61 33, OVEN can12 23; 16 of
-      25 under 15 min; prep ≤ 3 min everywhere. `--time=12:00:00` is ~17× the worst task.
-      MaxRSS still needed from `sacct` before touching `--mem=64G`.
+- [x] **Profiled C1 and resized 12D to 8 cores / 48G / 3 h** (was 64G / 12 h). `sacct` over all 25
+      tasks: 5.17 h of task time in total; longest CAWA can11 42 min, OVEN can11 38, OVEN can61 33;
+      16 of 25 under 15 min. Peak MaxRSS 28.8 GiB (OVEN can61); can11/can61 22–29 GiB, mid-sized
+      BCRs 16–23, small 4–17. 48G = 1.7× the peak (40G's 1.4× was judged too thin: MaxRSS is
+      sampled every 30 s, and other species' models may carry more backfilled covariates). 3 h =
+      4.3× the longest task, and ≤ 3 h jobs start sooner on Alliance clusters. Billed cost of a C1
+      (Alliance bills max(cores, mem ÷ ~3.9 GB) × elapsed): 85 core-equivalent-hours at 64G → ~64 at 48G.
+      **Savings vs the smoke-5 code** (one 16-core / 384G job per species, BCRs in series): per
+      bootstrap 13–14× less compute, measured on CAWA can10 (17 → 1.2 core-min) and can11
+      (130 → 9.8); prep per BCR 5–7 → 1–4 min. Projected old C1: ~19 h longest job, ~510 CPU
+      core-hours, ~3,100 billed core-equivalent-hours (~2,100 if unmeasured BCRs sped up only the
+      8× the separately measured parts explain); new: 42 min, 41 core-hours, ~64 billed.
+      The C++ walk (3.6–4.4×) and distinct-draw + weight-0 skipping (1.87×) account for ~8× of the
+      13–14×; the rest is not isolated.
 - [ ] Out of 12D's scope but on the multi-year path: `07` (backfill) must re-run per year at the
       same 128G-per-core ratio; pre-2020 years need historical footprint layers, not the 2020 mask.
 

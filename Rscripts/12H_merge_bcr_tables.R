@@ -53,7 +53,7 @@ if (nrow(missing) > 0L)
   stop(nrow(missing), " per-BCR result(s) missing: ",
        paste0(missing$species, " ", missing$bcr, collapse = ", "),
        " - resubmit with: sbatch --array=", paste(missing$task, collapse = ","), test_export,
-       " 12D_repredict_all_coalitions.sh")
+       " 12D_repredict_all_coalitions.sh (add --mem=64G if its log shows oom_kill or dead workers)")
 
 recs <- lapply(tasks$file, readRDS)
 

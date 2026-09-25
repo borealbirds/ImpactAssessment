@@ -3,8 +3,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
-#SBATCH --time=12:00:00
+#SBATCH --mem=48G
+#SBATCH --time=03:00:00
 #SBATCH --job-name=coal_bcr
 #SBATCH --array=1-25
 #SBATCH --mail-user=mannfred@ualberta.ca

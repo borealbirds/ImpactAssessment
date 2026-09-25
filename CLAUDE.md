@@ -137,8 +137,11 @@ sbatch 12C_build_prediction_weights.sh   # --array=1-<n_species>
 
 # Phase 2: ONE array task per species x BCR computes ALL 255 coalitions for that BCR in a
 # single pass (superset restructure — see "12F restructure invariants" below), then 12H merges.
-# 12D_repredict_all_coalitions.sh fixes --array=1-25 (CAWA + OVEN) at 8 cores / 64G / 12:00:00;
+# 12D_repredict_all_coalitions.sh fixes --array=1-25 (CAWA + OVEN) at 8 cores / 48G / 03:00:00;
 # the task table is printed at the top of every 12D log. An index past the table's end exits 0.
+# Sized from C1 (2026-09-24): peak MaxRSS 28.8 GiB (OVEN can61), longest task 42 min (CAWA can11).
+# Memory is what Alliance bills here (48G on 8 cores = 12.3 core-equivalents), so it is not
+# padded further; a task killed for memory is resubmitted alone with --mem=64G.
 #
 # For a FRESH full re-run, delete stale outputs first. `rm -f` on files, never `rm -rf` on a
 # directory: 15A reads arrays/. 12H refuses to merge per-BCR files from different code versions,
