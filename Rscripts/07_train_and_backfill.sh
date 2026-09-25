@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=128G
 #SBATCH --time=08:00:00
-#SBATCH --job-name=2020_run_backfill
+#SBATCH --job-name=backfill
 #SBATCH --array=1-674%30
 #SBATCH --mail-user=mannfred@ualberta.ca
 

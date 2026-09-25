@@ -70,6 +70,18 @@ train_and_backfill_subbasin_s <- function(
   df_backfill[, c("x","y")] <- sweep(df_backfill[, c("x","y")], 2, xy_scale,  "/")
   
   logp("backfill rows=%d", nrow(df_backfill))
+
+  # The counterfactual has no industry, so the backfill is predicted with the footprint
+  # covariates (V5's "Disturbance" class: CanHF, canroad, CCNL night lights) at 0 rather
+  # than at each pixel's observed values. Those lie beyond the low-HF training range, where
+  # trees hold the prediction at the most-disturbed training pixels: vegetation predicted
+  # as if the road were still there. 12F sets the same covariates to 0 for the bird model.
+  # The models are still trained on the observed values, which include 0.
+  footprint_cols <- intersect(names(df_backfill),
+                              abiotic_vars$predictor[abiotic_vars$predictor_class == "Disturbance"])
+  df_backfill[, footprint_cols] <- 0
+  logp("footprint covariates set to 0 at backfilled pixels: %s",
+       if (length(footprint_cols)) paste(footprint_cols, collapse = ", ") else "none")
   
   # define predictors and responses
   abiotic_cols <- intersect(names(df_train), abiotic_vars$predictor) # abiotic features present in subbasin_s

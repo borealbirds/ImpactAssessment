@@ -175,19 +175,26 @@ mosaic_backfilled_stacks <- function(sub_ids, year, ref) {
 
 
 # get task from SLURM ------------------------------------------------------
+# YEARS (comma-separated, default 2020) is set at submission, as for 07; tasks come in blocks
+# of one year: task t runs year YEARS[(t - 1) %/% n_bcr + 1] on BCR bcr_vec[(t - 1) %% n_bcr + 1].
+# 07_submit_backfill_years.sh sizes the array (n_bcr = 19 Canadian BCRs).
 
-year    <- 2020
+years <- suppressWarnings(as.integer(strsplit(trimws(Sys.getenv("YEARS", "2020")), "[, ]+")[[1]]))
+if (length(years) == 0L || anyNA(years))
+  stop("YEARS must be comma-separated years, e.g. YEARS=2015,2020; got '", Sys.getenv("YEARS"), "'")
+n_bcr   <- length(bcr_vec)
 task_id <- as.integer(Sys.getenv("SLURM_ARRAY_TASK_ID"))
-bcr_code <- bcr_vec[task_id]
-message(Sys.time(), " | task=", task_id, " BCR=", bcr_code)
+if (is.na(task_id) || task_id < 1L || task_id > n_bcr * length(years)) {
+  message(Sys.time(), " | task ", task_id, " is past the ", n_bcr * length(years),
+          " (year, BCR) pairs of YEARS=", paste(years, collapse = ","), " - nothing to do")
+  quit(save = "no", status = 0)
+}
+year     <- years[(task_id - 1L) %/% n_bcr + 1L]
+bcr_code <- bcr_vec[(task_id - 1L) %% n_bcr + 1L]
+message(Sys.time(), " | task=", task_id, " year=", year, " BCR=", bcr_code)
 
 out_dir  <- file.path(ia_dir, "data", "derived_data", "bart_models_mosaics", year)
 out_path <- file.path(out_dir, paste0(bcr_code, "_backfilled.tif"))
-
-if (file.exists(out_path)) {
-  message(Sys.time(), " | ", bcr_code, " | output already exists — skipping")
-  quit(save = "no", status = 0)
-}
 
 # subbasins for this BCR
 sub_ids <- bcr_subbasins_ref |>
@@ -196,6 +203,21 @@ sub_ids <- bcr_subbasins_ref |>
   unique()
 
 message(Sys.time(), " | ", bcr_code, " | subbasins=", length(sub_ids))
+
+# Skip only a mosaic that is newer than every subbasin backfill it is built from. Skipping on
+# existence alone turned a whole rerun into a no-op once (2026-09-19: the stale mosaics had
+# not been deleted, and every task exited 0 in seconds).
+if (file.exists(out_path)) {
+  in_files <- file.path(ia_dir, "data", "derived_data", "bart_models", year,
+                        paste0("subbasin_", sub_ids), paste0("subbasin_", sub_ids, "_backfill.tif"))
+  in_files <- in_files[file.exists(in_files)]
+  if (length(in_files) > 0L && file.mtime(out_path) > max(file.mtime(in_files))) {
+    message(Sys.time(), " | ", bcr_code, " | output is newer than its ", length(in_files),
+            " subbasin backfills — skipping")
+    quit(save = "no", status = 0)
+  }
+  message(Sys.time(), " | ", bcr_code, " | output is older than its subbasin backfills — rebuilding")
+}
 
 if (length(sub_ids) == 0) {
   message(Sys.time(), " | ", bcr_code, " | no subbasins — skipping")
@@ -229,14 +251,18 @@ bam_bcr_codes <- gsub("_", "", paste(bam_boundary$country, bam_boundary$subUnit,
 bcr_poly      <- bam_boundary[bam_bcr_codes == bcr_code, ]
 
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+# Written under a temporary name and renamed when complete: terra::mask(filename=) streams,
+# so a task killed mid-write used to leave a readable, truncated mosaic in place.
+part_path <- file.path(out_dir, paste0(bcr_code, "_backfilled_partial.tif"))
 # INTERLEAVE=BAND on the final mosaic too, so downstream 12F can extract
 # individual covariate bands without scanning the full file (same fix
 # rationale as the pre-resampled tifs above).
 terra::mask(stack_bf, bcr_poly,
-            filename = out_path, overwrite = TRUE,
+            filename = part_path, overwrite = TRUE,
             wopt = list(gdal = c("INTERLEAVE=BAND",
                                  "COMPRESS=DEFLATE",
                                  "BIGTIFF=YES",
                                  "TILED=NO")))
+if (!file.rename(part_path, out_path)) stop("could not move ", part_path, " into place")
 message(Sys.time(), " | ", bcr_code, " | masked and written to ", out_path)
 message(Sys.time(), " | done.")

@@ -1,38 +1,50 @@
 # TODO — consolidated plan (last updated 2026-09-25)
 
 Backfill (**A**), V5 packaging conformance (**B**), the 12D rework (**D**) and C1 are done, and
-C2 produced Shapley means. C2's review items are in **C** (C2a–C2f): the SD fix and the new
-extrapolation flags are in code, and the ecological check raised two design decisions that
-change what 12F (and possibly 07) computes. Finished work is under **Completed**.
+C2 produced Shapley means. C2's review (**C**, C2a–C2f) changed the design: footprint
+covariates are now 0 in the BART backfill as well as in the bird model (C2e), so every
+backfill is stale and 07 + 11 rerun before C1. C2f (what counts as a sector's footprint) is
+still open. Finished work is under **Completed**.
 
 ## Critical path
 
 ```
-you:      [decide C2e + C2f] ─┐
-local:    [10C: DONE] ────────┤
-cluster:                      └─► [stage] ─► [wipe] ─► [C1 rerun: 12D + 12H] ─► [C2 rerun: 14B] ─► C3
-                  (07 + 11 rerun first only if C2e(2) changes the BART predictors)
+you:      [decide C2f] ──────────────────────────────────────────────┐
+cluster:  [stage] ─► [07 + 11 rerun, 2020] ─► [wipe tables] ─► [C1 rerun: 12D + 12H] ─► [C2 rerun: 14B] ─► C3
 ```
+C2f changes only 12F's masks, so it has to be settled before the C1 rerun, not before 07.
 
 **Next actions, in order:**
 
-1. **Decide C2e and C2f** (footprint covariates in the counterfactual; what counts as a sector's
-   footprint). Both change 12F, so settling them first avoids paying for C1 twice. C2e(2) would
-   also need 07 + 11 rerun before C1.
-2. ~~Run 10C locally~~ — done 2026-09-25 (C2c).
-3. **Stage** the 12D/12H closure on Fir: checksum sync of `12D` `.R`+`.sh`, `12E`, `12F`, `12G`
-   `.R`+`.cpp`, `12H` `.R`+`.sh`; `.sh` files must be LF. `12E`, `12F` and `12H` have changed.
+1. **Stage** on Fir (checksum sync; `.sh` files must be LF):
+   - the 07 closure: `07_train_and_backfill` `.R`+`.sh`, `07_submit_backfill_years.sh`, `08A`,
+     `08B_deploy_gbart`, `08B_deploy_mbart`, `09_*`, and `11_premosaic_backfilled_stacks`
+     `.R`+`.sh`;
+   - the 12D/12H closure: `12D` `.R`+`.sh`, `12E`, `12F`, `12G` `.R`+`.cpp`, `12H` `.R`+`.sh`.
+2. **Rerun 07 + 11 for 2020** (C2e: footprint covariates at 0 in the backfill):
+   `cd /home/mannfred/scratch/impact_assessment/Rscripts && bash 07_submit_backfill_years.sh 2020`
+   This submits 07 (674 tasks) and 11 (19 tasks, `afterany`). No wipe is needed: 07 overwrites,
+   and 11 now rebuilds any mosaic older than its inputs. Oracles:
+   - 07: every `subbasin_{i}_confusion.rds` is newer than the submission, and every
+     `logs/Y2020_S{i}.log` has `footprint covariates set to 0`;
+   - 11: every `.out` ends with `done.`.
+   If an 11 task OOMs, resubmit it with more memory (`YEARS=2020 sbatch --array=<i> --mem=256G`).
+3. **Decide C2f** while 07 runs.
 4. **Wipe, then rerun C1** (~1 h wall, ~64 billed core-equivalent-hours):
    `cd /home/mannfred/scratch/impact_assessment/Rscripts && rm -f ../data/derived_data/density_tables/*.rds ../data/derived_data/density_tables/arrays/*.rds ../data/derived_data/density_tables/by_bcr/*.rds && sbatch 12D_repredict_all_coalitions.sh`
    then `sbatch --dependency=afterany:<12D job id> 12H_merge_bcr_tables.sh`.
-   Pass: all 25 tasks `nice.`, and 12H logs `wrote Shapley samples` for both species. No smoke
-   is needed first: C2a's local tests cover the change, and a failure costs one C1.
+   Pass: all 25 tasks `nice.`; the identity gate still passes (the obs side is unchanged); 12H
+   logs `wrote Shapley samples` for both species.
 5. **Pull** the 510 tables, 18 arrays and the two `*_shapley_samples.rds` (`--notify off`).
-   First copy the current local tables aside. If 12F's C2e/C2f logic did not change, every table
-   and array must be `identical()` to the 2026-09-24 C1 output: same seeds and predictions, one
-   added output.
-6. **C2 rerun:** `14B` locally.
+   Tables will differ from the 2026-09-24 C1 (new backfill), so there is no `identical()` gate
+   this time; `obs_total` and `obs_on_coalition` must be unchanged unless C2f changed the masks.
+6. **C2 rerun:** `14B` locally (10C's flags are in place).
 7. **C3:** the uncapped `q99.9` sensitivity pass.
+
+**Multi-year:** 07 and 11 take years (`bash 07_submit_backfill_years.sh 2010 2015 2020`), but
+each year needs `covariates_mosaiced_{year}.tif` (06; only 2020 exists) and that year's
+footprint masks (`CanHF_1km_{lessthan1,morethan1}_{year}.tif`, or `HF_MASK_YEAR=2020` to borrow
+2020's). 12A, 12C, 12D and 12H still fix `year <- 2020`.
 
 **Blocker for every cluster step**: SSH is keyboard-interactive (2FA), so cluster commands must
 be run from your own authenticated session. Globus works (one file per call, **never** `--batch`,
@@ -66,9 +78,10 @@ Two mechanical gotchas found the same way:
   copy fails with `Path not allowed`. Stage from inside the repo tree.
 
 **Current state (2026-09-25)**: `/Rscripts` on Fir matches `542c092` for the 12D closure (`12D`
-`.R`+`.sh` at 48G / 3 h, `12E`, `12F`, `12G` `.R`+`.cpp`, `12H` `.R`+`.sh`). The per-sample
-Shapley change (`e747504`: `12E`, `12F`, `12H`) is NOT staged yet. It waits on C2e/C2f, which may
-change 12F again. `density_tables/` on Fir holds C1's merged production output (and `by_bcr/` its
+`.R`+`.sh` at 48G / 3 h, `12E`, `12F`, `12G` `.R`+`.cpp`, `12H` `.R`+`.sh`). Nothing from
+2026-09-25 is staged yet: not the per-sample Shapley values (`12E`/`12F`/`12H`), not the
+direct/vegetation split (`12F`), not the zeroed backfill (`08A`), and not years (`07`/`11` +
+`07_submit_backfill_years.sh`). `density_tables/` on Fir holds C1's merged production output (and `by_bcr/` its
 25 per-BCR files).
 `/Rscripts/12*` is now ten files (`12A` is local-only by design).
 
@@ -143,7 +156,8 @@ design questions that are yours (C2e, C2f).
         Cropland becomes mixed forest / woody savanna (MODIS mixed 4% → 40%), which is consistent
         with the pre-settlement forest. Backfilled density is ~0.5× that of the forest remnants.
         The direction is plausible, but the training set is very thin.
-      - **OVEN negatives (can12 −8.5%, can80 −1.7%, can81 −6.3%) are roads, and not habitat.**
+      - **OVEN negatives (can12 −8.5%, can80 −1.7%, can81 −6.3%) come from roads, through the
+        bird model's footprint response rather than the backfilled vegetation.**
         Roads-only pixels are 53–70% of the footprint there, and 46–61% of the footprint has no
         sector above pressure 4 (see C2f). The footprint pixels already hold more Ovenbirds than
         low-HF land (can80/81: 3–4×). In can12 the backfilled vegetation is as good for Ovenbird
@@ -153,30 +167,49 @@ design questions that are yours (C2e, C2f).
           and canroad_5x5 to 0 with the observed vegetation kept.
         - **+213k is vegetation.**
         The negative sign is the bird model's footprint response (2.8% of its relative
-        influence), not the backfill.
+        influence), not the backfill. That response can be real: Mahon et al. (2019, Ecol.
+        Appl. 29:e01895) found deciduous-associated species, Ovenbird included, increase with
+        wide linear features (roads, pipelines). Its support is thin, though (C2e).
       - The same decomposition for CAWA/OVEN can11 and can13 was reaped with 10C; rerun it on its
         own (~25 min) if wanted.
-- [ ] **C2e. Decision (yours): footprint covariates in the counterfactual.** V5's "Disturbance"
-      class (CanHF_1km/_5x5, canroad_1km/_5x5, CCNL_1km night lights) enters twice, and the two
-      uses are inconsistent.
-      (1) **Bird model (12F):** set to 0 at every backfilled pixel. That term alone makes OVEN
-      can12 negative (C2d). Zero footprint is outside the data on footprint pixels, and BAM's
-      mostly roadside surveys make the model's footprint response hard to read as ecology.
-      (2) **BART (07/08A):** the class is in the predictors, and the backfill uses each pixel's
-      OBSERVED values, which lie beyond the training range. Subbasin 57: CanHF_1km trains on 0–10
-      but backfills at a median of 12; canroad_5x5 trains on 0–0.8 and backfills at 0.83. Trees
-      hold predictions at the training edge, so the backfill describes the most disturbed
-      training pixels, not no industry. A local test fitted BART as 08A does (without the preceding biotics) in subbasins 57 (can11) and 98 (can12), for deciduous %, canopy height and biomass. Backfilling with the observed footprint values, instead of dropping the class, moved the backfilled means by −15% to +32%; setting the values to 0 moved them by −6% to +73%. The class took 4–10% of BART's splits (`Rscripts/misc/diag_extreme_bcr_bart_footprint.R`).
-      Options for (1): keep 0 (current); keep observed values (impact via vegetation only); or
-      backfill them from the low-HF reference like the biotic covariates. The decomposition
-      supports reporting the direct and vegetation parts separately whichever is chosen.
-      Options for (2): drop the class from 08A's predictors, or backfill with it at 0. Either
-      means rerunning 07 (674 × 128G / 8 h), 11 and C1.
+- [x] **C2e. Footprint covariates in the counterfactual: DECIDED 2026-09-25 — 0 in both places.**
+      V5's "Disturbance" class (CanHF_1km/_5x5, canroad_1km/_5x5, CCNL_1km night lights) is set
+      to 0 wherever a pixel is backfilled: a backfilled forest cannot sit on top of a road.
+      Details and evidence are in CLAUDE.md Open Limitation #9.
+      (1) **Bird model (12F):** unchanged; it already used 0. Added: a direct/vegetation split.
+      12F predicts each bootstrap once more with the observed vegetation and the class at 0
+      (`d0`), so every Shapley value splits exactly into direct (`d0 − obs`) and vegetation
+      (`bf − d0`) parts. 14B reports both at every level (`shapley_direct_*`,
+      `shapley_vegetation_*`). Survey support for the direct part is thin: in the can11/12/13
+      models at least 90% of survey locations have CanHF_1km ≥ 6–7 and canroad_5x5 ≥ 0.3–0.5.
+      (2) **BART (08A):** now backfills with the class at 0; training is unchanged. Until
+      2026-09-25 it used each pixel's observed values, which lie beyond the training range
+      (subbasin 57: CanHF_1km 0–10 in training, median 12 at backfilled pixels), i.e. vegetation
+      predicted as if the road were still there. A local BART test in subbasins 57 and 98 (no
+      preceding biotics) showed the size of the choice: against dropping the class, observed
+      values moved deciduous %, height and biomass by −15% to +32%, and 0 moved them by −6% to
+      +73%. A local 07 run of subbasin 1 (conifer; 1,784 backfilled pixels) with the change,
+      against Fir's pre-change backfill (same seeds): deciduous % −4.3%, height −2.1%, closure
+      −4.6%, conifer % −0.5%, and the MODIS modal class changed on 11% of pixels (SCANFI 0.1%,
+      VLCE 0.5%). Kept in `cluster_logs/sub1_zeroed/`; its log shows `footprint covariates set
+      to 0 at backfilled pixels: CCNL_1km, CanHF_5x5, canroad_1km, canroad_5x5, CanHF_1km`.
+      **Every existing backfill is stale: 07 + 11 must rerun before C1.**
+      **Years:** 07 and 11 now take `YEARS` from the environment, and
+      `07_submit_backfill_years.sh` takes the years as arguments. Tested locally:
+      - the parse errors, the missing covariate stack and the missing mask year each stop with
+        their message;
+      - task 1 of `YEARS=2020,2015` resolves to (2020, subbasin 1);
+      - a dry run of the helper with a fake `sbatch` sizes 07 at 674 tasks per year and 11 at 19;
+      - `--export=ALL,YEARS=a,b` would have been split at the comma, so YEARS travels in the
+        environment.
+      11's freshness check and atomic rename parse but were not run locally.
 - [ ] **C2f. Decision (yours): what counts as a sector's footprint.** 12F puts a pixel in sector
       j's footprint when j's Hirsh-Pearson pressure is > 0 (after 14A's reprojection) and
       CanHF ≥ 1. The pressure layers are continuous and include indirect-influence zones:
       roads.tif is > 0 on 19% of Canada's cells, with a median of 4.55 and a tenth under 0.26;
-      roads-only footprint pixels have a median of 2.7–3.4 against a direct score of 8. On those
+      roads-only footprint pixels have a median of 2.7–3.4. Hirsh-Pearson scores roads, rail,
+      mines and waterways by type and distance band (Woolmer et al. 2008 access weights) and oil
+      and gas from 10 at the site to 0 at 5 km; 14A then resampled 300 m to 1 km bilinearly. On those
       pixels the 1 km vegetation is largely intact, so backfilling them measures how roaded land
       differs from unroaded land, not habitat the road converted. Options: a pressure threshold
       per sector (e.g. its direct score, or ≥ 4); or keep > 0 and report the indirect zone as

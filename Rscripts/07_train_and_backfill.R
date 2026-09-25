@@ -17,14 +17,22 @@ test  <- FALSE
 cc    <- TRUE   # TRUE = Compute Canada cluster
 local <- FALSE  # TRUE = local RProject machine (overrides Google Drive path)
 
-# if working on cluster, extract arguments from SLURM script
+# if working on cluster, extract the array task index from the SLURM script
 args <- commandArgs(trailingOnly = TRUE)
 if (cc && length(args) == 0) {
-  stop("no subbasin index supplied")
+  stop("no task index supplied")
 }
+task_id <- if (cc) as.integer(args[1]) else 1L
 
-# subbasin_index <- c(3,5,7,36)
-subbasin_index <- if (cc) as.integer(args[1]) else 1L
+# years to backfill: YEARS, comma-separated, from the submitting shell's environment
+# (default 2020), e.g.
+#   bash 07_submit_backfill_years.sh 2015 2020
+# which exports YEARS=2015,2020 and submits 07 with --array sized to the years (and 11 after
+# it). Not --export=ALL,YEARS=2015,2020: sbatch splits --export on commas. Tasks come in blocks of one year: task t runs year YEARS[(t - 1) %/% n_sub + 1]
+# on subbasin (t - 1) %% n_sub + 1, with n_sub = 674 subbasins.
+years <- suppressWarnings(as.integer(strsplit(trimws(Sys.getenv("YEARS", "2020")), "[, ]+")[[1]]))
+if (length(years) == 0L || anyNA(years))
+  stop("YEARS must be comma-separated years, e.g. YEARS=2015,2020; got '", Sys.getenv("YEARS"), "'")
 
 #3. set root path ------------------------------------------------
 print("* setting root file path *")
@@ -102,25 +110,57 @@ source(file.path(ia_dir, "Rscripts", "08A_train_and_backfill_subbasin_s.R"))
 
 #6. train models and backfill biotic features for year y -----------------------------
 
-# load spatial objects inside of each worker to avoid "external pointer is not valid"
-# library(terra)
-# import pre-mosaiced covariate stack for year_y
-year <- 2020
-stack_y <- terra::rast(file.path(ia_dir, "data", "raw_data", "covariates_mosaiced", sprintf("covariates_mosaiced_%d.tif", year)))
+# which (year, subbasin) this task runs
+all_subbasins_subset <- terra::vect(file.path(ia_dir, "data", "raw_data", "hydrobasins_masked_merged_subset.gpkg"))
+n_sub <- nrow(all_subbasins_subset)
+n_task <- n_sub * length(years)
+array_max <- suppressWarnings(as.integer(Sys.getenv("SLURM_ARRAY_TASK_MAX", NA)))
+if (!is.na(array_max) && array_max < n_task)
+  message("WARNING: the array ends at task ", array_max, " but YEARS=", paste(years, collapse = ","),
+          " needs 1-", n_task, " (", n_sub, " subbasins per year) - tasks ", array_max + 1, "-", n_task,
+          " were never submitted")
+if (is.na(task_id) || task_id < 1L || task_id > n_task) {
+  message("task ", task_id, " is past the ", n_task, " (year, subbasin) pairs of YEARS=",
+          paste(years, collapse = ","), " - nothing to do")
+  quit(save = "no", status = 0)
+}
+year           <- years[(task_id - 1L) %/% n_sub + 1L]
+subbasin_index <- (task_id - 1L) %% n_sub + 1L
+print(sprintf("* task %d: year %d, subbasin %d *", task_id, year, subbasin_index))
+
+# pre-mosaiced covariate stack for this year (built locally by 06)
+stack_path <- file.path(ia_dir, "data", "raw_data", "covariates_mosaiced", sprintf("covariates_mosaiced_%d.tif", year))
+if (!file.exists(stack_path))
+  stop("no covariate stack for ", year, ": ", stack_path, " - build it with 06_build_covariate_stacks.R ",
+       "(its multi-year line) and stage it")
+stack_y <- terra::rast(stack_path)
 
 # define categorical features
 categorical_responses = c("ABoVE_1km", "NLCD_1km","MODISLCC_1km", "MODISLCC_5x5","SCANFI_1km","VLCE_1km")
 
+# low- and high-HF masks (training vs backfilled pixels) for this year's footprint:
+# hirshpearson/CanHF_1km_{lessthan1,morethan1}_{year}.tif, or the undated files for 2020.
+# Another year's footprint differs from 2020's, so a year without its own masks stops here;
+# HF_MASK_YEAR=<y> at submission uses year y's masks instead (e.g. HF_MASK_YEAR=2020).
+mask_year <- as.integer(Sys.getenv("HF_MASK_YEAR", year))
+hf_mask_path <- function(kind) {
+  dated <- file.path(ia_dir, "data", "raw_data", "hirshpearson", sprintf("CanHF_1km_%s_%d.tif", kind, mask_year))
+  if (file.exists(dated)) return(dated)
+  if (mask_year == 2020L) return(file.path(ia_dir, "data", "raw_data", "hirshpearson", sprintf("CanHF_1km_%s.tif", kind)))
+  stop("no ", kind, " footprint mask for ", mask_year, " (expected ", dated, "). To backfill ", year,
+       " with the 2020 masks instead, submit with HF_MASK_YEAR=2020.")
+}
+print(sprintf("* footprint masks: %s, %s *", hf_mask_path("lessthan1"), hf_mask_path("morethan1")))
+
 # import low hf layer and project to current stack
-lowhf_mask <- terra::rast(file.path(ia_dir, "data", "raw_data", "hirshpearson", "CanHF_1km_lessthan1.tif"))
+lowhf_mask <- terra::rast(hf_mask_path("lessthan1"))
 lowhf_mask <- terra::project(x=lowhf_mask, y=stack_y, method = "near")
 
 # import high hf layer and project to current stack
-highhf_mask <- terra::rast(file.path(ia_dir, "data", "raw_data", "hirshpearson", "CanHF_1km_morethan1.tif"))
+highhf_mask <- terra::rast(hf_mask_path("morethan1"))
 highhf_mask <- terra::project(x=highhf_mask, y=stack_y, method = "near")
 
-# import subbasin boundaries and project to current stack
-all_subbasins_subset <- terra::vect(file.path(ia_dir, "data", "raw_data", "hydrobasins_masked_merged_subset.gpkg"))
+# project subbasin boundaries to current stack
 all_subbasins_subset <- terra::project(x=all_subbasins_subset, y=stack_y)
                 
 backfill_results <- tryCatch(

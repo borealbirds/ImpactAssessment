@@ -46,8 +46,8 @@ Scripts are numbered in execution order:
 | `04_reproject_and_crop_hydrobasins.R` | local | Crop Level 6 HydroBASINS to BAM study area |
 | `05_merge_low_density_subbasins.R` | local | Merge data-sparse subbasins so every unit has ≥Q25 low-HF pixels; subset to subbasins with any high-HF pixels → `hydrobasins_masked_merged_subset.gpkg` (674 subbasins) |
 | `06_build_covariate_stacks.R` | local | Mosaic BCR covariate stacks by year and add soil + CAfire layers → `covariates_mosaiced_{year}.tif` |
-| `07_train_and_backfill.R` + `.sh` | cluster | Entry point: for a given SLURM array index (subbasin), train BART models and backfill high-HF pixels. ONE array job over all 674 subbasins at 128G / 8h / 1 core. The former 64G+750G tiering (and its second script, `07_train_and_backfill_larger.sh`) was an artifact of the `08A` assembly OOM fixed in `73e8b68`, not of subbasin size |
-| `08A_train_and_backfill_subbasin_s.R` | sourced | Core `train_and_backfill_subbasin_s()` function; loops over biotic covariates in hierarchy order |
+| `07_train_and_backfill.R` + `.sh` | cluster | Entry point: for a given SLURM array index (one year × subbasin), train BART models and backfill high-HF pixels. Years come from the `YEARS` environment variable (comma-separated, default 2020); submit with `bash 07_submit_backfill_years.sh 2015 2020`, which sizes the array (674 tasks per year, in year blocks) and chains 11 after it. Each year needs its own `covariates_mosaiced_{year}.tif` and footprint masks (`CanHF_1km_{lessthan1,morethan1}_{year}.tif`; the undated files serve 2020), or `HF_MASK_YEAR=<y>` to borrow year y's masks, else the task stops. 128G / 8h / 1 core. The former 64G+750G tiering (and its second script, `07_train_and_backfill_larger.sh`) was an artifact of the `08A` assembly OOM fixed in `73e8b68`, not of subbasin size |
+| `08A_train_and_backfill_subbasin_s.R` | sourced | Core `train_and_backfill_subbasin_s()` function; loops over biotic covariates in hierarchy order. Backfills with the footprint ("Disturbance") covariates at 0 (Open Limitation #9) |
 | `08B_deploy_gbart.R` | sourced | `deploy_gbart()`: Gaussian BART for continuous biotic covariates (log1p-transformed, 90/10 train/holdout split) |
 | `08B_deploy_mbart.R` | sourced | `deploy_mbart()`: Multinomial BART for categorical land-cover covariates |
 | `09_collect_metrics_gbart/mbart.R` | sourced | Collect in-sample BART metrics |
@@ -56,7 +56,7 @@ Scripts are numbered in execution order:
 | `10B_inspect_backfill_metrics.R` | local | Inspect and visualize model accuracy |
 | `10C_abiotic_extrapolation_diagnostics.R` | local | Area of applicability (Meyer & Pebesma 2021) of each subbasin's low-HF training pixels in the natural abiotic predictors 08A trains BART on (its footprint "Disturbance" class excluded; see Open Limitation #9); flags a subbasin when > 50% of its backfilled pixels fall outside → `extrapolation_flags.csv`. Needs `FNN` (installed locally, not on Fir) |
 | `10D_BART_posterior_diagnostics.R` + `.sh` | cluster | Test whether the 100 stored BART posterior draws (subsampled from gbart()'s 700) cover the posterior's shape and tails — `12F` resamples 1 of the 100 per counterfactual scenario |
-| `11_premosaic_backfilled_stacks.R` + `.sh` | cluster | Mosaic per-subbasin BART backfill rasters into BCR-wide stacks (run before 12) |
+| `11_premosaic_backfilled_stacks.R` + `.sh` | cluster | Mosaic per-subbasin BART backfill rasters into BCR-wide stacks (run before 12). One array task per year × BCR (`YEARS` as for 07; 19 tasks per year). Rebuilds any mosaic older than one of its subbasin backfills (it used to skip on mere existence) and writes under a `_partial` name renamed on completion |
 | `12A_observed.R` | local | Reads Elly's unclamped 32-bootstrap prediction tifs and bootstrap model `.Rdata` from `G:/Shared drives/BAM_NationalModels5/output/{07_predictions,06_bootstraps}/{species}/`, applies V5's two-stage truncation (via `12B_v5_truncate.R`), and writes `observed_bootstraps.tif` (32-layer clamped stack, UNmasked), `observed_mean.tif`, `observed_sd.tif` and per-species `truncation_params.rds` to `data/derived_data/predictions/`. Canadian BCRs (`can*`) only. Globus-transfer the results to the cluster before running 12D — they are a hard dependency. |
 | `12B_v5_truncate.R` | sourced | `v5_truncate()`: line-for-line port of V5 `analysis/10.Truncate.R` (as of V5 `f082866`). Applies both upper caps (`densmax`, then the 99.9th-percentile `q99`) and the range/water/extent masks. Sourced by `12A` only, so it is local-only by design and is deliberately NOT staged on the cluster; `q99` can be passed in frozen and the legacy EPSG:3978 step skipped |
 | `12C_build_prediction_weights.R` + `.sh` | cluster | Build per-species×BCR `weight.tif` (= range membership × not-water × inside-data-limit × **inside the BCR's own polygon**), replicating V5 `10.Truncate` range/water/extent/mosaic masking; all four terms use `touches = TRUE` (Open Limitation #7). Reads source masks from `data/raw_data/v5_gis/` (no G: access); grid template is the BCR stack. Run ONCE before 12D. 12F multiplies BOTH observed and backfilled density by this weight, preserving obs/bf symmetry (`w·bf − w·obs = w·(bf − obs)`). |
@@ -64,10 +64,10 @@ Scripts are numbered in execution order:
 | `12G_gbm_tree_walk.R` + `.cpp` | sourced | Bit-identical replacement for gbm's compiled tree walk (`gbm_pred`), 3.6–4.4× faster: gbm makes three R API calls per node visited, this hoists them. `gbm_design()` builds predict.gbm's design matrix once per bootstrap; `gbm_check_fast()` `stop()`s in every 12F worker unless the fast path is `identical()` to `predict.gbm`. The `.cpp` also holds `coal_rowsum()`, 12F's copy-free, bit-identical coalition `rowsum` |
 | `12H_merge_bcr_tables.R` + `.sh` | cluster | Run after 12D (`--dependency=afterany`). Checks every expected species × BCR has a per-BCR result (names the array indices to resubmit if not), that all came from one version of 12E/12F/12G (`code_md5`), then binds them in `06_bootstraps` order → `density_tables/{species}_{year}_coalition_{cid}.rds` (cid 2..256) and `arrays/`, bit-identical to the old one-job-per-species output, plus `{species}_{year}_shapley_samples.rds` (per-sample subbasin Shapley values, stacked across BCRs in table row order) |
 | `12E_shapley_utils.R` | sourced | Coalition enumeration, Shapley value computation utilities |
-| `12F_predict_species_all_coalitions.R` | sourced | `predict_species_all_coalitions()`: builds the backfilled field ONCE per species×BCR over the all-8-sectors superset, then reduces all 255 coalitions as cheap masked `rowsum`s (verified bit-identical to the retired per-coalition path). Runs joint BRT×BART sampling; each bootstrap worker reduces its own field to per-coalition subbasin sums, so the full pixels × 3200 matrix is never built. `rdata_files` / `return_per_bcr` let 12D run one BCR; `combine_bcr_results()` (used by 12H) does the cross-BCR bind. Also applies `shapley_weight_matrix()` (12E) to every (bootstrap, scenario) sample, giving per-sample subbasin Shapley values `[n_sub × 8 × 3200]` for 14B's uncertainty (Shapley is linear in v, so the samples' mean equals the Shapley value of the tables' means). Also holds `coalition_task_table()` and `coalition_array_ids()`. |
+| `12F_predict_species_all_coalitions.R` | sourced | `predict_species_all_coalitions()`: builds the backfilled field ONCE per species×BCR over the all-8-sectors superset, then reduces all 255 coalitions as cheap masked `rowsum`s (verified bit-identical to the retired per-coalition path). Runs joint BRT×BART sampling; each bootstrap worker reduces its own field to per-coalition subbasin sums, so the full pixels × 3200 matrix is never built. `rdata_files` / `return_per_bcr` let 12D run one BCR; `combine_bcr_results()` (used by 12H) does the cross-BCR bind. Also predicts each bootstrap once with observed vegetation and the footprint covariates at 0 (`d0`), for the direct/vegetation split (Open Limitation #9). Also applies `shapley_weight_matrix()` (12E) to every (bootstrap, scenario) sample, giving per-sample subbasin Shapley values `[n_sub × 8 × 3200]` for 14B's uncertainty (Shapley is linear in v, so the samples' mean equals the Shapley value of the tables' means). Also holds `coalition_task_table()` and `coalition_array_ids()`. |
 | `13_importance_of_covs_used_in_counterfactual.R` | cluster | Assess percentile importance of backfilled covariates in V5 bird models |
 | `14A_reproject_hirshpearson.R` | local | Reproject the per-sector Hirsh-Pearson footprint rasters (built, crop, mines, …) to EPSG:5072 on the hydrobasins grid at 1000 m. Run once before `14B`; `CanHF*` left untouched |
-| `14B_sector_attribution.R` | local | Reads 12H's per-sample subbasin Shapley values, sums them bottom-up (subbasin → BCR → national) SAMPLE BY SAMPLE and summarises each level (mean, SD, 5th/95th percentiles) → `sector_effects/shapley_*.csv`; stops unless the sample means equal the Shapley values of the coalition tables' means. **This is where BAM's release filter lives** (`DROP_WITHHELD` / `withheld_models`): CAWA `can40` is withheld by BAM (`review/ModelReleaseDecisions.xlsx`, "remove" tab, AUC) but is deliberately still produced upstream, so the products stay a complete record of what we ran and only the reported numbers are filtered. Until 2026-09-25 it propagated the tables' SDs as if subbasins (which share one BCR's 32 bird models) and nested coalitions were independent, which understated v(S) SDs 1.1–2.7× and inflated small sectors' SDs |
+| `14B_sector_attribution.R` | local | Reads 12H's per-sample subbasin Shapley values, sums them bottom-up (subbasin → BCR → national) SAMPLE BY SAMPLE and summarises each level (mean, SD, 5th/95th percentiles) → `sector_effects/shapley_*.csv`; stops unless the sample means equal the Shapley values of the coalition tables' means. Splits every value into a direct and a vegetation part (Open Limitation #9). **This is where BAM's release filter lives** (`DROP_WITHHELD` / `withheld_models`): CAWA `can40` is withheld by BAM (`review/ModelReleaseDecisions.xlsx`, "remove" tab, AUC) but is deliberately still produced upstream, so the products stay a complete record of what we ran and only the reported numbers are filtered. Until 2026-09-25 it propagated the tables' SDs as if subbasins (which share one BCR's 32 bird models) and nested coalitions were independent, which understated v(S) SDs 1.1–2.7× and inflated small sectors' SDs |
 | `15A_plot_population_distributions.R` | local | Plot empirical population distributions, observed vs counterfactual, from the bootstrap × scenario arrays `12D` saves to `density_tables/arrays/` |
 | `15B_preliminary_singletons.R` | local | Interim pre-Shapley single-sector standalone impacts at footprint / watershed / BCR scales → `logs/15B_singletons_summary.csv`. Superseded by `14B`'s exact Shapley values for attribution; retained for the scale-dependent reporting `15C` plots |
 | `15C_singletons_plot.R` | local | Render `15B`'s summary CSV as sector impacts at the three geographic scales |
@@ -106,8 +106,13 @@ you edited — see `TODO.md` "Staging discipline".
 
 Backfilling (SLURM array, one job per subbasin index):
 ```bash
-# ONE script, ONE tier: --array=1-674%30 at 128G / 8h / 1 core, all baked in.
-sbatch 07_train_and_backfill.sh
+# ONE script, ONE tier: 128G / 8h / 1 core. Years on the command line; the helper exports
+# YEARS, sizes 07's array (674 tasks per year, %30) and chains 11 (19 per year) after it:
+bash 07_submit_backfill_years.sh 2020
+bash 07_submit_backfill_years.sh 2010 2015 2020
+# By hand: YEARS=2015,2020 sbatch --array=1-1348%30 07_train_and_backfill.sh
+# (not --export=ALL,YEARS=2015,2020: sbatch splits --export on commas). 07 overwrites its
+# outputs and 11 rebuilds any mosaic older than its inputs, so a rerun needs no wipe.
 
 # The old two-script split (64G + 750G, with complementary --array lists that had to partition
 # 1-674 exactly or race each other writing the same subbasin_{i}_backfill.tif) is GONE as of
@@ -116,8 +121,9 @@ sbatch 07_train_and_backfill.sh
 # a single 128G tier covers everything with ~2.5x margin — and costs less in total than the two
 # tiers did. Single-threaded by construction (BART::gbart, not mc.gbart), so --cpus-per-task=1.
 #
-# If one index OOMs, give that index more room instead of re-tiering the file:
-sbatch --array=<i> --mem=256G 07_train_and_backfill.sh
+# If one index OOMs, give that index more room instead of re-tiering the file (keep the same
+# YEARS, since the index means year x subbasin):
+YEARS=<years> sbatch --array=<i> --mem=256G 07_train_and_backfill.sh
 ```
 
 Re-predicting birds:
@@ -332,25 +338,43 @@ Large spatial files (`.tif`, `.gpkg`, `.shp`) and most `.rds` files are gitignor
 
 3. **No spatial spillover**: The formula `cf = obs_on_non_coalition + backfilled_on_coalition` assumes removing a coalition's footprint only affects birds on those pixels. Edge effects, area sensitivity, and functional connectivity mean impacts extend beyond the footprint boundary (especially important for linear features like roads and seismic lines).
 
-9. **Footprint covariates in the counterfactual (OPEN, design decision; `TODO.md` C2e)**. V5's
+9. **Footprint covariates in the counterfactual (DECIDED 2026-09-25, `TODO.md` C2e)**. V5's
    "Disturbance" predictor class (CanHF_1km/_5x5, canroad_1km/_5x5, CCNL_1km night lights) is
-   human footprint, and it enters the counterfactual twice, inconsistently.
-   (a) **Bird model.** 12F sets it to 0 at every backfilled pixel. That term alone can dominate an
-   impact: OVEN can12's −828k is −1,041k from zeroing it (observed vegetation kept) plus +213k
-   from the backfilled vegetation, although the class holds only 2.8% of the model's relative
-   influence. Zero footprint is outside the data on footprint pixels.
-   (b) **BART.** 07's `abiotic_vars` includes the class, so 08A trains on it, then backfills with
+   human footprint. The counterfactual has no industry, so a backfilled pixel carries no
+   footprint: a backfilled forest cannot sit on top of a road. Both uses therefore set the
+   class to 0.
+   (a) **Bird model.** 12F predicts with it at 0 at every backfilled pixel. It also predicts
+   each bootstrap once with the OBSERVED vegetation and the class at 0 (`d0`), which splits
+   every Shapley value exactly into a direct part (`d0 − obs`: the bird model's response to the
+   footprint itself) and a vegetation part (`bf − d0`). Positive responses to modest
+   disturbance can be real (Mahon et al. 2019, Ecol. Appl. 29:e01895: deciduous-associated
+   species, Ovenbird included, increase with wide linear features), so the direct part is
+   reported, not removed. It can dominate: OVEN can12's −828k was −1,041k direct and +213k
+   vegetation. The part rests on thin survey support: in the can11/12/13 models at least 90%
+   of survey locations have CanHF_1km ≥ 6–7 and canroad_5x5 ≥ 0.3–0.5 (gbm `var.levels`
+   deciles), so the response at 0 comes from the low tail. The 5×5 covariates are exact only
+   for the all-sector coalition: for a partial one, zeroing them also removes other sectors'
+   footprint within the neighbourhood.
+   (b) **BART.** 07's `abiotic_vars` includes the class. Until 2026-09-25, 08A backfilled with
    each pixel's OBSERVED values, which lie beyond the low-HF training range (subbasin 57:
-   CanHF_1km 0–10 in training, median 12 at backfilled pixels). Trees hold predictions at the
-   training edge, so the backfill is conditioned on the most-disturbed training pixels, not on
-   no industry. A local test (2026-09-25) fitted BART as 08A does (without the preceding biotics) in subbasins 57 (can11) and 98 (can12), for deciduous %, canopy height and biomass. Backfilling with the observed footprint values, instead of dropping the class, moved the backfilled means by −15% to +32%; setting the values to 0 moved them by −6% to +73%. The class took 4–10% of BART's splits (`Rscripts/misc/diag_extreme_bcr_bart_footprint.R`).
-   `10C` excludes the class from its extrapolation diagnostic for this reason.
+   CanHF_1km 0–10 in training, median 12 at backfilled pixels). Trees held those predictions at
+   the training edge: vegetation predicted as if the road were still there. 08A now backfills
+   with the class at 0, which is inside the training range; training is unchanged. A local test
+   fitted BART in subbasins 57 and 98 for deciduous %, canopy height and biomass. Observed
+   values instead of dropping the class moved the backfilled means by −15% to +32%; 0 instead
+   of dropping it moved them by −6% to +73%. The class took 4–10% of BART's splits
+   (`Rscripts/misc/diag_extreme_bcr_bart_footprint.R`). Backfills made before this change are
+   stale.
+   `10C` excludes the class from its extrapolation diagnostic: its observed values are
+   outside the training range by construction.
 
 10. **What counts as a sector's footprint (OPEN, design decision; `TODO.md` C2f)**. A pixel is in
     sector j's footprint when j's Hirsh-Pearson pressure is > 0 after `14A` and CanHF ≥ 1. The
     pressure layers are continuous and include indirect-influence zones: roads.tif is > 0 on 19%
-    of Canada's cells, median 4.55, and roads-only footprint pixels have a median of 2.7–3.4
-    against a direct score of 8. In boreal BCRs 46–61% of the footprint has no sector above
+    of Canada's cells, median 4.55, and roads-only footprint pixels have a median of 2.7–3.4.
+    Hirsh-Pearson scores roads, rail, mines and waterways by type and distance band (Woolmer et
+    al. 2008 access weights) and oil and gas from 10 at the site to 0 at 5 km, and `14A`
+    resampled the 300 m layers to 1 km bilinearly. In boreal BCRs 46–61% of the footprint has no sector above
     pressure 4. The 1 km vegetation there is largely intact, so backfilling it measures how
     roaded land differs from unroaded land, not habitat the road converted.
 
