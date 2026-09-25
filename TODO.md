@@ -9,7 +9,7 @@ change what 12F (and possibly 07) computes. Finished work is under **Completed**
 
 ```
 you:      [decide C2e + C2f] ─┐
-local:    [10C full run] ─────┤
+local:    [10C: DONE] ────────┤
 cluster:                      └─► [stage] ─► [wipe] ─► [C1 rerun: 12D + 12H] ─► [C2 rerun: 14B] ─► C3
                   (07 + 11 rerun first only if C2e(2) changes the BART predictors)
 ```
@@ -19,7 +19,7 @@ cluster:                      └─► [stage] ─► [wipe] ─► [C1 rerun: 
 1. **Decide C2e and C2f** (footprint covariates in the counterfactual; what counts as a sector's
    footprint). Both change 12F, so settling them first avoids paying for C1 twice. C2e(2) would
    also need 07 + 11 rerun before C1.
-2. **Run 10C locally, on its own** (~55 min; its first run was reaped at ~150/674).
+2. ~~Run 10C locally~~ — done 2026-09-25 (C2c).
 3. **Stage** the 12D/12H closure on Fir: checksum sync of `12D` `.R`+`.sh`, `12E`, `12F`, `12G`
    `.R`+`.cpp`, `12H` `.R`+`.sh`; `.sh` files must be LF. `12E`, `12F` and `12H` have changed.
 4. **Wipe, then rerun C1** (~1 h wall, ~64 billed core-equivalent-hours):
@@ -107,7 +107,7 @@ design questions that are yours (C2e, C2f).
       BCR × bootstrap × scenario. The analysis stays on record under **Completed** (D). The
       per-BCR seeding means a subbasin straddling two BCRs gets independent draws on each side;
       that slightly understates the BART part of its spread and leaves means unchanged.
-- [ ] **C2c. Extrapolation flags: 10C rewritten (`686c16a`); the full run still has to finish.**
+- [x] **C2c. Extrapolation flags: 10C rewritten (`686c16a`) and run, 2026-09-25.**
       The old KS + Mahalanobis rule flagged 667 of 667, for three reasons. KS measures shift, not
       extrapolation. Mahalanobis over ~40 collinear climate normals inverts a near-singular
       covariance. And its covariate set was not the BART models' own. 10C now computes each
@@ -115,10 +115,19 @@ design questions that are yours (C2e, C2f).
       distance, with a threshold taken from the training pixels across 10 spatial blocks. It flags
       a subbasin when more than half of its backfilled pixels fall outside. Runs locally (FNN);
       ~55 min alone.
-      The first run was stopped at ~150/674 by Claude Code's memory-pressure reaper (three R jobs
-      were running at once), so `extrapolation_flags.csv` is still the old file, kept as
-      `cluster_logs/extrapolation_flags_KS_mahal_2026-09-24.csv`, and 14B refuses it. Re-run 10C
-      on its own before the C2 rerun.
+      A first run was reaped at ~150/674 (three R jobs at once); the rerun, alone, took ~55 min.
+      **Result: the flags now discriminate.** Across 674 subbasins the share of backfilled pixels
+      outside the AOA has quantiles 0 / 0.2% / 1.7% / 6.2% / 14.6% / 100% at the 0 / 25 / 50 / 75 /
+      90 / 100th percentiles. 110 subbasins exceed 10%, 27 exceed 25%, and **3 are flagged**
+      (> 50%). Those 3 are 481 (only 2 backfilled pixels, so no impact), 72 (can12/13) and 98
+      (can12/13/14, OVEN +424k), and they carry 14% (CAWA) / 12% (OVEN) of the absolute impact.
+      Subbasin 107 (OVEN +733k) sits just under the cut at 0.47. can13 has the most (22% of its
+      backfill outside on average, 12% of its subbasins flagged); boreal BCRs 2–5%. The can11
+      drivers are INSIDE the AOA (57: 3.7%, 62: 0.4%), so can11's overshoot is not abiotic
+      extrapolation (see C2d/C2e). The old KS + Mahalanobis file is kept as
+      `cluster_logs/extrapolation_flags_KS_mahal_2026-09-24.csv`. The 0.5 cut is a judgement call:
+      `frac_outside_aoa` is carried into 14B's subbasin table so any other cut can be applied
+      there.
 - [ ] **C2d. Ecological check of the extreme BCR impacts: done; the causes lead to C2e/C2f.**
       Harnesses: `Rscripts/misc/diag_extreme_bcr_*.R`; inputs pulled to `cluster_logs/sanity/`
       (weights, can11/12/13 backfill mosaics, bird models, stacks). Densities are weighted
