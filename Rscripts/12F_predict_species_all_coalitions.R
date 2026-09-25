@@ -523,6 +523,27 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
       }, integer(1L))
       key <- if (multi_draw) chosen_k else rep(1L, n_scen)
 
+      # Direct/vegetation split: this bootstrap once more with the OBSERVED biotic covariates
+      # and only the footprint covariates at 0. d0 - obs is the bird model's direct response
+      # to removing the footprint; bf - d0 is the effect of the backfilled vegetation. d0 does
+      # not depend on the BART draw, so it is one prediction per bootstrap (~1.5% of the gbm
+      # calls). Same path as the identity gate, which proves it reproduces V5 on the obs side.
+      d0_c <- numeric(n_c)                          # complete rows with weight 0 stay 0
+      if (length(pred_rows) > 0L) {
+        X_d <- X_pred
+        for (v in dist_shared) if (v %in% names(X_d)) X_d[[v]] <- 0
+        X_d <- as_model_factors(X_d, model, cat_vars_shared)
+        d0_c[pred_in_c] <- gbm_predict_design(model, gbm_design(model, X_d))
+        rm(X_d)
+      }
+      d0_c   <- pmin(pmin(d0_c, qsp), q99) * w_c
+      n_bad0 <- sum(is.na(d0_c))
+      d0 <- lapply(seq_along(all_cids), function(ci) {
+        if (coal_state[ci] != 2L) return(NULL)
+        coal_rowsum(matrix(d0_c, ncol = 1L), keep_rows[[ci]], zi_c, n_sub) * 100
+      })
+      rm(d0_c); invisible(gc(full = FALSE))
+
       # design matrix built ONCE per bootstrap; per draw only the draw columns change
       if (length(pred_rows) > 0L) {
         X_k <- X_pred
@@ -577,7 +598,7 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
         if (coal_state[ci] != 2L) return(NULL)
         coal_rowsum(sc, keep_rows[[ci]], zi_c, n_sub) * 100
       })
-      list(bf = bf, n_bad = as.numeric(n_bad))
+      list(bf = bf, d0 = d0, n_bad = as.numeric(n_bad + n_bad0))
     }, mc.cores = n_cores, mc.preschedule = FALSE)   # one fork per bootstrap, freed on exit
 
     # A worker the kernel kills (e.g. out of memory) returns NULL, not a try-error.
@@ -591,8 +612,8 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
 
     n_bad <- sum(vapply(boot_res, function(r) r$n_bad, numeric(1L)))
     if (n_bad > 0)
-      stop(species, " ", bcr_code, ": ", n_bad, " NA cells of the bf field at complete-case ",
-           "pixels (of ", length(c_rows) * n_boot * n_scen, "). rowsum() has no na.rm, so ",
+      stop(species, " ", bcr_code, ": ", n_bad, " NA cells of the bf / d0 fields at complete-case ",
+           "pixels (of ", length(c_rows) * n_boot * (n_scen + 1L), "). rowsum() has no na.rm, so ",
            "these would silently zero out whole subbasins on the BACKFILLED side only ",
            "while the observed side zeroes its NAs. Most likely a BART draw other than ",
            "draw 1 has thinner coverage than complete_mask assumes -- widen the gate to ",
@@ -647,6 +668,9 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     W_shap      <- shapley_weight_matrix(sectors)
     phi_samples <- array(0, c(n_sub, n_sectors, n_boot * n_scen),
                          dimnames = list(NULL, sectors, NULL))
+    # the direct part (d0 - obs) depends on the bootstrap only, so it is kept per bootstrap;
+    # the vegetation part of sample (i, k) is phi_samples[, , (i, k)] - phi_direct[, , i]
+    phi_direct  <- array(0, c(n_sub, n_sectors, n_boot), dimnames = list(NULL, sectors, NULL))
 
     # ---- assemble every coalition (the workers already did the grouped sums) ------
     coalition_tables <- vector("list", length(all_cids))
@@ -701,6 +725,18 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
         presO <- !is.na(map_o)
         if (any(presO)) obs_on_byboot[presO, ] <- rs_obs[map_o[presO], , drop = FALSE]
         obs_on_mat <- obs_on_byboot[, bcols, drop = FALSE]
+
+        # direct part of v(S), per bootstrap: observed vegetation, footprint covariates at 0
+        d0_byboot <- do.call(cbind, lapply(boot_res, function(r) r$d0[[ci]]))   # [n_sub x n_boot]
+        imp_d     <- d0_byboot - obs_on_byboot
+        empty_d   <- is.na(obs_on_byboot)
+        if (any(d0_byboot[empty_d] != 0))
+          stop(species, " ", bcr_code, " coalition ", cid, ": non-zero d0 in a subbasin ",
+               "with no kept pixels")
+        imp_d[empty_d] <- 0
+        for (j in seq_len(n_sectors))
+          phi_direct[, j, ] <- phi_direct[, j, ] + W_shap[j, cid] * imp_d
+        rm(d0_byboot, imp_d, empty_d)
       } else {
         # coalition has footprint in this BCR but no complete-case pixels at all:
         # no kept pixels anywhere -> every subbasin's obs_on is empty -> NA
@@ -737,6 +773,7 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     list(coalition_tables = coalition_tables,
          bcr_arrays       = bcr_arrays,
          shapley_samples  = list(phi = phi_samples,              # [n_sub x sector x sample]
+                                 phi_direct = phi_direct,        # [n_sub x sector x n_boot]
                                  obs_total = obs_total_byboot,   # [n_sub x n_boot]
                                  subbasin = sub_ids, n_boot = n_boot, n_scen = n_scen),
          bcr_code         = bcr_code)
@@ -783,14 +820,18 @@ combine_bcr_results <- function(per_bcr, save_arrays_ids = integer(0)) {
          paste0(vapply(per_bcr, `[[`, character(1L), "bcr_code"), "=", n_samp, collapse = ", "),
          "): BCRs with different bootstrap counts cannot be summed per sample")
   n_rows <- vapply(ss, function(s) dim(s$phi)[1L], integer(1L))
-  phi    <- array(0, c(sum(n_rows), dim(ss[[1L]]$phi)[2:3]),
-                  dimnames = list(NULL, dimnames(ss[[1L]]$phi)[[2L]], NULL))
-  ends   <- cumsum(n_rows)
-  for (b in seq_along(ss)) phi[(ends[b] - n_rows[b] + 1L):ends[b], , ] <- ss[[b]]$phi
+  stack_rows <- function(f) {
+    a <- array(0, c(sum(n_rows), dim(ss[[1L]][[f]])[2:3]),
+               dimnames = list(NULL, dimnames(ss[[1L]][[f]])[[2L]], NULL))
+    ends <- cumsum(n_rows)
+    for (b in seq_along(ss)) a[(ends[b] - n_rows[b] + 1L):ends[b], , ] <- ss[[b]][[f]]
+    a
+  }
   shapley_samples <- list(
     bcr       = rep(vapply(per_bcr, `[[`, character(1L), "bcr_code"), n_rows),
     subbasin  = unlist(lapply(ss, `[[`, "subbasin")),
-    phi       = phi,                                             # [row x sector x sample]
+    phi        = stack_rows("phi"),                              # [row x sector x sample]
+    phi_direct = stack_rows("phi_direct"),                       # [row x sector x bootstrap]
     obs_total = do.call(rbind, lapply(ss, `[[`, "obs_total")),   # [row x bootstrap]
     n_boot    = ss[[1L]]$n_boot, n_scen = ss[[1L]]$n_scen)
 

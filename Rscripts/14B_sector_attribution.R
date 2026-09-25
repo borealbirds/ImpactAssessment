@@ -13,6 +13,9 @@
 #     summarises each level over the samples (mean, SD, 5th/95th percentiles).
 #   - Cross-checks the sample means against the Shapley values of the coalition density
 #     tables' means (both are exact; they agree to floating-point error).
+#   - Splits every Shapley value into a DIRECT part (the bird model's response to setting the
+#     footprint covariates to 0 on the observed vegetation) and a VEGETATION part (the
+#     backfilled vegetation); 12F saves the direct part per bootstrap.
 #   - Annotates subbasins with 10C's abiotic extrapolation flags.
 #
 # Why samples, not table SDs: every subbasin of a BCR is predicted by the same 32 bird
@@ -137,6 +140,24 @@ summarise_samples <- function(x) list(
 # one row per unit x sector (sector fastest), as the output CSVs are laid out
 long <- function(m) as.vector(t(m))
 
+# direct / vegetation split of a [unit x sector x sample] array, given the direct part per
+# bootstrap xd [unit x sector x bootstrap]; boot_of maps each sample to its bootstrap.
+# direct = the bird model's response to setting the footprint covariates to 0 on observed
+# vegetation; vegetation = the rest (backfilled vegetation, footprint at 0). They add up to
+# the Shapley value sample by sample.
+split_samples <- function(x, xd, boot_of) {
+  xd_s <- xd[, , boot_of, drop = FALSE]
+  xv   <- x - xd_s
+  list(direct_mean = apply(xd_s, c(1, 2), mean), direct_sd = apply(xd_s, c(1, 2), sd),
+       veg_mean    = apply(xv,   c(1, 2), mean), veg_sd    = apply(xv,   c(1, 2), sd))
+}
+
+# sum a [unit x sector x k] array over units within groups -> [group x sector x k]
+sum_units <- function(x, g) {
+  r <- rowsum(matrix(x, nrow = dim(x)[1L]), g, reorder = FALSE)
+  array(r, c(nrow(r), dim(x)[2L], dim(x)[3L]), dimnames = list(rownames(r), dimnames(x)[[2L]], NULL))
+}
+
 # ---- Main processing: one species x year at a time ---------------------------
 
 shapley_sub_rows <- vector("list", nrow(species_years))
@@ -254,7 +275,13 @@ for (sy in seq_len(nrow(species_years))) {
   phi  <- ss$phi[rows, , , drop = FALSE]                   # [subbasin x sector x sample]
   if (!identical(dimnames(phi)[[2L]], sectors))
     stop(sp, " ", yr, ": Shapley samples carry sectors ", paste(dimnames(phi)[[2L]], collapse = ", "))
-  n_samp <- dim(phi)[3L]
+  if (is.null(ss$phi_direct))
+    stop(ss_path, " has no direct/vegetation split - it predates 2026-09-25's 12F; rerun 12D + 12H")
+  phi_d   <- ss$phi_direct[rows, , , drop = FALSE]         # [subbasin x sector x bootstrap]
+  n_samp  <- dim(phi)[3L]
+  boot_of <- rep(seq_len(ss$n_boot), each = ss$n_scen)     # samples run scenario-within-bootstrap
+  if (length(boot_of) != n_samp || dim(phi_d)[3L] != ss$n_boot)
+    stop(sp, " ", yr, ": Shapley samples and their direct part disagree on the sample grid")
   message("  ", length(sub_keys), " subbasin rows x ", n_samp, " samples (",
           ss$n_boot, " bootstraps x ", ss$n_scen, " scenarios)")
 
@@ -268,6 +295,7 @@ for (sy in seq_len(nrow(species_years))) {
 
   # total HF impact v(N) per sample = sum over sectors (efficiency holds per sample)
   tot_sub <- apply(phi, c(1, 3), sum)                      # [subbasin x sample]
+  sp_sub  <- split_samples(phi, phi_d, boot_of)
 
   # ---- subbasin table ----
   obs_pop <- unname(obs_total_mean)
@@ -287,6 +315,10 @@ for (sy in seq_len(nrow(species_years))) {
     shapley_q95        = round(long(st_sub$q95), 2),
     shapley_pct        = round(long(st_sub$mean / obs_pop * 100), 4),
     shapley_check      = rep(round(rowSums(st_sub$mean), 2), each = n_sectors),  # = v(N)
+    shapley_direct_mean     = round(long(sp_sub$direct_mean), 2),
+    shapley_direct_sd       = round(long(sp_sub$direct_sd), 2),
+    shapley_vegetation_mean = round(long(sp_sub$veg_mean), 2),
+    shapley_vegetation_sd   = round(long(sp_sub$veg_sd), 2),
     stringsAsFactors   = FALSE
   )
   if (!is.null(extrap_flags))
@@ -294,10 +326,11 @@ for (sy in seq_len(nrow(species_years))) {
   shapley_sub_rows[[sy]] <- shapley_sub_df
 
   # ---- BCR: sum the subbasin samples within each BCR, sample by sample ----
-  phi_bcr <- rowsum(matrix(phi, nrow = length(sub_keys)), unname(bcr_lookup), reorder = FALSE)
+  phi_bcr <- sum_units(phi, unname(bcr_lookup))
   bcrs    <- rownames(phi_bcr)
-  phi_bcr <- array(phi_bcr, c(length(bcrs), n_sectors, n_samp))
   st_bcr  <- summarise_samples(phi_bcr)
+  phi_d_bcr <- sum_units(phi_d, unname(bcr_lookup))
+  sp_bcr  <- split_samples(phi_bcr, phi_d_bcr, boot_of)
   tot_bcr <- apply(phi_bcr, c(1, 3), sum)
   bcr_of  <- unname(bcr_lookup)
   obs_bcr <- vapply(bcrs, function(b) sum(obs_pop[bcr_of == b]), numeric(1L))
@@ -326,14 +359,19 @@ for (sy in seq_len(nrow(species_years))) {
     n_subbasins        = rep(n_sub_b, each = n_sectors),
     n_flagged          = rep(n_flg_b, each = n_sectors),
     total_HF_impact_flagged = rep(round(imp_flg_b), each = n_sectors),
+    shapley_direct_mean     = round(long(sp_bcr$direct_mean), 2),
+    shapley_direct_sd       = round(long(sp_bcr$direct_sd), 2),
+    shapley_vegetation_mean = round(long(sp_bcr$veg_mean), 2),
+    shapley_vegetation_sd   = round(long(sp_bcr$veg_sd), 2),
     stringsAsFactors   = FALSE
   )
 
   # ---- national: sum the BCR samples, sample by sample ----
   # Bootstrap i is paired across BCRs, as V5's national estimate pairs them (mosaic of
   # bootstrap i); that is right whether or not BCRs' bootstrap i share a resample.
-  phi_nat <- array(apply(phi_bcr, c(2, 3), sum), c(1L, n_sectors, n_samp))
+  phi_nat <- sum_units(phi_bcr, rep("national", length(bcrs)))
   st_nat  <- summarise_samples(phi_nat)
+  sp_nat  <- split_samples(phi_nat, sum_units(phi_d_bcr, rep("national", length(bcrs))), boot_of)
   tot_nat <- apply(phi_nat, c(1, 3), sum)
   shapley_nat_rows[[sy]] <- data.frame(
     species            = sp,
@@ -352,6 +390,10 @@ for (sy in seq_len(nrow(species_years))) {
     n_bcrs             = length(bcrs),
     n_flagged          = if (is.null(extrap_flags)) NA_integer_ else sum(flagged, na.rm = TRUE),
     total_HF_impact_flagged = round(sum(imp_flg_b)),
+    shapley_direct_mean     = round(long(sp_nat$direct_mean), 2),
+    shapley_direct_sd       = round(long(sp_nat$direct_sd), 2),
+    shapley_vegetation_mean = round(long(sp_nat$veg_mean), 2),
+    shapley_vegetation_sd   = round(long(sp_nat$veg_sd), 2),
     stringsAsFactors   = FALSE
   )
 
