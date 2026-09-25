@@ -16,11 +16,7 @@ C2f changes only 12F's masks, so it has to be settled before the C1 rerun, not b
 
 **Next actions, in order:**
 
-1. **Stage** on Fir (checksum sync; `.sh` files must be LF):
-   - the 07 closure: `07_train_and_backfill` `.R`+`.sh`, `07_submit_backfill_years.sh`, `08A`,
-     `08B_deploy_gbart`, `08B_deploy_mbart`, `09_*`, and `11_premosaic_backfilled_stacks`
-     `.R`+`.sh`;
-   - the 12D/12H closure: `12D` `.R`+`.sh`, `12E`, `12F`, `12G` `.R`+`.cpp`, `12H` `.R`+`.sh`.
+1. ~~Stage on Fir~~ — done 2026-09-25 (`8487982`, both closures; see Current state below).
 2. **Rerun 07 + 11 for 2020** (C2e: footprint covariates at 0 in the backfill):
    `cd /home/mannfred/scratch/impact_assessment/Rscripts && bash 07_submit_backfill_years.sh 2020`
    This submits 07 (674 tasks) and 11 (19 tasks, `afterany`). No wipe is needed: 07 overwrites,
@@ -77,11 +73,15 @@ Two mechanical gotchas found the same way:
 - Globus refuses sources outside the local endpoint's configured root, so a temp-dir staging
   copy fails with `Path not allowed`. Stage from inside the repo tree.
 
-**Current state (2026-09-25)**: `/Rscripts` on Fir matches `542c092` for the 12D closure (`12D`
-`.R`+`.sh` at 48G / 3 h, `12E`, `12F`, `12G` `.R`+`.cpp`, `12H` `.R`+`.sh`). Nothing from
-2026-09-25 is staged yet: not the per-sample Shapley values (`12E`/`12F`/`12H`), not the
-direct/vegetation split (`12F`), not the zeroed backfill (`08A`), and not years (`07`/`11` +
-`07_submit_backfill_years.sh`). `density_tables/` on Fir holds C1's merged production output (and `by_bcr/` its
+**Current state (2026-09-25)**: `/Rscripts` on Fir matches `8487982` for both closures:
+- 07/11: `07` `.R`+`.sh`, `07_submit_backfill_years.sh`, `08A`, `08B_*`, `09_*`, `11` `.R`+`.sh`;
+- 12D/12H: `12D` `.R`+`.sh`, `12E`, `12F`, `12G` `.R`+`.cpp`, `12H` `.R`+`.sh`.
+`biotic_variable_hierarchy.rds` and the two CanHF masks were staged too (checksum sync).
+Some files that had not changed locally still moved bytes: `08B_deploy_mbart`, the four `09_*`,
+the hierarchy `.rds` and both masks. A re-sync then moved 0, so Fir's copies had really differed.
+For the masks the difference was encoding only: the 2026-09-24 10C run on Fir and the local
+2026-09-25 run count identical low- and high-HF pixels in all 667 subbasins. `density_tables/`
+on Fir still holds C1's 2026-09-24 output. `density_tables/` on Fir holds C1's merged production output (and `by_bcr/` its
 25 per-BCR files).
 `/Rscripts/12*` is now ten files (`12A` is local-only by design).
 
