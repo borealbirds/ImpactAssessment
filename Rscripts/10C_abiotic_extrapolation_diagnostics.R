@@ -1,34 +1,63 @@
 # ---
 # title: Abiotic extrapolation diagnostics for BART backfilling
 # author: Mannfred Boehm
-# created: May 19, 2026
+# created: May 19, 2026 (rewritten 2026-09-25)
 # ---
 
-# for each subbasin compare the abiotic covariate distributions of low-HF
-# (training) pixels vs high-HF (backfill) pixels.  
-# flag subbasins where the BART model is likely extrapolating into abiotic space not represented in
-# the training data.
+# For each subbasin: do the high-HF (backfilled) pixels lie inside the region of abiotic
+# predictor space that its low-HF (training) pixels cover? This is the area of
+# applicability (AOA) of Meyer & Pebesma (2021, Methods Ecol Evol 12:1620), computed on the
+# natural abiotic predictors 08A's BART models are trained on: 07's `abiotic_vars` (climate,
+# phenology, topography, wetland, CAfire, soil) WITHOUT its "Disturbance" class.
 #
-# diagnostics per subbasin x abiotic covariate:
-#   - Kolmogorov-Smirnov D statistic (univariate distributional overlap)
+# The Disturbance class (CanHF_1km/_5x5, canroad_1km/_5x5, CCNL_1km night lights) is human
+# footprint. 07 passes it to BART, and 08A backfills with the pixels' OBSERVED values, so
+# every backfilled pixel lies outside the training range on it by construction (training
+# pixels are CanHF < 1, backfilled ones CanHF >= 1). Left in, it would put nearly every
+# backfilled pixel outside the AOA and say nothing about the abiotic overlap this script is
+# for. Whether BART should see footprint covariates at all is a separate question about
+# 08A (TODO.md C2c).
 #
-# diagnostics per subbasin (multivariate):
-#   - Fraction of high-HF pixels whose Mahalanobis distance from the low-HF
-#     centroid exceeds the 95th percentile of the low-HF Mahalanobis distribution
+#   DI(x)     = distance from x to its nearest training pixel / mean distance between
+#               training pixels, in predictor space standardised by the training SDs.
+#   threshold = upper whisker (Q75 + 1.5 IQR) of the training pixels' own DI, each measured
+#               to the nearest training pixel in a DIFFERENT spatial fold (k-means blocks on
+#               x, y). Spatial folds, not random ones: neighbouring pixels are near-duplicates,
+#               so random folds would put every training DI near 0 and every backfilled pixel
+#               outside. Blocks mimic the backfill, whose pixels sit in clusters away from
+#               the training pixels.
+#   frac_outside_aoa = share of the subbasin's high-HF pixels with DI > threshold.
+#   flag      = frac_outside_aoa > 0.5: most of the subbasin's backfill is extrapolated.
 #
+# Predictors a subbasin's training pixels hold constant are dropped: BART cannot split on
+# them, so their high-HF values cannot move a prediction. NAs take the training median,
+# as 08A's imputation does.
+#
+# This replaced a KS + Mahalanobis rule that flagged 667 of 667 subbasins (C2, 2026-09-24):
+#   - KS measures distribution SHIFT, not extrapolation. Low- and high-HF pixels in a
+#     subbasin are spatially segregated and climate normals are smooth, so some normal
+#     nearly always has near-disjoint samples (min ks_max was 0.52), however small the
+#     difference in degrees.
+#   - Mahalanobis distance over ~40 collinear climate covariates inverts a near-singular
+#     covariance, so a tiny shift along a minor axis becomes a huge distance (median
+#     exceedance 0.93).
+#   - Its covariate set was not the BART models': no soil and no CAfire, but Time and
+#     Method, which 07 excludes.
+#
+# Runs locally (every input is local, and FNN is installed here, not on Fir).
 # output: data/derived_data/rds_files/extrapolation_flags.csv
 
 
 suppressPackageStartupMessages({
   library(terra)
   library(dplyr)
-  library(tidyr)
+  library(FNN)
 })
 
 # define paths -------------------------------------------------------
 
-cc    <- TRUE
-local <- FALSE
+cc    <- FALSE
+local <- TRUE
 
 if (cc)            { ia_dir <- "/home/mannfred/scratch/impact_assessment" }
 if (!cc && local)  { ia_dir <- getwd() }
@@ -43,6 +72,12 @@ dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
 year <- 2020
 
+n_folds      <- 10L      # spatial blocks for the training DI
+max_query    <- 5000L    # training pixels whose DI sets the threshold (sampled above this)
+n_pairs      <- 1e5      # sampled pairs for the mean training distance
+flag_cut     <- 0.5
+set.seed(20260925)
+
 # load spatial data ---------------------------------------------------
 
 all_subbasins <- vect(basin_path)
@@ -54,7 +89,7 @@ highhf_mask <- rast(highhf_path)
 stack_y <- rast(file.path(ia_dir, "data/raw_data/covariates_mosaiced",
                           paste0("covariates_mosaiced_", year, ".tif")))
 
-# define abiotic covariates -------------------------------------------
+# abiotic predictors: 07's `abiotic_vars` minus its "Disturbance" class ----
 
 predictor_metadata <-
   dplyr::tibble(BAMexploreR::predictor_metadata) |>
@@ -63,20 +98,67 @@ predictor_metadata <-
   dplyr::mutate(dplyr::across('predictor', stringr::str_replace, 'Year', 'year')) |>
   dplyr::mutate(dplyr::across('predictor', stringr::str_replace, 'Method','method'))
 
+soil_covs <- c("cec_0-5cm_mean_1000", "cec_100-200cm_mean_1000", "cec_15-30cm_mean_1000",
+               "cec_30-60cm_mean_1000", "cec_5-15cm_mean_1000", "cec_60-100cm_mean_1000",
+               "soc_0-5cm_mean_1000", "soc_100-200cm_mean_1000", "soc_15-30cm_mean_1000",
+               "soc_30-60cm_mean_1000", "soc_5-15cm_mean_1000", "soc_60-100cm_mean_1000")
 actually_biotic <- c("Peatland_5x5", "Peatland_1km")
 
 abiotic_preds <-
   predictor_metadata |>
   dplyr::filter(predictor_class %in% c("Annual Climate", "Climate Normals",
-                                        "Topography", "Wetland", "Disturbance",
-                                        "Time", "Method")) |>
+                                        "Topography", "Wetland")) |>
   dplyr::filter(!(predictor %in% actually_biotic)) |>
-  dplyr::pull(predictor)
+  dplyr::pull(predictor) |>
+  c("CAfire", soil_covs)
 
-# subset to covariates actually in the stack
+missing_preds <- setdiff(abiotic_preds, names(stack_y))
+if (length(missing_preds) > 0)
+  message("NOTE: not in the covariate stack, so not in 08A's training either: ",
+          paste(missing_preds, collapse = ", "))
 abiotic_preds <- intersect(abiotic_preds, names(stack_y))
-message("Abiotic covariates (", length(abiotic_preds), "): ",
-        paste(abiotic_preds, collapse = ", "))
+stack_y       <- stack_y[[abiotic_preds]]
+message("Abiotic predictors (", length(abiotic_preds), "): ", paste(abiotic_preds, collapse = ", "))
+
+# AOA of one subbasin's training pixels ---------------------------------
+
+aoa_subbasin <- function(lo, hi, lo_xy) {
+  varies <- vapply(seq_len(ncol(lo)), function(j)
+    sum(!is.na(lo[, j])) > 1L && isTRUE(sd(lo[, j], na.rm = TRUE) > 0), logical(1))
+  lo <- lo[, varies, drop = FALSE]; hi <- hi[, varies, drop = FALSE]
+  if (ncol(lo) == 0L) return(NULL)
+  med <- apply(lo, 2, median, na.rm = TRUE)
+  for (j in seq_len(ncol(lo))) {
+    lo[is.na(lo[, j]), j] <- med[j]
+    hi[is.na(hi[, j]), j] <- med[j]
+  }
+  mu <- colMeans(lo); s <- apply(lo, 2, sd)
+  lo <- scale(lo, mu, s); hi <- scale(hi, mu, s)
+
+  # mean distance between training pixels, from sampled pairs
+  a <- sample.int(nrow(lo), n_pairs, replace = TRUE)
+  b <- sample.int(nrow(lo), n_pairs, replace = TRUE)
+  d_bar <- mean(sqrt(rowSums((lo[a, , drop = FALSE] - lo[b, , drop = FALSE])^2))[a != b])
+
+  # training DI, each pixel to the nearest training pixel in another spatial block
+  fold <- stats::kmeans(lo_xy, centers = min(n_folds, nrow(lo) - 1L), nstart = 3L, iter.max = 50L)$cluster
+  q    <- if (nrow(lo) > max_query) sort(sample.int(nrow(lo), max_query)) else seq_len(nrow(lo))
+  di_train <- numeric(length(q))
+  for (f in unique(fold[q])) {
+    at  <- which(fold[q] == f)
+    ref <- which(fold != f)
+    di_train[at] <- FNN::get.knnx(lo[ref, , drop = FALSE], lo[q[at], , drop = FALSE],
+                                  k = 1)$nn.dist[, 1] / d_bar
+  }
+  thr <- stats::quantile(di_train, 0.75, names = FALSE) + 1.5 * stats::IQR(di_train)
+
+  di_hi <- FNN::get.knnx(lo, hi, k = 1)$nn.dist[, 1] / d_bar
+  data.frame(n_predictors     = ncol(lo),
+             aoa_threshold    = thr,
+             di_train_median  = stats::median(di_train),
+             di_median        = stats::median(di_hi),
+             frac_outside_aoa = mean(di_hi > thr))
+}
 
 # process each subbasin ----------------------------------------------
 
@@ -93,86 +175,25 @@ for (s in seq_len(n_sub)) {
   )
   if (is.null(cov_s)) next
 
-  # build low-HF and high-HF masks for this subbasin
+  # low-HF and high-HF masks for this subbasin, resampled as 08A does
   lowhf_s  <- terra::mask(terra::resample(lowhf_mask,  cov_s, method = "near"), sub_s)
   highhf_s <- terra::mask(terra::resample(highhf_mask, cov_s, method = "near"), sub_s)
 
-  # extract abiotic values at low-HF and high-HF pixels
-  avail <- intersect(abiotic_preds, names(cov_s))
-  if (length(avail) == 0) next
-
-  vals_all <- terra::values(cov_s[[avail]], mat = TRUE)
+  vals_all <- terra::values(cov_s, mat = TRUE)
   lo_idx   <- which(terra::values(lowhf_s,  mat = FALSE) == 1)
   hi_idx   <- which(terra::values(highhf_s, mat = FALSE) == 1)
 
-  if (length(lo_idx) < 10 || length(hi_idx) < 2) next
+  if (length(lo_idx) < 10 || length(hi_idx) < 1) next
 
-  lo_mat <- vals_all[lo_idx, , drop = FALSE]
-  hi_mat <- vals_all[hi_idx, , drop = FALSE]
+  res <- aoa_subbasin(vals_all[lo_idx, , drop = FALSE], vals_all[hi_idx, , drop = FALSE],
+                      terra::xyFromCell(cov_s, lo_idx))
+  if (is.null(res)) next
 
-  # univariate: KS D statistic per covariate
-  ks_d <- setNames(numeric(length(avail)), avail)
-  for (v in avail) {
-    lo_v <- lo_mat[, v]; lo_v <- lo_v[!is.na(lo_v)]
-    hi_v <- hi_mat[, v]; hi_v <- hi_v[!is.na(hi_v)]
-    if (length(lo_v) > 1 && length(hi_v) > 1) {
-      ks_d[v] <- suppressWarnings(ks.test(lo_v, hi_v)$statistic)
-    } else {
-      ks_d[v] <- NA
-    }
-  }
-
-  # multivariate: Mahalanobis exceedance 
-  # remove columns with zero variance or all-NA in either set
-  good_cols <- vapply(avail, function(v) {
-    lo_v <- lo_mat[, v]; hi_v <- hi_mat[, v]
-    if (all(is.na(lo_v)) || all(is.na(hi_v))) return(FALSE)
-    s <- sd(lo_v, na.rm = TRUE)
-    isTRUE(s > 0)
-  }, logical(1))
-  good_avail <- avail[good_cols]
-
-  mahal_exceedance <- NA_real_
-
-  if (length(good_avail) >= 2) {
-    lo_complete <- lo_mat[, good_avail, drop = FALSE]
-    hi_complete <- hi_mat[, good_avail, drop = FALSE]
-
-    # remove rows with any NA
-    lo_complete <- lo_complete[complete.cases(lo_complete), , drop = FALSE]
-    hi_complete <- hi_complete[complete.cases(hi_complete), , drop = FALSE]
-
-    if (nrow(lo_complete) > ncol(lo_complete) + 1 && nrow(hi_complete) > 0) {
-      mu    <- colMeans(lo_complete)
-      sigma <- cov(lo_complete)
-
-      # regularize if near-singular
-      sigma <- sigma + diag(1e-6, ncol(sigma))
-
-      tryCatch({
-        sigma_inv <- solve(sigma)
-
-        mahal_lo <- mahalanobis(lo_complete, mu, sigma, inverted = FALSE)
-        q95      <- quantile(mahal_lo, 0.95)
-
-        mahal_hi <- mahalanobis(hi_complete, mu, sigma, inverted = FALSE)
-        mahal_exceedance <- mean(mahal_hi > q95)
-      }, error = function(e) {
-        mahal_exceedance <<- NA_real_
-      })
-    } # close if (nrow(lo_complete)
-  } # close if (length(good_avail) >= 2)
-
-  results[[s]] <- data.frame(
-    subbasin        = s,
-    HYBAS_ID        = all_subbasins$first_HYBAS_ID[s],
-    n_lowhf         = length(lo_idx),
-    n_highhf        = length(hi_idx),
-    ks_max          = max(ks_d, na.rm = TRUE),
-    ks_median       = median(ks_d, na.rm = TRUE),
-    mahal_exceedance = mahal_exceedance,
-    stringsAsFactors = FALSE
-  )
+  results[[s]] <- data.frame(subbasin = s,
+                             HYBAS_ID = all_subbasins$first_HYBAS_ID[s],
+                             n_lowhf  = length(lo_idx),
+                             n_highhf = length(hi_idx),
+                             res)
 
   if (s %% 50 == 0) message("  processed ", s, " / ", n_sub, " subbasins")
 
@@ -180,17 +201,15 @@ for (s in seq_len(n_sub)) {
 
 # assemble results and flag areas of extrapolation ----------------------
 
-flags_df <- bind_rows(results)
-
-# flag subbasins where extrapolation risk is elevated:
-#   KS max > 0.5 (large distributional shift in at least one covariate)
-#   or Mahalanobis exceedance > 0.3 (>30% of backfill pixels outside training 95th pct)
-flags_df$flag <- with(flags_df,
-  (ks_max > 0.5) | (!is.na(mahal_exceedance) & mahal_exceedance > 0.3)
-)
+flags_df      <- bind_rows(results)
+flags_df$flag <- flags_df$frac_outside_aoa > flag_cut
 
 out_path <- file.path(out_dir, "extrapolation_flags.csv")
 write.csv(flags_df, out_path, row.names = FALSE)
 
 message("wrote ", nrow(flags_df), " subbasins to ", out_path)
-message("  flagged: ", sum(flags_df$flag, na.rm = TRUE), " / ", nrow(flags_df))
+message("  flagged (frac_outside_aoa > ", flag_cut, "): ", sum(flags_df$flag, na.rm = TRUE),
+        " / ", nrow(flags_df))
+message("  frac_outside_aoa quantiles (0, .1, .25, .5, .75, .9, 1): ",
+        paste(round(stats::quantile(flags_df$frac_outside_aoa, c(0, .1, .25, .5, .75, .9, 1)), 3),
+              collapse = " "))
