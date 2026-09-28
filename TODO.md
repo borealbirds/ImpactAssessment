@@ -1,54 +1,48 @@
-# TODO — consolidated plan (last updated 2026-09-25, end of session)
+# TODO — consolidated plan (last updated 2026-09-28)
 
-> **Where we left off (2026-09-25).** All code for C2a–C2e is committed, pushed (`main` at
-> `30f6a85` or later) and staged on Fir (`8487982`). Waiting on two things:
-> 1. **The user submits the 2020 backfill rerun** (Next action 2 below): 07 + 11, because 08A
->    now backfills with the footprint covariates at 0. It has not been submitted yet.
-> 2. **The user decides C2f** (what counts as a sector's footprint). Claude's proposal is the
->    two-mask design in C2f below. The user leans towards a strict threshold and asked whether
->    backfilling intact road-influence pixels is "like-for-like" (it is not; evidence in C2f).
->    To build a strict mask Claude needs the original 300 m Hirsh-Pearson sector layers (14A
->    overwrote our copies with bilinear 1 km versions) and a rule for how much of a 1 km cell
->    must be converted to count.
-> C1 is rerun only after both. The user also asked earlier to keep `writing/` off the internet:
-> it is untracked and gitignored, never commit or push it.
+> **Where we left off (2026-09-28).** C2f is DECIDED and built: two masks per sector (CLAUDE.md
+> Open Limitation #10). The HF masks (03) and sector layers (14A) were rebuilt from the raw
+> 300 m Hirsh-Pearson data with area-true aggregation (bilinear had smeared each 300 m cell over
+> 2x2 1 km cells), so **07 is rerunning for 2020** on the new masks (the user submitted
+> `bash 07_submit_backfill_years.sh 2020` on 2026-09-28; 11 is chained after it). Masks, the 16
+> sector layers and the 12D closure (only 12F changed) are staged on Fir. 12F passed the local
+> harness three ways (below). Next: check 07 + 11, rerun 10C locally, then C1. The user asked
+> (2026-09-28) to finish the project: log small new problems under Loose ends, do not reopen
+> finished stages for them. Keep `writing/` off the internet: never commit or push it.
 
 Backfill (**A**), V5 packaging conformance (**B**), the 12D rework (**D**) and C1 are done, and
-C2 produced Shapley means. C2's review (**C**, C2a–C2f) changed the design: footprint
-covariates are now 0 in the BART backfill as well as in the bird model (C2e), so every
-backfill is stale and 07 + 11 rerun before C1. C2f (what counts as a sector's footprint) is
-still open. Finished work is under **Completed**.
+C2 produced Shapley means. C2s review (**C**, C2a–C2f) changed the design: footprint
+covariates are 0 in the BART backfill as well as in the bird model (C2e), vegetation is
+backfilled only on a sectors direct footprint (C2f), and the HF masks were rebuilt, so 07 + 11
+rerun before C1. Finished work is under **Completed**.
 
 ## Critical path
 
 ```
-you:      [decide C2f] ──────────────────────────────────────────────┐
-cluster:  [stage] ─► [07 + 11 rerun, 2020] ─► [wipe tables] ─► [C1 rerun: 12D + 12H] ─► [C2 rerun: 14B] ─► C3
+cluster:  [07 + 11 rerun, 2020, new masks] ─► [wipe tables] ─► [C1 rerun: 12D + 12H] ─► [C2 rerun: 14B] ─► C3
+local:    [10C rerun (new masks)] ───────────────────────────────────────────────────┘
 ```
-C2f changes only 12F's masks, so it has to be settled before the C1 rerun, not before 07.
 
 **Next actions, in order:**
 
-1. ~~Stage on Fir~~ — done 2026-09-25 (`8487982`, both closures; see Current state below).
-2. **Rerun 07 + 11 for 2020** (C2e: footprint covariates at 0 in the backfill):
-   `cd /home/mannfred/scratch/impact_assessment/Rscripts && bash 07_submit_backfill_years.sh 2020`
-   This submits 07 (674 tasks) and 11 (19 tasks, `afterany`). No wipe is needed: 07 overwrites,
-   and 11 now rebuilds any mosaic older than its inputs. Oracles:
-   - 07: every `subbasin_{i}_confusion.rds` is newer than the submission, and every
-     `logs/Y2020_S{i}.log` has `footprint covariates set to 0`;
-   - 11: every `.out` ends with `done.`.
-   If an 11 task OOMs, resubmit it with more memory (`YEARS=2020 sbatch --array=<i> --mem=256G`).
-3. **Decide C2f** while 07 runs.
-4. **Wipe, then rerun C1** (~1 h wall, ~64 billed core-equivalent-hours):
+1. **Check 07 + 11 (2020, new masks; submitted 2026-09-28).** Oracles, as for the 2026-09-26 run:
+   - 07: all 674 `.out` end `$ok TRUE` with no error/OOM/timeout line (pull them in ONE
+     filtered Globus transfer: `--recursive "--include=slurm-<07 job>_*.out" "--exclude=*"`),
+     every `subbasin_{i}_confusion.rds` postdates 2026-09-28 19:00 UTC, and every
+     `logs/Y2020_S{i}.log`s last run has `footprint covariates set to 0`;
+   - 11: every `.out` ends with `done.`. If an 11 task OOMs: `YEARS=2020 sbatch --array=<i> --mem=256G 11_premosaic_backfilled_stacks.sh`.
+   The 2026-09-26 run (job 61546382, old masks) passed the same checks; its copies are in
+   `cluster_logs/07_2020_c2e/`. Its 11 (61546385) was held, then cancelled.
+2. ~~Rerun 10C locally~~ — done 2026-09-28 (55 min): 4 of 674 flagged (50, 72, 430, 481; was 72, 98, 481). 98 fell from 0.51 to 0.14 outside the AOA; `frac_outside_aoa` correlates 0.89 with the old run. Median 1.6%, 90th percentile 14.3%. Log: `cluster_logs/10C_2026-09-28.log`.
+3. **Wipe, then rerun C1** (~1 h wall, ~64 billed core-equivalent-hours):
    `cd /home/mannfred/scratch/impact_assessment/Rscripts && rm -f ../data/derived_data/density_tables/*.rds ../data/derived_data/density_tables/arrays/*.rds ../data/derived_data/density_tables/by_bcr/*.rds && sbatch 12D_repredict_all_coalitions.sh`
    then `sbatch --dependency=afterany:<12D job id> 12H_merge_bcr_tables.sh`.
-   Pass: all 25 tasks `nice.`; the identity gate still passes (the obs side is unchanged); 12H
-   logs `wrote Shapley samples` for both species.
-5. **Pull** the 510 tables, 18 arrays and the two `*_shapley_samples.rds` (`--notify off`).
-   Tables will differ from the 2026-09-24 C1 (new backfill), so there is no `identical()` gate
-   this time; `obs_total` and `obs_on_coalition` must be unchanged unless C2f changed the masks.
-6. **C2 rerun:** `14B` locally (10C's flags are in place).
-7. **C3:** the uncapped `q99.9` sensitivity pass.
+   Pass: all 25 tasks `nice.`; the identity gate passes; each logs `superset pixels` line now
+   also reports the direct footprint; 12H logs `wrote Shapley samples` for both species.
+4. **Pull** the 510 tables, 18 arrays and the two `*_shapley_samples.rds` (`--notify off`). The
+   masks changed, so `obs_on_coalition` changes too; there is no `identical()` gate.
+5. **C2 rerun:** `14B` locally.
+6. **C3:** the uncapped `q99.9` sensitivity pass.
 
 **Multi-year:** 07 and 11 take years (`bash 07_submit_backfill_years.sh 2010 2015 2020`), but
 each year needs `covariates_mosaiced_{year}.tif` (06; only 2020 exists) and that year's
@@ -92,16 +86,13 @@ Two mechanical gotchas found the same way:
 - Globus refuses sources outside the local endpoint's configured root, so a temp-dir staging
   copy fails with `Path not allowed`. Stage from inside the repo tree.
 
-**Current state (2026-09-25)**: `/Rscripts` on Fir matches `8487982` for both closures:
+**Current state (2026-09-28)**: `/Rscripts` on Fir matches the working tree for both closures
+(07/11 unchanged since `8487982`; the 12D closure checksum-synced 2026-09-28, only 12F moved):
 - 07/11: `07` `.R`+`.sh`, `07_submit_backfill_years.sh`, `08A`, `08B_*`, `09_*`, `11` `.R`+`.sh`;
 - 12D/12H: `12D` `.R`+`.sh`, `12E`, `12F`, `12G` `.R`+`.cpp`, `12H` `.R`+`.sh`.
-`biotic_variable_hierarchy.rds` and the two CanHF masks were staged too (checksum sync).
-Some files that had not changed locally still moved bytes: `08B_deploy_mbart`, the four `09_*`,
-the hierarchy `.rds` and both masks. A re-sync then moved 0, so Fir's copies had really differed.
-For the masks the difference was encoding only: the 2026-09-24 10C run on Fir and the local
-2026-09-25 run count identical low- and high-HF pixels in all 667 subbasins. `density_tables/`
-on Fir still holds C1's 2026-09-24 output. `density_tables/` on Fir holds C1's merged production output (and `by_bcr/` its
-25 per-BCR files).
+`data/raw_data/hirshpearson/` on Fir holds the 2026-09-28 CanHF masks (area mean) and the 16
+sector layers (`{sector}.tif`, `{sector}_direct.tif`). `density_tables/` on Fir still holds
+C1's 2026-09-24 output; wipe it before the C1 rerun (Next action 3).
 `/Rscripts/12*` is now ten files (`12A` is local-only by design).
 
 ---
@@ -222,7 +213,7 @@ design questions that are yours (C2e, C2f).
       - `--export=ALL,YEARS=a,b` would have been split at the comma, so YEARS travels in the
         environment.
       11's freshness check and atomic rename parse but were not run locally.
-- [ ] **C2f. Decision (yours, in discussion): what counts as a sector's footprint.** 12F puts a
+- [x] **C2f. DECIDED and built 2026-09-28: two masks per sector (CLAUDE.md Open Limitation #10).** Until then 12F put a
       pixel in sector j's footprint when j's Hirsh-Pearson pressure is > 0 (after 14A's
       reprojection) and CanHF ≥ 1. The pressure layers are continuous and include
       indirect-influence zones:
@@ -267,6 +258,48 @@ design questions that are yours (C2e, C2f).
       3. HP's Tables 1–4 (the direct scores for roads/rail/mines/waterways), if thresholds are
          set by score.
       **Must be implemented and tested before the C1 rerun.**
+      **2026-09-28 findings** (user: influence zones must count wherever they measurably affect
+      birds; the CanHF ≥ 1 condition was meant to separate sector scores from the cumulative
+      score):
+      - HP's cumulative score is the plain SUM of the 12 sector layers (Methods, "Overview"), and
+        our CanHF is that product (`03` reads `cum_threat2020.02.18.tif`). Any sector score ≥ 1
+        therefore implies CanHF ≥ 1, and every road/rail/mine/water band scores ≥ 1. Measured on
+        the 1 km layers the way 12F builds them, CanHF ≥ 1 removes from `score > 0`: roads 10.9%,
+        rail 4.5%, mines 9.0%, oil_gas 11.1%, dams 23.7%, built 1.3%, crop 0.9%, pasture 1.3%.
+        It does not separate direct from indirect footprint.
+      - The local non-CanHF rasters are NOT the downloads: all are 14A's output (EPSG:5072 on the
+        hydrobasins template, 1000.012 × 1000.115 m cells, written 2026-03-03 13:32–13:43).
+        Originals: Borealis doi:10.5683/SP2/EVKAVL V3. The 8 sectors total ~3.05 GB (roads.tif
+        and rail.tif are 1.5 GB each), plus `cum_threat2020.02.18.tif` (1.5 GB).
+      - **14A's bilinear downsampling spreads every 300 m cell over 2×2 1 km cells** (synthetic
+        test at 10 positions: always 4 cells, sum preserved, max 0.28–0.80 of the 0.9 an area
+        average gives; `method = "average"` gives 1 cell). So `sector > 0` also marks up to a
+        1 km ring of cells with none of the feature, e.g. built's median in-footprint score is
+        0.30 although built is only ever scored 10. `03` projected cum_threat the same way, so
+        the CanHF masks may carry the same ring. This affects the CURRENT design, not only
+        C2f; size it against the raw layers.
+      - Road scores do not identify the distance band: 6 is a secondary road's 0–300 m band, a
+        major highway's 300–600 m band or the Trans-Canada's 600–900 m band. A direct road/rail
+        mask needs the vectors (StatCan RNF 2016, NRCan rail) or a local-maximum rule. Built,
+        crop and pasture have no buffers (any 300 m cell > 0 is direct); mines and oil_gas are
+        points.
+      - The user rejected computing both designs (2026-09-28) and chose the two-mask fix.
+      **Built 2026-09-28.** 03 now takes the AREA MEAN of cum_threat per 1 km cell; 14A builds
+      `{sector}.tif` (max 300 m score) and `{sector}_direct.tif` (any direct 300 m cell) from the
+      Borealis originals (`raw_300m/`). Raw values match HP Tables 1-5 exactly (roads 2/4/6/8/10,
+      rail 1/4/6, dams 2/4/6/10, mines 1/2/4/6/8, oil_gas integers 1-10, built 10, crop 7, pasture
+      4). Direct: built/crop/pasture > 0, roads/rail/dams >= 6, mines >= 6, oil_gas = 10.
+      - Masks: high-HF 1.80 M -> 1.87 M px (97% of old kept); every subbasin keeps >= 911 low-HF
+        pixels; only 26 new high-HF px fall in subbasins 05 dropped, so the 674 set stays.
+      - Footprint with HF >= 1, old -> new (direct share): built 653k -> 354k (100%), crop
+        677k -> 605k (100%), pasture 584k -> 425k (100%), rail 153k -> 119k (82%), roads
+        1,497k -> 1,496k (85%), dams 65k -> 85k (82%), mines 44k -> 44k (5%), oil_gas 28k -> 24k
+        (8%); any sector 1,569k -> 1,598k, 87% direct.
+      - 12F harness (CAWA can60, 2 boots, `cluster_logs/c2f_test/verify_c2f.R <mode>`): with
+        every footprint pixel direct, 255/255 tables and 9/9 arrays `identical()` to smoke 7;
+        with none direct, the vegetation part is exactly 0 in every sample; with the real layers
+        v(N) -3,592 -> -1,595 (roads -3,037 -> -1,582; vegetation -3,885 -> -1,868; direct
+        293 -> 273). Pre-C2e backfill, so indicative only.
 - [ ] **C3.** Sensitivity pass with the `q99.9` stage disabled; report the spread. The frozen cap
       has a known-direction bias — counterfactual densities are higher, so they hit the frozen
       ceiling more often than observed, systematically **under-estimating impact in the
@@ -291,6 +324,13 @@ design questions that are yours (C2e, C2f).
       per species) just to read `attr(b.list[[1]], "bcr")`; it parses the BCR from the
       filename. `12F`, which loads `b.list` anyway, now `stop()`s if the attribute and the
       filename disagree. Verified equal for all 25 CAWA/OVEN pairs.
+- [ ] C2f local files (gitignored), delete once C1 is through:
+      - `data/raw_data/hirshpearson/raw_300m/` (~4.6 GB): the Hirsh-Pearson originals and
+        cum_threat. 03 and 14A need them only to rebuild the masks and layers.
+      - `data/raw_data/hirshpearson/old_bilinear/`: the pre-2026-09-28 masks and sector layers.
+      - `cluster_logs/localtest/ia/data/raw_data/hirshpearson_c2f_{all,none,real}/` and
+        `cluster_logs/c2f_test/`: the 12F harness inputs and scripts.
+      - `cluster_logs/extrapolation_flags_2026-09-25_bilinear_masks.csv`: 10Cs flags on the old masks.
 - [ ] Local C2 diagnostics (gitignored), kept for C2f and the write-up; delete when done:
       - `cluster_logs/sanity/` (~7 GB): 25 weights, can11/12/13 backfill mosaics, 5 bird
         models, 3 stacks and the three `diag_extreme_bcr_*.rds` results. The harnesses that read

@@ -160,13 +160,20 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
 
     # per-sector reprojected footprint rasters, kept so coalition membership over
     # the superset pixels can be derived cheaply (no per-coalition reprojection).
+    # {sec}_direct.tif (14A) marks the part of the footprint the sector converted; only
+    # there is the vegetation backfilled (see the coalition membership block below).
     sec_rasters <- setNames(vector("list", n_sectors), sectors)
+    sec_direct_r <- setNames(vector("list", n_sectors), sectors)
     union_mask  <- terra::rast(stack_obs[[1]]); terra::values(union_mask) <- 0L
     for (sec in sectors) {
       sec_r <- terra::project(
         terra::rast(file.path(hirsh_dir, paste0(sec, ".tif"))),
         stack_obs, method = "near")
       sec_rasters[[sec]] <- sec_r
+      direct_path <- file.path(hirsh_dir, paste0(sec, "_direct.tif"))
+      if (!file.exists(direct_path))
+        stop("missing ", direct_path, " - build it with 14A_reproject_hirshpearson.R and stage it")
+      sec_direct_r[[sec]] <- terra::project(terra::rast(direct_path), stack_obs, method = "near")
       union_mask <- terra::ifel(sec_r > 0, 1L, union_mask)
     }
     super_mask <- terra::ifel((union_mask == 1L) & (canHF_r >= 1), 1, NA)
@@ -227,10 +234,15 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     sec_member  <- setNames(lapply(sectors, function(sec)
       terra::values(sec_rasters[[sec]], mat = FALSE)[super_idx] > 0), sectors)
     sec_member  <- lapply(sec_member, function(v) { v[is.na(v)] <- FALSE; v })
-    rm(sec_rasters, canHF_r); gc()
+    sec_direct  <- setNames(lapply(sectors, function(sec) {
+      v <- terra::values(sec_direct_r[[sec]], mat = FALSE)[super_idx] == 1
+      !is.na(v) & v & sec_member[[sec]]
+    }), sectors)
+    rm(sec_rasters, sec_direct_r, canHF_r); gc()
     message(Sys.time(), " | ", species, " ", bcr_code,
             " | superset pixels: ", length(super_idx),
-            " of ", terra::ncell(stack_obs[[1]]), " BCR cells")
+            " of ", terra::ncell(stack_obs[[1]]), " BCR cells; direct footprint of any sector: ",
+            sum(Reduce(`|`, sec_direct)))
 
     # ---- Prediction weight (range x not-water x in-data-limit; built by 12A2) ---
     # Applied multiplicatively to BOTH observed and backfilled density so obs/bf
@@ -471,21 +483,34 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     # Every row the reduce can keep is complete-case, so the workers carry only the
     # complete rows (c_rows); keep_rows[[ci]] indexes into them. coal_state: 0 = coalition
     # has no footprint in this BCR, 1 = footprint but no kept pixel, 2 = kept pixels.
-    c_rows     <- which(complete_mask)
-    pred_in_c  <- pred_mask[c_rows]
-    w_c        <- weight_super[c_rows]
-    zones_c    <- super_zones[c_rows]
-    n_sub      <- length(sub_ids)
+    #
+    # Two masks per coalition (TODO C2f, decided 2026-09-28). keep_rows is the coalition's
+    # whole footprint (any of its sectors > 0, incl. influence zones); on all of it the
+    # counterfactual has no footprint covariates. direct_rows (a subset) is where one of its
+    # sectors converted the land: only there is the vegetation backfilled. So the
+    # counterfactual sum is bf over direct_rows + d0 over the rest of keep_rows, and the
+    # direct/vegetation split still holds exactly: direct = d0 - obs over keep_rows,
+    # vegetation = bf - d0 over direct_rows.
+    c_rows      <- which(complete_mask)
+    pred_in_c   <- pred_mask[c_rows]
+    w_c         <- weight_super[c_rows]
+    zones_c     <- super_zones[c_rows]
+    n_sub       <- length(sub_ids)
     if (anyDuplicated(hybas_ids)) stop(species, " ", bcr_code, ": duplicate first_HYBAS_ID")
-    zi_c       <- match(zones_c, hybas_ids)            # subbasin row of each complete row
-    coal_state <- integer(length(all_cids))
-    keep_rows  <- vector("list", length(all_cids))
+    zi_c        <- match(zones_c, hybas_ids)           # subbasin row of each complete row
+    coal_state  <- integer(length(all_cids))
+    keep_rows   <- vector("list", length(all_cids))
+    direct_rows <- vector("list", length(all_cids))
     for (ci in seq_along(all_cids)) {
-      coal_mem <- Reduce(`|`, sec_member[coalition_id_to_sectors(all_cids[ci], sectors)])
+      coal_secs <- coalition_id_to_sectors(all_cids[ci], sectors)
+      coal_mem  <- Reduce(`|`, sec_member[coal_secs])
       if (!any(coal_mem)) next
       kr <- which((coal_mem & !is.na(super_zones))[c_rows])
       coal_state[ci] <- if (length(kr) > 0L) 2L else 1L
-      if (length(kr) > 0L) keep_rows[[ci]] <- kr
+      if (length(kr) > 0L) {
+        keep_rows[[ci]]   <- kr
+        direct_rows[[ci]] <- which((Reduce(`|`, sec_direct[coal_secs]) & !is.na(super_zones))[c_rows])
+      }
     }
 
     # From here on only the PREDICTED rows of the design inputs are read. The BART draws
@@ -542,6 +567,11 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
         if (coal_state[ci] != 2L) return(NULL)
         coal_rowsum(matrix(d0_c, ncol = 1L), keep_rows[[ci]], zi_c, n_sub) * 100
       })
+      # d0 over the footprint that is NOT direct, which keeps its observed vegetation
+      d0_infl <- lapply(seq_along(all_cids), function(ci) {
+        if (coal_state[ci] != 2L) return(NULL)
+        d0[[ci]] - coal_rowsum(matrix(d0_c, ncol = 1L), direct_rows[[ci]], zi_c, n_sub) * 100
+      })
       rm(d0_c); invisible(gc(full = FALSE))
 
       # design matrix built ONCE per bootstrap; per draw only the draw columns change
@@ -594,9 +624,12 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
 
       # x100: birds/ha -> birds/km2. coal_rowsum = rowsum(sc[kr, ], zones_c[kr]) placed on
       # the n_sub subbasin rows (absent subbasin -> 0), without copying sc[kr, ] 255 times.
+      # "bf" is the coalition's counterfactual on its footprint: backfilled vegetation on
+      # its direct pixels plus d0 (same for every scenario) on the rest.
       bf <- lapply(seq_along(all_cids), function(ci) {
         if (coal_state[ci] != 2L) return(NULL)
-        coal_rowsum(sc, keep_rows[[ci]], zi_c, n_sub) * 100
+        coal_rowsum(sc, direct_rows[[ci]], zi_c, n_sub) * 100 +
+          d0_infl[[ci]][, rep(1L, n_scen), drop = FALSE]
       })
       list(bf = bf, d0 = d0, n_bad = as.numeric(n_bad + n_bad0))
     }, mc.cores = n_cores, mc.preschedule = FALSE)   # one fork per bootstrap, freed on exit

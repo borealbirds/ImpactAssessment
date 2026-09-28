@@ -6,21 +6,24 @@
 
 library(terra)
 library(tidyverse)
+terraOptions(memfrac = 0.6)   # project() values can depend on memory (see memory notes)
 
 
 root <- "G:/Shared drives/BAM_NationalModels5"
-ia_dir <- file.path(root, "data", "Extras", "sandbox_data", "impactassessment_sandbox")
+ia_dir <- file.path(getwd(), "data", "raw_data")   # masks go to data/raw_data/hirshpearson/
 
 # first, create a template raster from the BAM boundary in EPSG:5072 (avoids GDAL errors)
 bam_boundary <- terra::vect(file.path(root, "Regions", "BAM_BCR_NationalModel_UnBuffered.shp"))
 bam_template <- terra::rast(file.path(root, "PredictionRasters", "Biomass", "SCANFI", "1km", "SCANFIBalsamFir_1km_2020.tif"))
 
-# import Hirsh-Pearson oil and gas raster
-CanHF_1km <- 
-  terra::rast(file.path(root, "CovariateRasters", "Disturbance", "cum_threat2020.02.18.tif")) |> 
-  terra::project(x = _, y = bam_template) |>
-  terra::resample(x = _, y = bam_template) |> 
-  terra::crop(x = _, y = bam_template) |> 
+# import the Hirsh-Pearson cumulative footprint (300 m; a local copy of
+# G:/.../CovariateRasters/Disturbance/cum_threat2020.02.18.tif) and take each 1 km cell's
+# AREA MEAN. Until 2026-09-28 this used project()'s default bilinear, which at a coarser
+# grid spreads every 300 m cell over 2x2 1 km cells and so put a ring of cells with no
+# footprint into the high-HF mask.
+CanHF_1km <-
+  terra::rast(file.path(ia_dir, "hirshpearson", "raw_300m", "cum_threat2020.02.18.tif")) |>
+  terra::project(x = _, y = bam_template, method = "average") |>
   terra::mask(x = _, mask = bam_template)
 
 # convert NaNs to NA (terra::buffer needs this)
@@ -29,7 +32,7 @@ vals[is.nan(vals)] <- NA
 values(CanHF_1km) <- vals
 
 names(CanHF_1km) <- "CanHF_1km"
-terra::writeRaster(CanHF_1km, filename = file.path(ia_dir, "hirshpearson", "CanHF_1km_masked.tif"))
+terra::writeRaster(CanHF_1km, filename = file.path(ia_dir, "hirshpearson", "CanHF_1km_masked.tif"), overwrite = TRUE)
 
 
 

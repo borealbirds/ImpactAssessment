@@ -1,71 +1,73 @@
 # ---
-# title: Reproject and align Hirsh-Pearson sector rasters to pipeline CRS
+# title: Build 1 km sector footprint layers from the raw 300 m Hirsh-Pearson rasters
 # author: Mannfred Boehm
 # ---
 
-# The individual sector rasters in data/raw_data/hirshpearson/ (built, crop,
-# forestry_harvest, etc.) may differ in CRS and extent from the rest of the
-# pipeline, which uses EPSG:5072 (NAD83(NSRS2007) / Conus Albers) and the
-# spatial extent of the Level 6 HydroBASINS study area.
+# Input: the 300 m sector rasters of Hirsh-Pearson et al. (2022), downloaded unchanged from
+# Borealis (doi:10.5683/SP2/EVKAVL, V3) into data/raw_data/hirshpearson/raw_300m/.
+# Output, per sector, on the grid of the CanHF masks (EPSG:5072, 1000 m, written by 03):
+#   {sector}.tif         highest 300 m pressure score in the 1 km cell (0-10)
+#   {sector}_direct.tif  1 if any 300 m cell in the 1 km cell is DIRECT footprint, else 0
 #
-# This script reprojects all non-CanHF sector rasters in-place to:
-#   - CRS:        EPSG:5072 (taken from hydrobasins_masked_merged_subset.gpkg)
-#   - Extent:     bounding box of the hydrobasins shapefile
-#   - Resolution: 1000 m x 1000 m
-#   - Method:     bilinear (scores are continuous)
+# 12F uses both. A pixel is in sector j's footprint when {j}.tif > 0 and CanHF >= 1: there
+# the footprint covariates are set to 0. Its vegetation is backfilled only where
+# {j}_direct.tif is 1 as well (TODO C2f). A 300 m cell is direct footprint when:
+#   built, crop, pasture   score > 0 (HP gives them no distance buffers)
+#   roads, rail, dams      score >= 6: the 0-300 m band of secondary roads, rail and
+#                          reservoirs (HP Tables 2-4). It also takes in the 300-600 m band of
+#                          national/major highways and the 300-900 m band of the Trans-Canada,
+#                          since a score does not identify the road type.
+#   mines                  score >= 6: the 0-600 m band (Table 5), plus 600-1500 m of large mines
+#   oil_gas                score 10: the site cell (HP scores are integers, 10 at the site
+#                          decaying to 1 near 5 km)
 #
-# Run this script once before 14B_sector_attribution.R.
-# The CanHF* files are left untouched.
-# ---
+# Aggregation is "max", never bilinear: bilinear downsampling spreads each 300 m cell over
+# 2x2 1 km cells, so the layers this script used to write (bilinear, until 2026-09-28) marked
+# up to a 1 km ring of cells that hold none of the feature.
 
 library(terra)
+terraOptions(memfrac = 0.6)   # project() values can depend on memory (see memory notes)
 
-# ---- Execution context -------------------------------------------------------
+ia_dir    <- getwd()
+hirsh_dir <- file.path(ia_dir, "data/raw_data/hirshpearson")
+raw_dir   <- file.path(hirsh_dir, "raw_300m")
 
-cc    <- FALSE
-local <- TRUE
+template_r <- rast(file.path(hirsh_dir, "CanHF_1km_morethan1.tif"))
 
-if (cc)            { ia_dir <- "/home/mannfred/scratch/impact_assessment" }
-if (!cc && local)  { ia_dir <- getwd() }
-if (!cc && !local) { ia_dir <- file.path("G:/Shared drives/BAM_NationalModels5", "data", "Extras",
-                                          "sandbox_data", "impactassessment_sandbox") }
+direct_rule <- list(
+  built = function(x) x > 0, crop = function(x) x > 0, pasture = function(x) x > 0,
+  roads = function(x) x >= 6, rail = function(x) x >= 6,
+  dam_and_associated_reservoir = function(x) x >= 6,
+  mines = function(x) x >= 6, oil_gas = function(x) x >= 10)
 
-# ---- Paths ------------------------------------------------------------------
-
-hirsh_dir  <- file.path(ia_dir, "data/raw_data/hirshpearson")
-basin_path <- file.path(ia_dir, "data/raw_data/hydrobasins_masked_merged_subset.gpkg")
-
-# ---- Build spatial template from hydrobasins --------------------------------
-# The hydrobasins shapefile is the authoritative spatial reference for the
-# pipeline. Use its CRS and bounding box at 1 km resolution.
-
-hydrobasins <- vect(basin_path)
-
-message("Hydrobasins CRS: ", crs(hydrobasins, describe = TRUE)$code)
-message("Hydrobasins extent: ", paste(as.vector(ext(hydrobasins)), collapse = ", "))
-
-template_r <- rast(ext(hydrobasins), resolution = 1000, crs = crs(hydrobasins))
-
-# ---- Identify sector files to reproject -------------------------------------
-
-sector_files <- list.files(hirsh_dir, pattern = "\\.tif$", full.names = TRUE)
-sector_files <- sector_files[!grepl("^CanHF", basename(sector_files))]
-
-message("\nReprojecting ", length(sector_files), " sector rasters to EPSG:5072 (1 km):")
-
-# ---- Reproject and overwrite ------------------------------------------------
-
-for (f in sector_files) {
-  message("  ", basename(f))
-
-  r <- rast(f)
-  message("    source CRS:    ", crs(r, describe = TRUE)$code,
-          "  extent: ", paste(round(as.vector(ext(r)), 0), collapse = ", "))
-
-  r_proj <- project(r, template_r, method = "bilinear")
-
-  writeRaster(r_proj, filename = f, overwrite = TRUE)
-  message("    written.")
+# optional: build only the sectors named on the command line (e.g. Rscript 14A... mines oil_gas)
+only <- commandArgs(trailingOnly = TRUE)
+if (length(only)) {
+  if (!all(only %in% names(direct_rule)))
+    stop("unknown sector(s): ", paste(setdiff(only, names(direct_rule)), collapse = ", "))
+  direct_rule <- direct_rule[only]
 }
 
-message("\nDone. All sector rasters now conform to the hydrobasins grid.")
+for (sec in names(direct_rule)) {
+  f <- file.path(raw_dir, paste0(sec, ".tif"))
+  if (!file.exists(f)) stop("missing ", f, " - download it from doi:10.5683/SP2/EVKAVL")
+  r <- rast(f)
+  message(sec, ": ", paste(dim(r)[1:2], collapse = " x "), " cells at ",
+          paste(round(res(r)), collapse = " x "), " m, ", crs(r, describe = TRUE)$name)
+
+  score <- project(r, template_r, method = "max")
+  names(score) <- sec
+  writeRaster(score, file.path(hirsh_dir, paste0(sec, ".tif")), overwrite = TRUE,
+              datatype = "FLT4S")
+
+  direct_300 <- classify(direct_rule[[sec]](r), cbind(NA, 0))
+  direct <- project(direct_300, template_r, method = "max")
+  names(direct) <- paste0(sec, "_direct")
+  writeRaster(direct, file.path(hirsh_dir, paste0(sec, "_direct.tif")), overwrite = TRUE,
+              datatype = "INT1U")
+
+  n_any <- global(score > 0, "sum", na.rm = TRUE)[[1]]
+  n_dir <- global(direct == 1, "sum", na.rm = TRUE)[[1]]
+  message(sprintf("  1 km cells with %s > 0: %d; direct: %d (%.1f%%)", sec, n_any, n_dir,
+                  100 * n_dir / max(1, n_any)))
+}
