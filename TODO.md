@@ -10,6 +10,50 @@
 > This file was trimmed on 2026-09-28. The full record of finished work (every smoke, job id
 > and measurement) is `git show 3fcef6d:TODO.md`.
 
+## Handoff to a new chat (written 2026-09-28)
+
+**Open the new chat with:** "Continue from the Handoff section of TODO.md. Here is my
+`sacct` output: <paste>". CLAUDE.md and the memory index load on their own.
+
+**State at hand-off.** All code and CLAUDE.md are committed and pushed (`e290d00`). Nothing is running
+locally. On Fir, 07 then 11 (2020, new masks) were submitted at 2026-09-28 19:36 UTC with
+`bash 07_submit_backfill_years.sh 2020`.
+
+**What the new chat does not know:**
+- **The new 07 and 11 job ids.** The submit helper printed them as
+  `BACKFILL years=2020 07=<id> ... 11=<id>`. Otherwise run this on Fir and paste the output:
+  `sacct -X -S 2026-09-28 --name=backfill,premosaic -o JobID%24,JobName%12 | awk '{split($1,a,"_"); print a[1], $2}' | sort -u`
+- **The older run is still on Fir.** Don't mix it up with the new one. 07 `61546382` ran on
+  the old masks; its 674 `.out` files are still in `Rscripts/`, with copies in
+  `cluster_logs/07_2020_c2e/`. Its 11, `61546385`, was cancelled before it ran.
+- **Two directories are untracked on purpose.** `data/derived_data/rds_files/` (98 MB) and
+  `data/derived_data/sector_effects/` (the first C2 run's CSVs, which are stale and will be
+  overwritten by 14B) are not committed. The user was asked whether to commit them and has not
+  answered, so leave them out of git.
+
+**Checking 07 and 11 without SSH (Next action 1).** In PowerShell, with
+`$g = "C:\Users\mannf\AppData\Local\Python\pythoncore-3.14-64\Scripts\globus.exe"`,
+`$fir = "8dec4129-9ab4-451d-a45f-5b4b8471f7a3:/home/mannfred/scratch/impact_assessment"` and
+`$loc = "a7878ccc-747b-11ef-b4b8-8fef73a45f39:/C/Users/mannf/Drive/boreal_avian_modelling_project/ImpactAssessment/cluster_logs/07_2020_c2f"`,
+each pull is ONE filtered recursive task. Write the filters as `--opt=value`, or click
+glob-expands the `*` on Windows.
+- `& $g transfer --recursive "--include=slurm-<07 id>_*.out" "--exclude=*" "$fir/Rscripts/" "$loc/" --label "07 c2f outs" --notify off`
+- the same with `"--include=Y2020_S*.log"` from `"$fir/logs/"` into `"$loc/subbasin_logs/"`;
+- the same with `"--include=slurm-<11 id>_*.out"` into `"$loc/11/"`.
+
+Then:
+- Wait with `& $g task wait <task id>`.
+- Grep for the pass lines listed under Next action 1.
+- Ask the user to run this on Fir; it must print 0:
+  `find /home/mannfred/scratch/impact_assessment/data/derived_data/bart_models/2020 -name '*_confusion.rds' ! -newermt '2026-09-28 19:00 UTC' | wc -l`
+
+On the old masks, 7 subbasins had a single backfill pixel (119, 160, 221, 246, 247, 304, 423).
+08A skips BART for those, so their `.out` is tiny and their metrics file is 45 bytes. That is
+expected, and the set may shift on the new masks.
+
+**After that,** follow Next actions 3–6 in order. The user runs every cluster command. Give
+each command as a single line.
+
 ## Critical path
 
 ```
