@@ -1,47 +1,48 @@
-# TODO — consolidated plan (last updated 2026-09-28)
+# TODO (last updated 2026-09-28)
 
-> **Where we left off (2026-09-28).** C2f is DECIDED and built: two masks per sector (CLAUDE.md
-> Open Limitation #10). The HF masks (03) and sector layers (14A) were rebuilt from the raw
-> 300 m Hirsh-Pearson data with area-true aggregation (bilinear had smeared each 300 m cell over
-> 2x2 1 km cells), so **07 is rerunning for 2020** on the new masks (the user submitted
-> `bash 07_submit_backfill_years.sh 2020` on 2026-09-28; 11 is chained after it). Masks, the 16
-> sector layers and the 12D closure (only 12F changed) are staged on Fir. 12F passed the local
-> harness three ways (below). Next: check 07 + 11, rerun 10C locally, then C1. The user asked
-> (2026-09-28) to finish the project: log small new problems under Loose ends, do not reopen
-> finished stages for them. Keep `writing/` off the internet: never commit or push it.
-
-Backfill (**A**), V5 packaging conformance (**B**), the 12D rework (**D**) and C1 are done, and
-C2 produced Shapley means. C2s review (**C**, C2a–C2f) changed the design: footprint
-covariates are 0 in the BART backfill as well as in the bird model (C2e), vegetation is
-backfilled only on a sectors direct footprint (C2f), and the HF masks were rebuilt, so 07 + 11
-rerun before C1. Finished work is under **Completed**.
+> **Where we left off (2026-09-28).** C2f is decided, built and committed (`3fcef6d`; CLAUDE.md
+> Open Limitation #10). The HF masks (03) and the 16 sector layers (14A) were rebuilt from the
+> raw 300 m Hirsh-Pearson data, so 07 + 11 are rerunning for 2020 on Fir (submitted 2026-09-28).
+> 10C is done on the new masks. Masks, sector layers and both closures are staged on Fir.
+> The user wants the project finished: log small new problems under Loose ends and do not
+> reopen finished stages for them. Keep `writing/` off the internet: never commit or push it.
+>
+> This file was trimmed on 2026-09-28. The full record of finished work (every smoke, job id
+> and measurement) is `git show 3fcef6d:TODO.md`.
 
 ## Critical path
 
 ```
-cluster:  [07 + 11 rerun, 2020, new masks] ─► [wipe tables] ─► [C1 rerun: 12D + 12H] ─► [C2 rerun: 14B] ─► C3
-local:    [10C rerun (new masks)] ───────────────────────────────────────────────────┘
+cluster:  [07 + 11 rerun, 2020, new masks] ─► [wipe tables] ─► [C1 rerun: 12D + 12H] ─► [14B] ─► C3
+local:    [10C rerun: done] ──────────────────────────────────────────────────────────┘
 ```
 
 **Next actions, in order:**
 
-1. **Check 07 + 11 (2020, new masks; submitted 2026-09-28).** Oracles, as for the 2026-09-26 run:
-   - 07: all 674 `.out` end `$ok TRUE` with no error/OOM/timeout line (pull them in ONE
-     filtered Globus transfer: `--recursive "--include=slurm-<07 job>_*.out" "--exclude=*"`),
-     every `subbasin_{i}_confusion.rds` postdates 2026-09-28 19:00 UTC, and every
-     `logs/Y2020_S{i}.log`s last run has `footprint covariates set to 0`;
-   - 11: every `.out` ends with `done.`. If an 11 task OOMs: `YEARS=2020 sbatch --array=<i> --mem=256G 11_premosaic_backfilled_stacks.sh`.
-   The 2026-09-26 run (job 61546382, old masks) passed the same checks; its copies are in
-   `cluster_logs/07_2020_c2e/`. Its 11 (61546385) was held, then cancelled.
-2. ~~Rerun 10C locally~~ — done 2026-09-28 (55 min): 4 of 674 flagged (50, 72, 430, 481; was 72, 98, 481). 98 fell from 0.51 to 0.14 outside the AOA; `frac_outside_aoa` correlates 0.89 with the old run. Median 1.6%, 90th percentile 14.3%. Log: `cluster_logs/10C_2026-09-28.log`.
+1. **Check 07 + 11** (2020, new masks, submitted 2026-09-28).
+   - 07: all 674 `.out` end `$ok TRUE` with no error/OOM/timeout line. Pull them in ONE
+     filtered Globus transfer: `--recursive "--include=slurm-<07 job>_*.out" "--exclude=*"`.
+     `sacct` is not enough: `tryCatch` makes a failed subbasin exit `COMPLETED`, and the logs
+     append across runs. So also check that every `subbasin_{i}_confusion.rds` postdates
+     2026-09-28 19:00 UTC and that the last run in every `logs/Y2020_S{i}.log` has
+     `footprint covariates set to 0`.
+   - 11: every `.out` ends with `done.`. Here too `sacct` is not enough: three code paths exit 0
+     without writing. If a task OOMs:
+     `YEARS=2020 sbatch --array=<i> --mem=256G 11_premosaic_backfilled_stacks.sh`.
+2. ~~10C~~, done 2026-09-28: 4 of 674 flagged (50, 72, 430, 481; was 72, 98, 481). Subbasin 98
+   fell from 0.51 to 0.14 outside the AOA. `frac_outside_aoa` correlates 0.89 with the old run;
+   median 1.6%, 90th percentile 14.3%. Log: `cluster_logs/10C_2026-09-28.log`.
 3. **Wipe, then rerun C1** (~1 h wall, ~64 billed core-equivalent-hours):
    `cd /home/mannfred/scratch/impact_assessment/Rscripts && rm -f ../data/derived_data/density_tables/*.rds ../data/derived_data/density_tables/arrays/*.rds ../data/derived_data/density_tables/by_bcr/*.rds && sbatch 12D_repredict_all_coalitions.sh`
    then `sbatch --dependency=afterany:<12D job id> 12H_merge_bcr_tables.sh`.
-   Pass: all 25 tasks `nice.`; the identity gate passes; each logs `superset pixels` line now
-   also reports the direct footprint; 12H logs `wrote Shapley samples` for both species.
+   Pass: all 25 tasks `nice.`; the identity gate passes; each `superset pixels` line reports the
+   direct footprint; 12H logs `wrote Shapley samples` for both species.
 4. **Pull** the 510 tables, 18 arrays and the two `*_shapley_samples.rds` (`--notify off`). The
    masks changed, so `obs_on_coalition` changes too; there is no `identical()` gate.
-5. **C2 rerun:** `14B` locally.
+5. **14B** locally (C2 rerun). For comparison, the first C2 run (2026-09-24, old masks, pre-C2e,
+   CAWA can40 withheld) gave CAWA v(N) = +574k on 4.47 M observed (roads 34%, pasture 22%,
+   crop 21%, built 18%) and OVEN v(N) = +3.53 M on 37.65 M (crop 33%, pasture 32%, built 21%,
+   roads 11%).
 6. **C3:** the uncapped `q99.9` sensitivity pass.
 
 **Multi-year:** 07 and 11 take years (`bash 07_submit_backfill_years.sh 2010 2015 2020`), but
@@ -49,565 +50,139 @@ each year needs `covariates_mosaiced_{year}.tif` (06; only 2020 exists) and that
 footprint masks (`CanHF_1km_{lessthan1,morethan1}_{year}.tif`, or `HF_MASK_YEAR=2020` to borrow
 2020's). 12A, 12C, 12D and 12H still fix `year <- 2020`.
 
-**Blocker for every cluster step**: SSH is keyboard-interactive (2FA), so cluster commands must
-be run from your own authenticated session. Globus works (one file per call, **never** `--batch`,
-always `--notify off`).
+**SSH is keyboard-interactive (2FA)**, so the user runs every cluster command from their own
+session. Globus works: one file per call (or one filtered recursive transfer), **never**
+`--batch`, always `--notify off`.
 
 ---
 
-## Staging discipline — read before any cluster run
+## Staging discipline: read before any cluster run
 
-Derive the set of files to stage from the **`source()` closure of the entry point**, never from
-"what did I change". Then checksum-sync the whole closure: a 0-byte transfer is a free proof of
-equality, so there is no reason to sync only the suspects. Three separate times a file that had
-never been edited — and so appeared in no diff-derived list — turned out to be stale or absent:
+Stage the entry point's whole **`source()` closure**, including data files, never just what you
+edited, and checksum-sync all of it (a 0-byte transfer proves equality for free). Unedited files
+have been stale or missing on Fir four times: `08A` with Fix B, 7 of 9 files in 07's chain,
+`12E` (never staged), and the old-schema `SpeciesPredictionTruncationValues.Rdata`.
 
-- `08A` (carrying Fix B) was nearly left stale before the 674-task `07` run, which would have
-  reproduced the exact bug that run exists to fix.
-- 7 of the 9 files in `07`'s source chain were pre-2026-07-02 versions, including
-  `08B_deploy_gbart.R`, which would have written a different backfill layer set.
-- `12E_shapley_utils.R` had never been on the cluster at all; `12D:73` sources it, so C1 would
-  have died on its first `source()` after queueing for a 384 G node.
-- The closure includes **data files**, not just scripts: `SpeciesPredictionTruncationValues.Rdata`
-  was recorded as "restaged" in B but Fir still had the old-schema copy, and the A7 smoke died
-  on `12F`'s `densmax` guard.
+- `.sh` files must be LF (a CRLF script dies with `/bin/bash^M: bad interpreter`). Check with
+  `tr -dc '\r' < f | wc -c` (0 = LF), not `grep -c $'\r'`.
+- Globus refuses sources outside the local endpoint's root, so stage from inside the repo tree.
+- Before staging a 12F change, run `Rscript Rscripts/misc/verify_12f_can60_local.R` (~4 min) on
+  Fir's real CAWA can60 inputs (`cluster_logs/localtest/`, `cluster_logs/smoke7/`, gitignored).
+  Tables and arrays must be `identical()` to smoke 7 unless predictions or masks changed on
+  purpose. Arrays may differ from Fir by ~3e-16 relative (Fir vs Windows floating point).
+  The C2f variant is `cluster_logs/c2f_test/verify_c2f.R <all|none|real>`.
 
-Before staging a 12F change, run the local regression on Fir's real CAWA can60 inputs:
-`Rscript Rscripts/misc/verify_12f_can60_local.R` (~4 min). It checks tables and arrays against
-Fir's smoke 7 (they must be `identical()` unless 12F's predictions or masks changed on purpose)
-and checks the direct part against an independent recomputation. Inputs are
-`cluster_logs/localtest/` and `cluster_logs/smoke7/` (gitignored, local only).
-
-Two mechanical gotchas found the same way:
-
-- `.sh` files MUST be transferred as LF. A CRLF script dies on Linux with
-  `/bin/bash^M: bad interpreter`. Verify with `tr -dc '\r' < f | wc -c` (0 = LF), **not**
-  `grep -c $'\r'`, which silently matches the letter `r` in some shells.
-- Globus refuses sources outside the local endpoint's configured root, so a temp-dir staging
-  copy fails with `Path not allowed`. Stage from inside the repo tree.
-
-**Current state (2026-09-28)**: `/Rscripts` on Fir matches the working tree for both closures
-(07/11 unchanged since `8487982`; the 12D closure checksum-synced 2026-09-28, only 12F moved):
+**Current state (2026-09-28):** `/Rscripts` on Fir matches `3fcef6d` for both closures:
 - 07/11: `07` `.R`+`.sh`, `07_submit_backfill_years.sh`, `08A`, `08B_*`, `09_*`, `11` `.R`+`.sh`;
 - 12D/12H: `12D` `.R`+`.sh`, `12E`, `12F`, `12G` `.R`+`.cpp`, `12H` `.R`+`.sh`.
-`data/raw_data/hirshpearson/` on Fir holds the 2026-09-28 CanHF masks (area mean) and the 16
-sector layers (`{sector}.tif`, `{sector}_direct.tif`). `density_tables/` on Fir still holds
-C1's 2026-09-24 output; wipe it before the C1 rerun (Next action 3).
-`/Rscripts/12*` is now ten files (`12A` is local-only by design).
+
+`data/raw_data/hirshpearson/` on Fir holds the 2026-09-28 CanHF masks and the 16 sector layers.
+`density_tables/` on Fir still holds C1's 2026-09-24 output; wipe it (Next action 3).
 
 ---
 
 ## C. Converge
 
-C1 passed and C2's first run gave Shapley means on 2026-09-24 (records under **Completed**).
-C2's review raised four items, worked on 2026-09-25 (C2a–C2d). The ecological check exposed two
-design questions that are yours (C2e, C2f).
-
-- [ ] **C2a. `shapley_sd`: fixed in code (`e747504`); needs the C1 rerun (Next actions 1–4).**
-      The old 14B propagated the tables' SDs as if independent, which fails twice. First, every
-      subbasin of a BCR is predicted by the same 32 bird models, so v(S) SDs came out 0.37–0.89×
-      the joint spread. Second, v(S ∪ j) and v(S) come from the same samples, so small sectors
-      inherited the big coalitions' noise (CAWA dams ±4,911 on a mean of 2,978).
-      The fix uses the fact that Shapley values are linear in v. `shapley_weight_matrix()` in 12E
-      matches `compute_shapley()` to 3e-16 on 200 random v. 12F applies it to every (bootstrap,
-      scenario) sample, giving `[n_sub × 8 × 3200]` per subbasin. 12H stacks those into
-      `density_tables/{species}_{year}_shapley_samples.rds` (~170 MB per species). 14B sums them
-      within BCRs, then across BCRs, sample by sample, and reports mean, SD and 5th/95th
-      percentiles at all three levels. It stops unless the sample means equal the Shapley values
-      of the tables' means.
-      **Local checks on CAWA can60's real inputs:**
-      - 2 boots: all 255 tables and 9 arrays `identical()` to Fir's smoke 7.
-      - 32 boots: all 255 tables `identical()` to Fir's C1 output; arrays within 3e-16 relative
-        (the known Fir-vs-Windows ulp).
-      - Sample means equal the table Shapley values to 7e-13, and efficiency holds exactly per
-        sample.
-      - 14B's v(N) SD equals the arrays' joint SD (704). The old propagation gave 1,037 for this
-        one BCR: treating obs and bf as independent overstates within a subbasin.
-      - If subbasins were treated as independent, roads' SD would be 323 against the joint 617.
-      - 12H stacks a two-BCR merge in table row order.
-- [x] **C2b. BART draws per bootstrap: kept as is** (your decision, 2026-09-25): 100 scenarios per
-      bootstrap, each picking one of the 100 stored draws with replacement, seeded per species ×
-      BCR × bootstrap × scenario. The analysis stays on record under **Completed** (D). The
-      per-BCR seeding means a subbasin straddling two BCRs gets independent draws on each side;
-      that slightly understates the BART part of its spread and leaves means unchanged.
-- [x] **C2c. Extrapolation flags: 10C rewritten (`686c16a`) and run, 2026-09-25.**
-      The old KS + Mahalanobis rule flagged 667 of 667, for three reasons. KS measures shift, not
-      extrapolation. Mahalanobis over ~40 collinear climate normals inverts a near-singular
-      covariance. And its covariate set was not the BART models' own. 10C now computes each
-      subbasin's area of applicability (Meyer & Pebesma 2021): standardised nearest-training-pixel
-      distance, with a threshold taken from the training pixels across 10 spatial blocks. It flags
-      a subbasin when more than half of its backfilled pixels fall outside. Runs locally (FNN);
-      ~55 min alone.
-      A first run was reaped at ~150/674 (three R jobs at once); the rerun, alone, took ~55 min.
-      **Result: the flags now discriminate.** Across 674 subbasins the share of backfilled pixels
-      outside the AOA has quantiles 0 / 0.2% / 1.7% / 6.2% / 14.6% / 100% at the 0 / 25 / 50 / 75 /
-      90 / 100th percentiles. 110 subbasins exceed 10%, 27 exceed 25%, and **3 are flagged**
-      (> 50%). Those 3 are 481 (only 2 backfilled pixels, so no impact), 72 (can12/13) and 98
-      (can12/13/14, OVEN +424k), and they carry 14% (CAWA) / 12% (OVEN) of the absolute impact.
-      Subbasin 107 (OVEN +733k) sits just under the cut at 0.47. can13 has the most (22% of its
-      backfill outside on average, 12% of its subbasins flagged); boreal BCRs 2–5%. The can11
-      drivers are INSIDE the AOA (57: 3.7%, 62: 0.4%), so can11's overshoot is not abiotic
-      extrapolation (see C2d/C2e). The old KS + Mahalanobis file is kept as
-      `cluster_logs/extrapolation_flags_KS_mahal_2026-09-24.csv`. The 0.5 cut is a judgement call:
-      `frac_outside_aoa` is carried into 14B's subbasin table so any other cut can be applied
-      there.
-- [ ] **C2d. Ecological check of the extreme BCR impacts: done; the causes lead to C2e/C2f.**
-      Harnesses: `Rscripts/misc/diag_extreme_bcr_*.R`; inputs pulled to `cluster_logs/sanity/`
-      (weights, can11/12/13 backfill mosaics, bird models, stacks). Densities are weighted
-      birds/km² from `observed_mean.tif` and the C1 tables.
-      - **can11 (CAWA +227%, OVEN +275%).** The footprint is 95% of the BCR and 93% of it is
-        crop/pasture; low-HF land is 4.3%. The backfill turns cropland into grassland/shrub
-        (MODIS grassland 19% → 85%), which is right for prairie. But it is more treed than its
-        own training land (SCANFI deciduous 13% vs 8%, height 1.6 vs 1.1 m), and backfilled
-        density is 1.67× the low-HF density for both species. The percentages are large because
-        the baseline is tiny (CAWA 0.05 birds/km² on the footprint). The driving subbasins learn
-        from ~3k training pixels to backfill 68k–112k (57, 61, 62).
-      - **can13 (CAWA +301%, OVEN +89%).** The footprint is 97%; low-HF land is 0.4% of the BCR.
-        Cropland becomes mixed forest / woody savanna (MODIS mixed 4% → 40%), which is consistent
-        with the pre-settlement forest. Backfilled density is ~0.5× that of the forest remnants.
-        The direction is plausible, but the training set is very thin.
-      - **OVEN negatives (can12 −8.5%, can80 −1.7%, can81 −6.3%) come from roads, through the
-        bird model's footprint response rather than the backfilled vegetation.**
-        Roads-only pixels are 53–70% of the footprint there, and 46–61% of the footprint has no
-        sector above pressure 4 (see C2f). The footprint pixels already hold more Ovenbirds than
-        low-HF land (can80/81: 3–4×). In can12 the backfilled vegetation is as good for Ovenbird
-        as what is there (deciduous 51% vs 51%, biomass 77 vs 64). Decomposition of OVEN can12's
-        −828k (8 of 32 bootstraps):
-        - **−1,041k is direct:** the bird model's response to 12F setting CanHF_1km, CanHF_5x5
-          and canroad_5x5 to 0 with the observed vegetation kept.
-        - **+213k is vegetation.**
-        The negative sign is the bird model's footprint response (2.8% of its relative
-        influence), not the backfill. That response can be real: Mahon et al. (2019, Ecol.
-        Appl. 29:e01895) found deciduous-associated species, Ovenbird included, increase with
-        wide linear features (roads, pipelines). Its support is thin, though (C2e).
-      - The same decomposition for CAWA/OVEN can11 and can13 was reaped with 10C; rerun it on its
-        own (~25 min) if wanted.
-- [x] **C2e. Footprint covariates in the counterfactual: DECIDED 2026-09-25 — 0 in both places.**
-      V5's "Disturbance" class (CanHF_1km/_5x5, canroad_1km/_5x5, CCNL_1km night lights) is set
-      to 0 wherever a pixel is backfilled: a backfilled forest cannot sit on top of a road.
-      Details and evidence are in CLAUDE.md Open Limitation #9.
-      (1) **Bird model (12F):** unchanged; it already used 0. Added: a direct/vegetation split.
-      12F predicts each bootstrap once more with the observed vegetation and the class at 0
-      (`d0`), so every Shapley value splits exactly into direct (`d0 − obs`) and vegetation
-      (`bf − d0`) parts. 14B reports both at every level (`shapley_direct_*`,
-      `shapley_vegetation_*`). Survey support for the direct part is thin: in the can11/12/13
-      models at least 90% of survey locations have CanHF_1km ≥ 6–7 and canroad_5x5 ≥ 0.3–0.5.
-      (2) **BART (08A):** now backfills with the class at 0; training is unchanged. Until
-      2026-09-25 it used each pixel's observed values, which lie beyond the training range
-      (subbasin 57: CanHF_1km 0–10 in training, median 12 at backfilled pixels), i.e. vegetation
-      predicted as if the road were still there. A local BART test in subbasins 57 and 98 (no
-      preceding biotics) showed the size of the choice: against dropping the class, observed
-      values moved deciduous %, height and biomass by −15% to +32%, and 0 moved them by −6% to
-      +73%. A local 07 run of subbasin 1 (conifer; 1,784 backfilled pixels) with the change,
-      against Fir's pre-change backfill (same seeds): deciduous % −4.3%, height −2.1%, closure
-      −4.6%, conifer % −0.5%, and the MODIS modal class changed on 11% of pixels (SCANFI 0.1%,
-      VLCE 0.5%). Kept in `cluster_logs/sub1_zeroed/`; its log shows `footprint covariates set
-      to 0 at backfilled pixels: CCNL_1km, CanHF_5x5, canroad_1km, canroad_5x5, CanHF_1km`.
-      **Every existing backfill is stale: 07 + 11 must rerun before C1.**
-      **Years:** 07 and 11 now take `YEARS` from the environment, and
-      `07_submit_backfill_years.sh` takes the years as arguments. Tested locally:
-      - the parse errors, the missing covariate stack and the missing mask year each stop with
-        their message;
-      - task 1 of `YEARS=2020,2015` resolves to (2020, subbasin 1);
-      - a dry run of the helper with a fake `sbatch` sizes 07 at 674 tasks per year and 11 at 19;
-      - `--export=ALL,YEARS=a,b` would have been split at the comma, so YEARS travels in the
-        environment.
-      11's freshness check and atomic rename parse but were not run locally.
-- [x] **C2f. DECIDED and built 2026-09-28: two masks per sector (CLAUDE.md Open Limitation #10).** Until then 12F put a
-      pixel in sector j's footprint when j's Hirsh-Pearson pressure is > 0 (after 14A's
-      reprojection) and CanHF ≥ 1. The pressure layers are continuous and include
-      indirect-influence zones:
-      - roads.tif is > 0 on 19% of Canada's cells (median 4.55, a tenth under 0.26), and
-        roads-only footprint pixels have a median of 2.7–3.4;
-      - in boreal BCRs 46–61% of the footprint has no sector above pressure 4.
-      Hirsh-Pearson (2022) at 300 m: built 10, crop 7 and pasture 4 have no buffers; roads, rail,
-      mines and waterways are scored by type and distance band (Woolmer et al. 2008 access
-      weights); oil and gas decays from 10 at the site to 0 at 5 km. 14A then resampled the layers
-      bilinearly to 1 km IN PLACE, so the local and Fir copies no longer separate direct from
-      indirect footprint.
-      **The user's question (2026-09-25):** is a strict threshold harmless, since intact
-      road-influence pixels would be backfilled like-for-like and show no effect? **No:**
-      - The backfill is BART's expectation for the pixel's abiotic setting, learned on low-HF
-        land, not the pixel's own vegetation. On intact pixels backfill − observed is the model
-        residual, which averages to zero only if roaded pixels resemble the training pixels.
-        They do not: roads follow uplands and productive forest, and can80/81 footprint pixels
-        already hold 3–4× the OVEN density of low-HF land.
-      - Evidence: CAWA can60 (83% of its footprint is roads-only), roads = −3,037 birds, of
-        which −3,175 is vegetation (2-boot test, pre-C2e backfill). OVEN can12's backfill moves
-        road pixels from 25% to 18% deciduous and from 45% to 67% mixed.
-      - The direct term is non-zero too: 12F zeroes the footprint covariates wherever it
-        backfills (−20% of OVEN on can12's road pixels).
-      **Trade-off:** a strict threshold removes that spurious vegetation effect on intact pixels.
-      But influence-zone pixels would then keep their observed CanHF/canroad in a "no roads"
-      counterfactual, which breaks the one-or-the-other principle of C2e at landscape scale. It
-      would also drop the direct (Mahon-type) response near roads and wells, the only way the
-      method sees effects beyond the footprint (CLAUDE.md Open Limitation #3).
-      **Claude's proposal: two masks per sector.**
-      - Vegetation is backfilled (`bf`) only where the footprint is DIRECT (strict threshold).
-      - Footprint covariates are zeroed on observed vegetation (`d0`) over the whole influence
-        zone (pressure > 0).
-      12F already computes `d0` for the direct/vegetation split, and both fields are
-      coalition-free, so this is a mask change in 12F: no extra predictions, and no 07 rerun.
-      Each coalition then sums `bf` on its direct pixels and `d0` on its influence-only pixels.
-      The split then reads cleanly: vegetation on converted pixels, direct over the influence
-      zone.
-      **Needed from the user:**
-      1. The original 300 m Hirsh-Pearson layers (location; G: or re-download).
-      2. The rule for a 1 km cell to count as direct: any 300 m cell at the sector's direct
-         score, or at least a given share (e.g. 50%) of its area.
-      3. HP's Tables 1–4 (the direct scores for roads/rail/mines/waterways), if thresholds are
-         set by score.
-      **Must be implemented and tested before the C1 rerun.**
-      **2026-09-28 findings** (user: influence zones must count wherever they measurably affect
-      birds; the CanHF ≥ 1 condition was meant to separate sector scores from the cumulative
-      score):
-      - HP's cumulative score is the plain SUM of the 12 sector layers (Methods, "Overview"), and
-        our CanHF is that product (`03` reads `cum_threat2020.02.18.tif`). Any sector score ≥ 1
-        therefore implies CanHF ≥ 1, and every road/rail/mine/water band scores ≥ 1. Measured on
-        the 1 km layers the way 12F builds them, CanHF ≥ 1 removes from `score > 0`: roads 10.9%,
-        rail 4.5%, mines 9.0%, oil_gas 11.1%, dams 23.7%, built 1.3%, crop 0.9%, pasture 1.3%.
-        It does not separate direct from indirect footprint.
-      - The local non-CanHF rasters are NOT the downloads: all are 14A's output (EPSG:5072 on the
-        hydrobasins template, 1000.012 × 1000.115 m cells, written 2026-03-03 13:32–13:43).
-        Originals: Borealis doi:10.5683/SP2/EVKAVL V3. The 8 sectors total ~3.05 GB (roads.tif
-        and rail.tif are 1.5 GB each), plus `cum_threat2020.02.18.tif` (1.5 GB).
-      - **14A's bilinear downsampling spreads every 300 m cell over 2×2 1 km cells** (synthetic
-        test at 10 positions: always 4 cells, sum preserved, max 0.28–0.80 of the 0.9 an area
-        average gives; `method = "average"` gives 1 cell). So `sector > 0` also marks up to a
-        1 km ring of cells with none of the feature, e.g. built's median in-footprint score is
-        0.30 although built is only ever scored 10. `03` projected cum_threat the same way, so
-        the CanHF masks may carry the same ring. This affects the CURRENT design, not only
-        C2f; size it against the raw layers.
-      - Road scores do not identify the distance band: 6 is a secondary road's 0–300 m band, a
-        major highway's 300–600 m band or the Trans-Canada's 600–900 m band. A direct road/rail
-        mask needs the vectors (StatCan RNF 2016, NRCan rail) or a local-maximum rule. Built,
-        crop and pasture have no buffers (any 300 m cell > 0 is direct); mines and oil_gas are
-        points.
-      - The user rejected computing both designs (2026-09-28) and chose the two-mask fix.
-      **Built 2026-09-28.** 03 now takes the AREA MEAN of cum_threat per 1 km cell; 14A builds
-      `{sector}.tif` (max 300 m score) and `{sector}_direct.tif` (any direct 300 m cell) from the
-      Borealis originals (`raw_300m/`). Raw values match HP Tables 1-5 exactly (roads 2/4/6/8/10,
-      rail 1/4/6, dams 2/4/6/10, mines 1/2/4/6/8, oil_gas integers 1-10, built 10, crop 7, pasture
-      4). Direct: built/crop/pasture > 0, roads/rail/dams >= 6, mines >= 6, oil_gas = 10.
-      - Masks: high-HF 1.80 M -> 1.87 M px (97% of old kept); every subbasin keeps >= 911 low-HF
-        pixels; only 26 new high-HF px fall in subbasins 05 dropped, so the 674 set stays.
-      - Footprint with HF >= 1, old -> new (direct share): built 653k -> 354k (100%), crop
-        677k -> 605k (100%), pasture 584k -> 425k (100%), rail 153k -> 119k (82%), roads
-        1,497k -> 1,496k (85%), dams 65k -> 85k (82%), mines 44k -> 44k (5%), oil_gas 28k -> 24k
-        (8%); any sector 1,569k -> 1,598k, 87% direct.
-      - 12F harness (CAWA can60, 2 boots, `cluster_logs/c2f_test/verify_c2f.R <mode>`): with
-        every footprint pixel direct, 255/255 tables and 9/9 arrays `identical()` to smoke 7;
-        with none direct, the vegetation part is exactly 0 in every sample; with the real layers
-        v(N) -3,592 -> -1,595 (roads -3,037 -> -1,582; vegetation -3,885 -> -1,868; direct
-        293 -> 273). Pre-C2e backfill, so indicative only.
-- [ ] **C3.** Sensitivity pass with the `q99.9` stage disabled; report the spread. The frozen cap
-      has a known-direction bias — counterfactual densities are higher, so they hit the frozen
-      ceiling more often than observed, systematically **under-estimating impact in the
-      highest-density pixels**. With the cap removing 4–12% of abundance that is not negligible.
-      Headline = conformed; sensitivity = uncapped.
+- [ ] **C2a. Shapley SDs: fixed in code (`e747504`); needs the C1 rerun.** 14B used to
+      propagate the tables' SDs as if subbasins and nested coalitions were independent. It now
+      sums 12F's per-sample subbasin Shapley values (`[n_sub × 8 × 3200]`) within and across
+      BCRs, sample by sample. Checked locally on CAWA can60: sample means equal the table
+      Shapley values to 7e-13, and 14B's v(N) SD equals the arrays' joint SD.
+- [x] **C2b. BART draws per bootstrap: kept as is** (user, 2026-09-25): 100 scenarios per
+      bootstrap, each one of the 100 stored draws with replacement. Straddling subbasins get
+      independent draws per BCR, which slightly understates their BART spread.
+- [x] **C2c. Extrapolation flags: 10C rewritten as an area of applicability** (`686c16a`;
+      Meyer & Pebesma 2021). The old KS + Mahalanobis rule flagged 667 of 667. The 0.5 cut is a
+      judgement call; `frac_outside_aoa` is carried into 14B's subbasin table for any other cut.
+- [ ] **C2d. Ecological check of the extreme BCR impacts (for the write-up).** Harnesses:
+      `Rscripts/misc/diag_extreme_bcr_*.R`, inputs in `cluster_logs/sanity/`. All numbers are
+      from the old masks and the pre-C2e backfill.
+      - can11 (CAWA +227%, OVEN +275%): the footprint is 95% of the BCR, 93% of it crop/pasture,
+        and low-HF land is 4.3%. The backfill turns cropland to grassland/shrub, which is right
+        for prairie, but is more treed than its own training land. Percentages are large because
+        the baseline is tiny. Driving subbasins (57, 61, 62) learn from ~3k pixels to backfill
+        68k–112k; they are inside the AOA.
+      - can13 (CAWA +301%, OVEN +89%): the footprint is 97%, low-HF land 0.4%. Cropland becomes
+        mixed forest, consistent with the pre-settlement forest, but training is very thin.
+      - OVEN negatives (can12 −8.5%, can80 −1.7%, can81 −6.3%) come from roads through the bird
+        model's footprint response: can12's −828k was −1,041k direct and +213k vegetation. That
+        response can be real (Mahon et al. 2019, Ecol. Appl. 29:e01895) but has thin survey
+        support (CLAUDE.md Open Limitation #9).
+      - Recheck these BCRs on the rerun's direct/vegetation split before reporting.
+- [x] **C2e. Footprint covariates are 0 wherever the counterfactual removes footprint**
+      (decided 2026-09-25, `8487982`, `bcfe665`; CLAUDE.md Open Limitation #9). 12F splits every
+      Shapley value into direct (`d0 − obs`) and vegetation (`bf − d0`) parts; 08A backfills with
+      the class at 0.
+- [x] **C2f. Two masks per sector** (decided and built 2026-09-28, `3fcef6d`; CLAUDE.md Open
+      Limitation #10). Footprint = `{sector}.tif > 0` and CanHF ≥ 1 (covariates zeroed on
+      observed vegetation); direct = `{sector}_direct.tif == 1` (vegetation backfilled).
+      - Masks: high-HF 1.80 M → 1.87 M px (97% of old kept); every subbasin keeps ≥ 911 low-HF
+        px; the 674-subbasin set stays.
+      - Footprint with HF ≥ 1, old → new (direct share): built 653k → 354k (100%), crop 677k →
+        605k (100%), pasture 584k → 425k (100%), rail 153k → 119k (82%), roads 1,497k → 1,496k
+        (85%), dams 65k → 85k (82%), mines 44k → 44k (5%), oil_gas 28k → 24k (8%); any sector
+        1,569k → 1,598k (87%).
+      - 12F harness (CAWA can60, 2 boots, pre-C2e backfill, so indicative): all-direct is
+        `identical()` to smoke 7; none-direct gives a vegetation part of exactly 0; the real
+        layers move v(N) −3,592 → −1,595 (roads −3,037 → −1,582).
+- [ ] **C3.** Sensitivity pass with the `q99.9` cap disabled; report the spread. The frozen cap
+      under-estimates impact in the highest-density pixels (counterfactual densities hit it more
+      often than observed), and it removes 4–12% of abundance. Headline = conformed;
+      sensitivity = uncapped.
 
 ## Loose ends
 
-- [ ] **Move `12A` to the cluster** (prerequisite for the planned 100+ species). Evidence
-      gathered 2026-09-23 that Elly's `def-ecknight/NationalModels/output/` is a sound source:
-      `06_bootstraps` and the 2020 `07_predictions` pair 1:1 (2,868 each, 1,686 Canadian); a
-      name+size comparison against G: over 32 of 151 species matched 4,504/4,505 common files
-      (the odd one is `AMPI_can3_1990`, not 2020); `q.out` covers exactly the same 151
-      species. `12A` reads only raw `07_predictions` + `06_bootstraps` filenames + our own
-      `SpeciesPredictionTruncationValues.Rdata`, so it does not depend on whether Elly ran
-      V5's truncation revision there. Remaining proof of byte-equivalence: run `12A` on the
-      cluster for CAWA into a scratch dir and diff against the G:-built
-      `observed_bootstraps.tif` / `truncation_params.rds`. Then set `cc <- TRUE`, add a `.sh`,
-      stage `12B_v5_truncate.R` (production path uses no G: resource: `apply_masks = FALSE`,
-      `project_to = NULL`), and drop the Globus step from CLAUDE.md.
-      **Done 2026-09-23**: `12A` no longer loads each `b.list` `.Rdata` (up to 654 MB, ~4.3 GB
-      per species) just to read `attr(b.list[[1]], "bcr")`; it parses the BCR from the
-      filename. `12F`, which loads `b.list` anyway, now `stop()`s if the attribute and the
-      filename disagree. Verified equal for all 25 CAWA/OVEN pairs.
-- [ ] C2f local files (gitignored), delete once C1 is through:
-      - `data/raw_data/hirshpearson/raw_300m/` (~4.6 GB): the Hirsh-Pearson originals and
-        cum_threat. 03 and 14A need them only to rebuild the masks and layers.
-      - `data/raw_data/hirshpearson/old_bilinear/`: the pre-2026-09-28 masks and sector layers.
-      - `cluster_logs/localtest/ia/data/raw_data/hirshpearson_c2f_{all,none,real}/` and
-        `cluster_logs/c2f_test/`: the 12F harness inputs and scripts.
-      - `cluster_logs/extrapolation_flags_2026-09-25_bilinear_masks.csv`: 10Cs flags on the old masks.
-- [ ] Local C2 diagnostics (gitignored), kept for C2f and the write-up; delete when done:
-      - `cluster_logs/sanity/` (~7 GB): 25 weights, can11/12/13 backfill mosaics, 5 bird
-        models, 3 stacks and the three `diag_extreme_bcr_*.rds` results. The harnesses that read
-        them are `Rscripts/misc/diag_extreme_bcr_*.R`.
-      - `cluster_logs/sub1_zeroed/`: the local 07 run of subbasin 1 with C2e's zeroing.
-      - `cluster_logs/extrapolation_flags_KS_mahal_2026-09-24.csv`: the old 10C flags.
-- [ ] Decide the fate of local `covariates_mosaiced_2020_PREORIG.tif` (1.5 G) — the only
+- [ ] **Move `12A` to the cluster** (needed for 100+ species). Elly's
+      `def-ecknight/NationalModels/output/` matches G: (06_bootstraps and 2020 07_predictions
+      pair 1:1; 4,504/4,505 files match by name and size over 32 species; `q.out` covers the same
+      151 species). Remaining: run `12A` on Fir for CAWA into a scratch dir and diff against the
+      G:-built `observed_bootstraps.tif` / `truncation_params.rds`. Then set `cc <- TRUE`, add a
+      `.sh`, stage `12B_v5_truncate.R` (`apply_masks = FALSE`, `project_to = NULL`) and drop the
+      Globus step from CLAUDE.md.
+- [ ] **Cheaper C1 for many species (optional):** 16 distinct BART draws per bootstrap instead of
+      100 picks with replacement would cut a C1 from ~64 to ~25 billed core-equivalent-hours and
+      moves the all-sector mean by 0.08% (CAWA) / 0.18% (OVEN) of the impact.
+- [ ] Local files to delete once C1 is through (all gitignored):
+      - C2f: `data/raw_data/hirshpearson/raw_300m/` (~4.6 GB; 03 and 14A need it only to
+        rebuild), `data/raw_data/hirshpearson/old_bilinear/`,
+        `cluster_logs/localtest/ia/data/raw_data/hirshpearson_c2f_{all,none,real}/`,
+        `cluster_logs/c2f_test/`, `cluster_logs/extrapolation_flags_2026-09-25_bilinear_masks.csv`.
+      - C2: `cluster_logs/sanity/` (~7 GB; read by `diag_extreme_bcr_*.R`),
+        `cluster_logs/sub1_zeroed/`, `cluster_logs/extrapolation_flags_KS_mahal_2026-09-24.csv`,
+        `cluster_logs/c1_old/`, `cluster_logs/c1_new/`.
+- [ ] Decide the fate of local `covariates_mosaiced_2020_PREORIG.tif` (1.5 G), the only
       surviving pre-CAfire-fix 2020 mosaic.
 - [ ] `15C_singletons_plot.R:150` reads `predictions_coalitions/`, deleted on both ends, so the
       map panel is broken. Regenerate via `save_arrays_ids` if wanted.
-- [ ] Out of 12D's scope but on the multi-year path: `07` (backfill) must re-run per year at the
-      same 128G-per-core ratio; pre-2020 years need historical footprint layers, not the 2020 mask.
+- [ ] Pre-2020 years need historical footprint layers, not the 2020 masks, and a per-year 07.
 
 ---
 
 ## Completed
 
-**C1 + first C2 run, 2026-09-24**
-- [x] **C1 PASSED (attempt 2: 12D `61367890`, 12H `61367891`, 2026-09-24, Fir at `bbe252b`).**
-      All 25 tasks `nice.`, 0 errors / OOM / dead workers at 64G, including the 9 that OOM-ed in
-      attempt 1. Identity gate: all 32 bootstraps reproduce V5 on every task (1,258–3,122
-      observed-design pixels each; the odd-class over-sample was non-empty in 17 of 25, 138 pixels
-      in can14). Weight > 0 superset 100% complete everywhere except can14 (130,502 / 130,504, both
-      species), whose 2 lost pixels lie in no subbasin zone, so they could never enter a table.
-      The bf-field NA audit never fired, so drawing `complete_mask` from draw 1 is safe as
-      guarded. 12H: 25 per-BCR files, one `code_md5`, 255 tables + 9 array files per species.
-      **Fir-vs-Fir against attempt 1** (`cluster_logs/c1_old` vs `c1_new`): CAWA can10/40/60/71
-      and OVEN can13/60 `identical()` in every table and array. OVEN can40 differs exactly where
-      predicted: only the 128 coalitions containing `roads` (cid 129–256), in 3 subbasins
-      (192, 193, 263), with `obs_total` untouched. Those are the 10 road pixels bootstrap 1's levels
-      had dropped. Effect on the all-sector BCR impact: −1277.78 → −1275.79 (0.16%).
-      Speedup: CAWA can10 sampling 4.7 min vs 5 min in attempt 1, so the memory fixes cost nothing.
-      Old tables were stale on four counts: pre-weighting, pre-gate-change (A),
-      pre-truncation-conformance (B), pre-NaN-fix (D).
-- [x] **C2 run (2026-09-24): Shapley MEANS are good; `shapley_sd` is not fit to report.**
-      Pulled C1's 510 tables + 18 arrays + `extrapolation_flags.csv` (local gpkg checksum-equal to
-      Fir's; merged tables `identical()` to the 7 per-BCR files held locally). 14B then ran in 7 min.
-      **Fixed in 14B:** 12F marks "no kept pixels" by obs_on mean `NaN` with sd `NA` (sd of NaNs is
-      NA), and 14B zeroed only `is.nan()`, so every subbasin with an empty coalition carried NA
-      Shapley SDs and every national SD was NA. 14B now zeroes on the NaN-mean marker, stops if bf
-      is non-zero there, and stops on any other NA. Means were `identical()` before and after.
-      National (CAWA can40 withheld): CAWA v(N) = +574,377 birds on 4.47 M observed (12.9%): roads
-      33.6%, pasture 22.4%, crop 21.0%, built 17.6%, rail 3.4%, mines 1.0%, dams 0.5%,
-      oil_gas 0.4%. OVEN v(N) = +3,527,058 on 37.65 M (9.4%): crop 32.9%, pasture 31.7%,
-      built 20.6%, roads 10.8%, rail 3.0%, mines 0.6%, oil_gas 0.6%, dams −0.2%. Additivity
-      residual −6.2 / +2.4 birds is rounding only (every subbasin is within 0.5).
-      **Open, for review before anything is reported:**
-      (1) **`shapley_sd` is wrong in both directions.** It assumes subbasins are independent, but
-      within a BCR they share the same 32 bird models: against the joint (bootstrap × scenario)
-      arrays, 14B-style SDs of v(S) are 0.37–0.89× the true ones. And it treats v(S ∪ j) and v(S)
-      as independent, though they come from the same samples and differ only on j's exclusive
-      pixels, so a small sector inherits the big coalitions' noise: CAWA dams ±4,911 vs roads
-      ±5,482, on means of 2,978 vs 192,957. Correct SDs need Shapley computed per sample, i.e. 12F
-      saving BCR-level `[n_boot × n_scen]` sums for all 255 coalitions, not just 9 (~20 MB per BCR
-      uncompressed), which means a C1 rerun.
-      (2) **Extrapolation flags are uninformative:** 10C flags 667 / 667 subbasins (`ks_max > 0.5`
-      OR Mahalanobis exceedance > 0.3; min `ks_max` is 0.52; median exceedance 0.93).
-      (3) **Very large and negative BCR impacts deserve ecological scrutiny:** CAWA can11 +227%
-      and can13 +301% of observed, OVEN can11 +275% and can13 +89% (the most converted BCRs).
-      Negative: OVEN can12 −828k (−8.5%), can81 −201k (−6.3%), can80 −68k.
+Full detail: `git show 3fcef6d:TODO.md`.
 
-**D (12D audit: NaN fix, speedups, per-BCR jobs), 2026-09-24**
-Audit prompted by scaling to hundreds of species × 6 years. Findings, all measured locally on
-CAWA can11's real models and stack (harnesses in the session scratchpad; see memory
-`project_gbm_nan_routing`):
-
-- **Correctness — fixed.** terra returns missing cells as `NaN`; gbm sends only `NA_real_` down
-  its missing branch. V5's observed predictions used the missing branch (NaN→NA reproduces them
-  at 100% of test pixels; 12F's NaN input at 1.3%). So since Fix A, bf-side pixels with a missing
-  observed-only covariate were predicted by a different rule than the obs side: CAWA can11, 3.2% of
-  weight > 0 footprint pixels, ≈ +10% of the observed footprint birds as a fake impact. 12F now
-  recodes, and an **identity gate** re-proves obs/bf parity against `observed_bootstraps.tif` on
-  every run. Details in CLAUDE.md "12F restructure invariants".
-- **Where time goes.** 98.7% of `predict.gbm` is gbm's compiled tree walk (26 ns per tree per
-  pixel; CAWA can11 = 9150 trees). R overhead is 1.3%, so no language change would help.
-- **12G** — a C++ tree walk, 3.6–4.4× faster and `identical()` to `predict.gbm` (every worker
-  re-checks this).
-- **No `M`.** Workers reduce their own bootstrap to per-coalition subbasin sums (bit-identical:
-  `rowsum` is column-independent), removing the ~17 GB can11 matrix and its 2–3 copies.
-- **Per-BCR tasks.** 12D is one array task per species × BCR at 8 cores / 48G / 3 h (was one
-  16-core / 384G job per species running BCRs in series); 12H merges in the old BCR order.
-  Alliance bills memory as core-equivalents (~3.9 GB each on Fir), so 384G on 16 cores was
-  charged like ~98 cores.
-- Measured and rejected: merging identical trees (8969 of 9150 unique → 1.02×); fewer
-  coalitions (the cost is the superset field, which even a with/without-industry trend needs).
-
-- [x] **Regression check (local, 2026-09-24)**, real CAWA can60 inputs Globus'd from Fir into
-      `cluster_logs/localtest/`, 2 boots. (1) HEAD's 12F run locally is `identical()` to the
-      cluster's smoke-6 tables and arrays (cid 2, 9, 256), so the local environment reproduces Fir.
-      (2) The rewrite with the NaN recode + identity gate patched out is `identical()` to HEAD on all
-      255 tables and 9 arrays: 12G and the per-worker reduction change nothing. (3) The per-BCR
-      path (12D save → 12H `combine_bcr_results`) is `identical()` to the single-job path.
-      (4) Identity gate: 2469/2469 match V5 for both bootstraps (1041 with a missing covariate).
-      NaN-fix effect on can60 is small (full-coalition impact −0.016%, largest singleton −2%); can11
-      is where it bites. Sampling 320 s → 75 s on one core (4.3×).
-- [x] **Staged** 2026-09-24 (checksum sync, LF verified): `12D` `.R`+`.sh`, `12E` (0 bytes — equal),
-      `12F`, `12G` `.R`+`.cpp`, `12H` `.R`+`.sh`. Rcpp is in Fir's R library.
-- [x] **Smoke 7 PASSED.** 12D task 1 PASSED (job `61340018`, CAWA can60, 2 boots, 8 cores): `sourceCpp`
-      compiled on Fir, every worker's fast-vs-`predict.gbm` check passed, identity gate 2469/2469
-      for both bootstraps, sampling 17 s (smoke 6: 55 s), `nice.`. Its per-BCR file, pulled back,
-      is `identical()` to the local rewrite on all 255 tables and 9 arrays, and its `code_md5`
-      equals HEAD. 12H (`61340019`) correctly refused: `TEST_BCR=can60` also matches OVEN's can60,
-      so the table has 2 tasks and only task 1 had run. Fixed: CLAUDE.md smoke is now
-      `--array=1-2`; 12H's resubmit hint now carries `TEST_BCR`/`TEST_N_BOOT` (without them
-      "task 2" would have been full-bootstrap CAWA can11), and 12H refuses a merge whose
-      `TEST_N_BOOT` differs from the files'. All three behaviours checked locally.
-      **Task 2 PASSED** (job `61342817_2`, OVEN can60): 22226 / 22226 weight > 0 complete, identity
-      gate 2508/2508 for both bootstraps (1082 predicted pixels carry a missing covariate), sampling
-      24 s, `nice.`. **12H PASSED** (job `61342818`): both files from one `code_md5`, `n_boot` 2,
-      `wrote 255 coalition tables` + `wrote 9 array files` for each species, `nice.`. The smoke
-      left real can60 files in `density_tables/`, `arrays/` and `by_bcr/` — C1's wipe covers all three.
-- [x] **C1 attempt 1 (job `61344103`, 2026-09-24) — cancelled after the first 11 tasks exposed two
-      defects.** Timings were excellent where tasks finished: CAWA can10 32 boots in 7.5 min
-      (sampling 5 min on 8 cores; smoke 5's old code took 17 min for 2 boots), can40 1.5 min,
-      can60 2 min, can71 1 min. Every weight > 0 superset was ≥ 99.998% complete.
-      (1) **OOM at 64G** — can12, can13, can80, the last 80 s into sampling on only 56k complete
-      rows, so not data size. Workers inherit the parent's GC trigger (inflated to ~10–15 GB by
-      the draw reads), and 255 `sc[kr, ]` copies per bootstrap fed each one garbage up to it.
-      Fixed: `coal_rowsum()` (C++, no copy; `identical()` to the old path on 200 random cases),
-      weight/NA audit folded into the per-draw loop, `gc(full = FALSE)` per draw, one fork per
-      bootstrap. A killed worker is now reported as such (it returned `NULL`, which the old check
-      turned into an opaque `vapply` error).
-      (2) **Identity gate, can14 bootstrap 32: 3/2986 off V5** (max rel diff 1%). Cause: 12F
-      factor-converted categoricals with bootstrap 1's `var.levels` for all 32, but levels differ
-      per bootstrap. Proven locally on all 837,600 can14 cells: bootstrap-1 levels → 155 cells
-      off V5; each model's own levels → 0. Fixed with `as_model_factors()`; the complete-case gate
-      now tests the raw backfilled class. The gate did its job — without it this would have gone
-      into the tables unseen (any bootstrap 2–31 was never checked).
-      Regression: new 12F on local can60 is `identical()` to Fir's smoke 7 (255 tables, 9 arrays),
-      and at 4 boots `identical()` to HEAD run locally. Against Fir's C1 can60, 4 of 400 cid-2
-      array cells differ by 1 ulp in bootstraps 3–4 — for HEAD and the new code alike, so it is
-      Fir-vs-Windows floating point, not the change; tables were identical.
-      **Full tally of attempt 1** (21 of 25 tasks ran before it was stopped): OOM in 9 — CAWA
-      can11/12/13/61/80/81, OVEN can10/11/12; gate failure in 4, all bootstrap 32 — CAWA can14,
-      OVEN can14/41/70. All four gate failures proven locally over every cell of the BCR: bootstrap-1
-      levels put 155 / 219 / 12,230 / 3,752 cells off V5 (max rel diff 1.9% / 271% / 99.8% / 27%);
-      each model's own levels put 0 off. OVEN can70's bootstrap 1 is the ODD one out (it lacks
-      MODISLCC_1km classes 3/16 that all 31 others know). Old per-BCR outputs saved in
-      `cluster_logs/c1_old/` for a Fir-vs-Fir check after the rerun: CAWA can10/40/60/71 and OVEN
-      can13/60 must come back `identical()`; OVEN can40 must NOT — its 10 lost weight > 0 pixels
-      were lost only to MODISLCC classes unknown to bootstrap 1, and the new gate keeps them
-      (likewise OVEN can41's 6, which never finished).
-- [x] **BART draws per bootstrap — decided 2026-09-25: kept as is (100 with replacement).** 100 scenarios drawn with replacement give
-      ~64 distinct draws per bootstrap. Smoke-6 arrays (CAWA can60, 2 boots): for the full
-      coalition the bootstrap spread is 5× the BART spread, so scenario count barely matters;
-      for a small single sector BART dominates, but 10–20 distinct draws per bootstrap still leave
-      Monte Carlo error < 1% of the impact. 16 distinct draws (no replacement) would cut gbm calls
-      ~4× but changes numbers within MC noise. Confirm on C1's 32-boot arrays before adopting.
-      **Confirmed on C1's national arrays (2026-09-24), all 9 array coalitions × 2 species.** BART
-      is 3–28% of the per-sample variance (CAWA) and 10–34% (OVEN); the MC error of the mean is set
-      by the 32 bootstraps (σ_B/√32 ≈ 17% of the reported SD, ~1–6% of the impact) plus a term
-      from the 100 stored draws that every design shares. Moving to S distinct draws raises that
-      MC error by at most 0.9% (S = 16) or 2.3% (S = 8), worst case OVEN mines. Empirically,
-      subsampling 16 of the 100 scenarios per bootstrap moves the all-sector mean by 0.08% (CAWA)
-      and 0.18% (OVEN) of the impact. Cost: sampling was 4.25 of C1's 5.17 task-hours, so S = 16
-      should cut a C1 to ~2 task-hours (~25 billed core-equivalent-hours at 48G, from ~64).
-      Side finding: `chosen_k` is seeded per species × BCR, so a subbasin straddling two BCRs is
-      given independent draws on each side, though draw j is ONE joint posterior sample across the
-      whole subbasin. Means are unaffected; the BART spread of straddling subbasins is slightly
-      understated. Seeding on species × bootstrap only would give every BCR the same draw indices.
-      Harness: session scratchpad `draws_analysis.R`.
-- [x] **Profiled C1 and resized 12D to 8 cores / 48G / 3 h** (was 64G / 12 h). `sacct` over all 25
-      tasks: 5.17 h of task time in total; longest CAWA can11 42 min, OVEN can11 38, OVEN can61 33;
-      16 of 25 under 15 min. Peak MaxRSS 28.8 GiB (OVEN can61); can11/can61 22–29 GiB, mid-sized
-      BCRs 16–23, small 4–17. 48G = 1.7× the peak (40G's 1.4× was judged too thin: MaxRSS is
-      sampled every 30 s, and other species' models may carry more backfilled covariates). 3 h =
-      4.3× the longest task, and ≤ 3 h jobs start sooner on Alliance clusters. Billed cost of a C1
-      (Alliance bills max(cores, mem ÷ ~3.9 GB) × elapsed): 85 core-equivalent-hours at 64G → ~64 at 48G.
-      **Savings vs the smoke-5 code** (one 16-core / 384G job per species, BCRs in series): per
-      bootstrap 13–14× less compute, measured on CAWA can10 (17 → 1.2 core-min) and can11
-      (130 → 9.8); prep per BCR 5–7 → 1–4 min. Projected old C1: ~19 h longest job, ~510 CPU
-      core-hours, ~3,100 billed core-equivalent-hours (~2,100 if unmeasured BCRs sped up only the
-      8× the separately measured parts explain); new: 42 min, 41 core-hours, ~64 billed.
-      The C++ walk (3.6–4.4×) and distinct-draw + weight-0 skipping (1.87×) account for ~8× of the
-      13–14×; the rest is not isolated.
-
-**A7 (Fix A validated on the 12D smokes), 2026-09-23 → 09-24**
-- [x] **A7.** Validate Fix A — the only fix never tested. Run it on the `12D` smoke, not the
-      full run: the `12F` runtime line `complete superset pixels: N / M (X%)` must be ≫ the old
-      1–3%. If it is not, stop — do not burn the 2 × 24 h C1 run.
-      `sbatch --array=1 --time=01:00:00 --mem=192G --export=ALL,TEST_BCR=can60,TEST_N_BOOT=2 12D_repredict_all_coalitions.sh`
-      The smoke writes real files: `CAWA_2020_coalition_*.rds` into `density_tables/` (can60
-      only, 2 bootstraps) and per-pixel arrays into `arrays/`. **Wipe both again before C1.**
-      **Smoke 1 (job 61147703, 2026-09-23): 13097 / 113017 (11.6%)** — up from 1–3% but not ≫,
-      so A7 is NOT closed. The denominator includes the stack grid's 100 km buffer, which `11`
-      masks to NA and weight zeroes anyway; `12F` now also logs coverage among weight > 0
-      pixels plus per-var / per-subbasin NA counts.
-      **Smoke 2 (job 61160614): 11869 / 20931 weight > 0 (56.7%).** Every one of the 9062 lost
-      pixels is NA in one var, `SCANFIBalsamFir_5x5`, across 24 subbasins (most lost in full).
-      Cause: `08A:101–116` writes `<cov>_mean` instead of `_draw_*` where a covariate is constant
-      in a subbasin; the BCR mosaic then has draws elsewhere but NA there, and the gate drops it.
-      Fixed in `12F`: draw-less pixels take the `_mean` constant for every draw (logged as
-      `filled N draw-less superset pixels`). Staged.
-      Smoke 3 (61162614) hung on node `fc30537` (`ALLOCATED+NOT_RESPONDING`) — node fault, not code.
-      **Smoke 4 (job 61167742): 20931 / 20931 weight > 0 (100%). A7 PASSES.** Fills: BalsamFir
-      11929, DouglasFir 24599, LodgepolePine 131/225 (1km/5x5). M audit silent; 255 tables written.
-      Sampling took 90 s vs 52 s (1.9× the complete pixels) — expect C1's gbm stage to scale alike.
-      **Follow-up before C1**: a covariate constant in *every* subbasin of a BCR had no draws, so
-      it kept its observed value on the bf side. `12F` now carries it as a one-draw covariate from
-      `<cov>_mean` (logged `no draws in BCR, using <cov>_mean`); it also enters the gate.
-      **Smoke 5 (job 61170330, all CAWA BCRs, 2 boots, 3 h): hit the time limit after 3 BCRs.**
-      can10 100294/100294, can11 427690/427690, can12 132604/132604 — all 100%. The partial fill
-      is large there (can11: PonderosaPine/WhiteRedPine 329k pixels each). No `no draws in BCR`
-      line yet, so the mean-only path is still unexercised. Sampling time per BCR (≈ one C1 wave):
-      can60 1.5 min, can10 17 min, can11 **2 h 10 min**, can12 > 13 min. C1 runs 32 boots on 16
-      cores = 2 waves, so can11 alone is ~4.5 h; the old 24 h envelope predates the fill.
-      C1 overwrites every coalition it writes, but `12D:131` skips an empty coalition without
-      writing, so a smoke table could survive into C2 unnoticed.
-      **Speedups before C1 (2026-09-23, bit-identical):** `12F` now predicts once per *distinct*
-      BART draw per bootstrap (~64 of 100 scenario picks are distinct under our seeds → ~36% fewer
-      gbm calls), skips weight-0 pixels (2–15% of complete pixels), and reads draws only for model
-      covariates (~17 of ~50; the draw-load phase was 5–7 min/BCR). Tested old vs new on CAWA can11's
-      real models: `M * weight` identical, 1.87× faster. Rejected: a static/dynamic gbm tree split
-      (67–97% of trees split on a backfilled covariate; 1.11×). Not done: summing pixels by
-      (subbasin, sector-signature) instead of `M[keep,]` per coalition — 11× faster reduction and
-      no `M`, but only equal to ~1e-15, not bit-identical.
-      **`arrays/` was never written** by the superset path — `save_arrays_ids` was accepted but
-      unused since `a428ee7`, so `15A` had no input. Restored: `12F` returns national
-      `[n_boot × n_scen]` `obs_total/obs_on_coal/bf_on_coal` matrices for the 9 target coalitions
-      and `12D` writes `arrays/{species}_{year}_coalition_{cid}_arrays.rds`. Unlike the tables
-      (and the retired code, which dropped the BCR), a BCR with no footprint for that coalition
-      contributes its real `obs_total` to the arrays, so 15A's national observed total stays whole.
-      **Smoke 6 PASSED** (job `61306338`, CAWA can60, 2 boots; 2026-09-24): 20931 / 20931 weight > 0
-      complete (as smoke 4), `predicting 20931 … skipping 4095 with weight 0`, M NA audit silent,
-      `wrote 255 coalition tables`, `wrote 9 array files`, `nice.`. Sampling 55 s vs smoke 4's 91 s
-      (1.65×); observed+draw load 66 s vs 98 s. Arrays are 2 × 100 and their means equal the tables'
-      subbasin sums exactly (cid 256, 2, 9); cid 9 has no can60 footprint and correctly carries the
-      real `obs_total` with zero on/bf. The mean-only-covariate path did not fire in can60 — first
-      real exercise is C1. (Smoke 61304676 before it was an `--mem=192M` typo, not a code fault.)
-
-**A6 (backfill + premosaic), 2026-09-16 → 09-22**
-- `07`: 674/674. Run 1 left six `OUT_OF_MEMORY` gaps (57, 62, 98 at 750G; 454, 474, 583 at
-  64G) caused by allocation churn in `08A`'s assembly, not subbasin size. Fixed in `73e8b68`;
-  the six reruns peaked at 7–51 GB. The 64G/750G array tiering is retired (`12f1ad6`): one
-  `--array=1-674%30` at 128G. Oracle for `07` is `_confusion.rds` + mtime — `tryCatch` makes a
-  failed subbasin exit `COMPLETED` and the logs append across runs.
-- `11`: 19/19 BCR mosaics, job `60806856`, written 2026-09-21 16:20 → 09-22 11:00, every
-  `.out` ending `done.`. A first submission (`60564008`, 09-19) was a no-op: the 19 stale
-  2026-05-24 mosaics had never actually been deleted, so `11:187`'s skip-if-exists guard
-  `quit(status = 0)`'d every task in seconds and `sacct` reported all 19 `COMPLETED 0:0`.
-  **Oracle for `11` is the `.out`, not `sacct`**: three code paths exit 0 without writing
-  (`:189` exists, `:202` no subbasins, `:216` no backfills), and `terra::mask(filename=)`
-  streams, so a killed task leaves a readable truncated `.tif` that the guard would later
-  accept. Only `:241–242`'s `masked and written to` / `done.` prove the write returned.
-
-**A (cluster prep), 2026-09-11 → 09-14**
-- Cleanup: pre-fix `covariates_mosaiced_{1990..2015}.tif`, `predictions_coalitions/`,
-  `bart_models/2020`, `bart_models_mosaics/2020`, `density_tables/*.rds` + `arrays/*.rds`.
-- `covariates_mosaiced_2020.tif` is the CAfire-fixed build on both ends (checksum sync moved
-  0 bytes). No `06` re-run needed.
-- **weight.tif rebuilt 25/25** — every one logged as stale against the `weight_v3_touches`
-  stamp, i.e. all were the old range-only rasters, and the BCR cut is the dominant masking term.
-- **`07` smoke (array 1–3) validated Fix B at scale**: subbasin 1 carries values
-  at 1784/1784 high-HF pixels, **100.00%** complete across all 17 `_draw_*` covariates — the
-  direct successor to the 0.8% figure that opened the investigation. `np` constant down the
-  whole hierarchy, no NaN cascade.
-
-**B (V5 packaging conformance), 2026-09-11.** `12B_v5_truncate.R` ports `10.Truncate.R`;
-`12A` rewritten and re-run (all 25 stacks carry both caps + a frozen per-BCR `q99` in
-`truncation_params.rds`); `12F` reads `$densmax` behind a schema guard and applies
-`pmin(pmin(pred_vec, densmax), q99)`; `SpeciesPredictionTruncationValues.Rdata` restaged
-locally (the Fir copy was NOT — it was still the 2026-05-04 old-schema file until the first A7
-smoke hit `12F`'s schema guard on 2026-09-23; Globus'd then, 6387 bytes);
-`14B` drops withheld models (`DROP_WITHHELD`; the workbook's "remove" tab flags exactly one of
-our 25 pairs — CAWA can40); all 25 observed stacks Globus'd to the cluster (27/27, byte-exact).
-Gates: **G1** reproduces V5's `10_truncated` (flat terrain bit-identical). **G2** reproduces
-BAM's published abundances to full published precision, point estimate and both 5–95% bounds.
-**G3/G4** reproduce V5's own vector masking in the *production* config to A/B = 1.000011 /
-1.000002 / 1.000001. Harnesses: `Rscripts/misc/verify_v5_truncate_port.R` and
-`verify_weight_vs_v5_masking.R` — re-run the latter after any weight change.
-
----
+- **C1 passed** 2026-09-24 (12D `61367890`, 12H `61367891`): 25/25 tasks, identity gate
+  passed on all 32 bootstraps everywhere. Attempt 1 (`61344103`) exposed the fork GC OOM and
+  the per-bootstrap categorical levels, both fixed. **First C2 run** the same day gave the
+  Shapley means quoted in Next action 5; its SDs were wrong (fixed in C2a).
+- **D. 12D rework**, 2026-09-24: NaN → `NA_real_` fix with the identity gate, the 12G C++ tree
+  walk (3.6–4.4×), per-bootstrap reduction, one task per species × BCR at 8 cores / 48G / 3 h.
+  Smokes 6–7 and 12H passed.
+- **A7. Fix A validated**, 2026-09-23 (smoke 4: 100% of weight > 0 footprint pixels complete,
+  after the `<cov>_mean` fill for draw-less subbasins).
+- **A6. Backfill + premosaic**, 2026-09-16 → 09-22: 07 674/674 after the 08A assembly OOM fix
+  (`73e8b68`); 11 19/19.
+- **A. Cluster prep**, 2026-09-11 → 09-14: weight.tif rebuilt 25/25; the 07 smoke validated
+  Fix B (100% complete draws on subbasin 1).
+- **B. V5 packaging conformance**, 2026-09-11: `12B_v5_truncate.R` ports `10.Truncate.R`; gates
+  G1–G4 pass. Re-run `Rscripts/misc/verify_weight_vs_v5_masking.R` after any weight change;
+  the truncation harness is `verify_v5_truncate_port.R`.
 
 ## V5 reference
 
 Renumbering in `f082866`: `10.Package.R` → `10.Truncate.R` + `11.Package.R`;
 `11.Validate` → `12.Validate`; `12.Summarize` → `13.Summarize`;
 `output/10_packaged/` → `output/11_packaged/`, new `output/10_truncated/`.
-**`06_bootstraps` and `07_predictions` were NOT renumbered** — they are the only V5 output
-folders our scripts read, so no path in our pipeline is broken.
+`06_bootstraps` and `07_predictions` were NOT renumbered, and they are the only V5 output
+folders our scripts read.
