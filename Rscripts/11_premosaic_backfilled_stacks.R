@@ -187,7 +187,7 @@ mosaic_backfilled_stacks <- function(sub_ids, year, ref) {
 # get task from SLURM ------------------------------------------------------
 # YEARS (comma-separated, default 2020) is set at submission, as for 07; tasks come in blocks
 # of one year: task t runs year YEARS[(t - 1) %/% n_bcr + 1] on BCR bcr_vec[(t - 1) %% n_bcr + 1].
-# 07_submit_backfill_years.sh sizes the array (n_bcr = 19 Canadian BCRs).
+# bash 07_train_and_backfill.sh YEAR ... sizes the array (n_bcr = 19 Canadian BCRs).
 
 years <- suppressWarnings(as.integer(strsplit(trimws(Sys.getenv("YEARS", "2020")), "[, ]+")[[1]]))
 if (length(years) == 0L || anyNA(years))

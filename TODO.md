@@ -17,7 +17,7 @@
 
 **State at hand-off.** All code and CLAUDE.md are committed and pushed (`e290d00`). Nothing is running
 locally. On Fir, 07 then 11 (2020, new masks) were submitted at 2026-09-28 19:36 UTC with
-`bash 07_submit_backfill_years.sh 2020`.
+`bash 07_submit_backfill_years.sh 2020` (since 2026-10-01 merged into `bash 07_train_and_backfill.sh 2020`).
 
 **What the new chat does not know:**
 - **The new 07 and 11 job ids.** The submit helper printed them as
@@ -95,9 +95,13 @@ local:    [10C rerun: done] ─────────────────�
      to hold, not what 11 needs, and 128G would likely have been killed on those four BCRs.
      `11.R` now caps terra at 30% of `SLURM_MEM_PER_NODE` (`memmax`; capped and uncapped runs
      were `identical()` locally for resample/cover/mask); `.sh` defaults 64G / 12 h, and
-     `07_submit_backfill_years.sh` submits can3 (task 6 of each year block) separately at 24 h.
+     `07_train_and_backfill.sh` submits can3 (task 6 of each year block) separately at 24 h.
      Resubmit: `--array=1-5,7-19 --time=12:00:00` and `--array=6 --time=24:00:00`. Check the
      first short tasks (can42 = 9, can9 = 19, can82 = 18) with `sacct` for MaxRSS well under 64G.
+     **Resubmitted: the 12 h array is job `62431589`** (tasks 1–3 started 10:50 PDT 10-01; every
+     `.out` logs `terra memmax = 19.2 GB` and processes in blocks). **Fir's `11.R` is the
+     `278bc85` version on purpose** (12,154 bytes): HEAD differs only by a comment on line 190.
+     Stage HEAD's `11.R` only after both 11 arrays have finished (see Staging discipline).
    - 11: every `.out` ends with `done.`. Here too `sacct` is not enough: three code paths exit 0
      without writing. If a task OOMs:
      `YEARS=2020 sbatch --array=<i> --mem=256G 11_premosaic_backfilled_stacks.sh`.
@@ -117,7 +121,7 @@ local:    [10C rerun: done] ─────────────────�
    roads 11%).
 6. **C3:** the uncapped `q99.9` sensitivity pass.
 
-**Multi-year:** 07 and 11 take years (`bash 07_submit_backfill_years.sh 2010 2015 2020`), but
+**Multi-year:** 07 and 11 take years (`bash 07_train_and_backfill.sh 2010 2015 2020`), but
 each year needs `covariates_mosaiced_{year}.tif` (06; only 2020 exists) and that year's
 footprint masks (`CanHF_1km_{lessthan1,morethan1}_{year}.tif`, or `HF_MASK_YEAR=2020` to borrow
 2020's). 12A, 12C, 12D and 12H still fix `year <- 2020`.
@@ -135,6 +139,10 @@ edited, and checksum-sync all of it (a 0-byte transfer proves equality for free)
 have been stale or missing on Fir four times: `08A` with Fix B, 7 of 9 files in 07's chain,
 `12E` (never staged), and the old-schema `SpeciesPredictionTruncationValues.Rdata`.
 
+- **Never restage an `.R` file while a job that runs it is active.** Rscript buffers its file
+  and reads again at the end; Globus rewrites the file in place, so a running job can read the
+  new file's tail as code (a 2026-10-01 comment edit to `11.R` would have left a stray
+  ` | done.")` after every running task's `done.`). Restored in time; see the 11 entry.
 - `.sh` files must be LF (a CRLF script dies with `/bin/bash^M: bad interpreter`). Check with
   `tr -dc '\r' < f | wc -c` (0 = LF), not `grep -c $'\r'`.
 - Globus refuses sources outside the local endpoint's root, so stage from inside the repo tree.
@@ -145,7 +153,7 @@ have been stale or missing on Fir four times: `08A` with Fix B, 7 of 9 files in 
   The C2f variant is `cluster_logs/c2f_test/verify_c2f.R <all|none|real>`.
 
 **Current state (2026-09-28):** `/Rscripts` on Fir matches `3fcef6d` for both closures:
-- 07/11: `07` `.R`+`.sh`, `07_submit_backfill_years.sh`, `08A`, `08B_*`, `09_*`, `11` `.R`+`.sh`;
+- 07/11: `07` `.R`+`.sh`, `08A`, `08B_*`, `09_*`, `11` `.R`+`.sh`;
 - 12D/12H: `12D` `.R`+`.sh`, `12E`, `12F`, `12G` `.R`+`.cpp`, `12H` `.R`+`.sh`.
 
 `data/raw_data/hirshpearson/` on Fir holds the 2026-09-28 CanHF masks and the 16 sector layers.
@@ -204,8 +212,9 @@ have been stale or missing on Fir four times: `08A` with Fix B, 7 of 9 files in 
 
 ## Loose ends
 
-- [x] **Right-size 07's memory: done 2026-10-01, staged on Fir (uncommitted).**
-      `07_submit_backfill_years.sh` submits two complementary arrays built from one list:
+- [x] **Right-size 07's memory: done 2026-10-01 (`278bc85`), staged on Fir.**
+      `07_train_and_backfill.sh` (run with `bash`; it absorbed the old submit helper on
+      2026-10-01) submits two complementary arrays built from one list:
       subbasins 57, 61, 62, 98, 107 (in every year block) at 72G, everything else at 24G; 11
       waits on both. Tested with a stub `sbatch` for 1, 2 and 3 years: the two lists cover
       every index exactly once. Headroom: 1.25× (24G) and 1.36× (72G) over the 2026-09-28 peaks.

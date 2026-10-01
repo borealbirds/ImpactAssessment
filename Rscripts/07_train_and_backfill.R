@@ -26,7 +26,7 @@ task_id <- if (cc) as.integer(args[1]) else 1L
 
 # years to backfill: YEARS, comma-separated, from the submitting shell's environment
 # (default 2020), e.g.
-#   bash 07_submit_backfill_years.sh 2015 2020
+#   bash 07_train_and_backfill.sh 2015 2020
 # which exports YEARS=2015,2020 and submits 07 with --array sized to the years (and 11 after
 # it). Not --export=ALL,YEARS=2015,2020: sbatch splits --export on commas. Tasks come in blocks of one year: task t runs year YEARS[(t - 1) %/% n_sub + 1]
 # on subbasin (t - 1) %% n_sub + 1, with n_sub = 674 subbasins.
