@@ -46,7 +46,7 @@ Scripts are numbered in execution order:
 | `04_reproject_and_crop_hydrobasins.R` | local | Crop Level 6 HydroBASINS to BAM study area |
 | `05_merge_low_density_subbasins.R` | local | Merge data-sparse subbasins so every unit has ≥Q25 low-HF pixels; subset to subbasins with any high-HF pixels → `hydrobasins_masked_merged_subset.gpkg` (674 subbasins) |
 | `06_build_covariate_stacks.R` | local | Mosaic BCR covariate stacks by year and add soil + CAfire layers → `covariates_mosaiced_{year}.tif` |
-| `07_train_and_backfill.R` + `.sh` | cluster | Entry point: for a given SLURM array index (one year × subbasin), train BART models and backfill high-HF pixels. Years come from the `YEARS` environment variable (comma-separated, default 2020); submit with `bash 07_submit_backfill_years.sh 2015 2020`, which sizes the array (674 tasks per year, in year blocks) and chains 11 after it. Each year needs its own `covariates_mosaiced_{year}.tif` and footprint masks (`CanHF_1km_{lessthan1,morethan1}_{year}.tif`; the undated files serve 2020), or `HF_MASK_YEAR=<y>` to borrow year y's masks, else the task stops. 128G / 8h / 1 core. The former 64G+750G tiering (and its second script, `07_train_and_backfill_larger.sh`) was an artifact of the `08A` assembly OOM fixed in `73e8b68`, not of subbasin size |
+| `07_train_and_backfill.R` + `.sh` | cluster | Entry point: for a given SLURM array index (one year × subbasin), train BART models and backfill high-HF pixels. Years come from the `YEARS` environment variable (comma-separated, default 2020); submit with `bash 07_submit_backfill_years.sh 2015 2020`, which sizes the array (674 tasks per year, in year blocks) and chains 11 after it. Each year needs its own `covariates_mosaiced_{year}.tif` and footprint masks (`CanHF_1km_{lessthan1,morethan1}_{year}.tif`; the undated files serve 2020), or `HF_MASK_YEAR=<y>` to borrow year y's masks, else the task stops. 8h / 1 core; the helper requests 72G for subbasins 57, 61, 62, 98, 107 and 24G for the rest, sized from the 2026-09-28 `sacct` peaks (see **Submitting Cluster Jobs**). The former 64G+750G tiering (and its second script, `07_train_and_backfill_larger.sh`) was an artifact of the `08A` assembly OOM fixed in `73e8b68`, not of subbasin size |
 | `08A_train_and_backfill_subbasin_s.R` | sourced | Core `train_and_backfill_subbasin_s()` function; loops over biotic covariates in hierarchy order. Backfills with the footprint ("Disturbance") covariates at 0 (Open Limitation #9) |
 | `08B_deploy_gbart.R` | sourced | `deploy_gbart()`: Gaussian BART for continuous biotic covariates (log1p-transformed, 90/10 train/holdout split) |
 | `08B_deploy_mbart.R` | sourced | `deploy_mbart()`: Multinomial BART for categorical land-cover covariates |
@@ -56,7 +56,7 @@ Scripts are numbered in execution order:
 | `10B_inspect_backfill_metrics.R` | local | Inspect and visualize model accuracy |
 | `10C_abiotic_extrapolation_diagnostics.R` | local | Area of applicability (Meyer & Pebesma 2021) of each subbasin's low-HF training pixels in the natural abiotic predictors 08A trains BART on (its footprint "Disturbance" class excluded; see Open Limitation #9); flags a subbasin when > 50% of its backfilled pixels fall outside → `extrapolation_flags.csv`. Needs `FNN` (installed locally, not on Fir) |
 | `10D_BART_posterior_diagnostics.R` + `.sh` | cluster | Test whether the 100 stored BART posterior draws (subsampled from gbart()'s 700) cover the posterior's shape and tails — `12F` resamples 1 of the 100 per counterfactual scenario |
-| `11_premosaic_backfilled_stacks.R` + `.sh` | cluster | Mosaic per-subbasin BART backfill rasters into BCR-wide stacks (run before 12). One array task per year × BCR (`YEARS` as for 07; 19 tasks per year). Rebuilds any mosaic older than one of its subbasin backfills (it used to skip on mere existence) and writes under a `_partial` name renamed on completion |
+| `11_premosaic_backfilled_stacks.R` + `.sh` | cluster | Mosaic per-subbasin BART backfill rasters into BCR-wide stacks (run before 12). One array task per year × BCR (`YEARS` as for 07; 19 tasks per year). Rebuilds any mosaic older than one of its subbasin backfills (it used to skip on mere existence) and writes under a `_partial` name renamed on completion. 64G / 12h / 1 core; the helper gives can3 (task 6 of each year block; `bcr_vec` is sorted) `--time=24:00:00`, so a by-hand rerun of can3 needs it too. It caps terra at 30% of the Slurm allocation (`memmax`), because terra sizes its blocks from the node's free RAM, not the job's, and held whole BCR stacks in memory when allowed (A6 at 512G: can3 316 GB, can61/80/81 138–153 GB; `cluster_logs/07_2020_c2f/11/sacct_11_60806856.txt`). Wall time at 512G: can3 17.4 h, all others ≤ 8.8 h |
 | `12A_observed.R` | local | Reads Elly's unclamped 32-bootstrap prediction tifs and bootstrap model `.Rdata` from `G:/Shared drives/BAM_NationalModels5/output/{07_predictions,06_bootstraps}/{species}/`, applies V5's two-stage truncation (via `12B_v5_truncate.R`), and writes `observed_bootstraps.tif` (32-layer clamped stack, UNmasked), `observed_mean.tif`, `observed_sd.tif` and per-species `truncation_params.rds` to `data/derived_data/predictions/`. Canadian BCRs (`can*`) only. Globus-transfer the results to the cluster before running 12D — they are a hard dependency. |
 | `12B_v5_truncate.R` | sourced | `v5_truncate()`: line-for-line port of V5 `analysis/10.Truncate.R` (as of V5 `f082866`). Applies both upper caps (`densmax`, then the 99.9th-percentile `q99`) and the range/water/extent masks. Sourced by `12A` only, so it is local-only by design and is deliberately NOT staged on the cluster; `q99` can be passed in frozen and the legacy EPSG:3978 step skipped |
 | `12C_build_prediction_weights.R` + `.sh` | cluster | Build per-species×BCR `weight.tif` (= range membership × not-water × inside-data-limit × **inside the BCR's own polygon**), replicating V5 `10.Truncate` range/water/extent/mosaic masking; all four terms use `touches = TRUE` (Open Limitation #7). Reads source masks from `data/raw_data/v5_gis/` (no G: access); grid template is the BCR stack. Run ONCE before 12D. 12F multiplies BOTH observed and backfilled density by this weight, preserving obs/bf symmetry (`w·bf − w·obs = w·(bf − obs)`). |
@@ -106,24 +106,32 @@ you edited — see `TODO.md` "Staging discipline".
 
 Backfilling (SLURM array, one job per subbasin index):
 ```bash
-# ONE script, ONE tier: 128G / 8h / 1 core. Years on the command line; the helper exports
-# YEARS, sizes 07's array (674 tasks per year, %30) and chains 11 (19 per year) after it:
+# ONE script, TWO memory tiers chosen by the helper: subbasins 57, 61, 62, 98, 107 (in every
+# year block) at 72G, all others at 24G; 8h / 1 core. Years on the command line; the helper
+# exports YEARS, builds both --array lists from ONE set (so they partition 1..674*years by
+# construction), and chains 11 after both: can3 (task 6 of each 19-task year block) at 24h,
+# the other 18 BCRs at the .sh default of 12h (A6 at 512G: can3 17.4 h, the rest <= 8.8 h):
 bash 07_submit_backfill_years.sh 2020
 bash 07_submit_backfill_years.sh 2010 2015 2020
-# By hand: YEARS=2015,2020 sbatch --array=1-1348%30 07_train_and_backfill.sh
-# (not --export=ALL,YEARS=2015,2020: sbatch splits --export on commas). 07 overwrites its
-# outputs and 11 rebuilds any mosaic older than its inputs, so a rerun needs no wipe.
+# By hand: YEARS=2015,2020 sbatch --array=<indices> --mem=24G 07_train_and_backfill.sh
+# (not --export=ALL,YEARS=2015,2020: sbatch splits --export on commas). The .sh's own
+# --mem=128G is only a safe default for hand-submitted indices. 07 overwrites its outputs and
+# 11 rebuilds any mosaic older than its inputs, so a rerun needs no wipe.
 
-# The old two-script split (64G + 750G, with complementary --array lists that had to partition
-# 1-674 exactly or race each other writing the same subbasin_{i}_backfill.tif) is GONE as of
-# 2026-09-19. It existed only because 08A's layer-by-layer assembly churned ~nlyr^2 * ncell * 8
-# bytes through the allocator; after 73e8b68 the worst subbasin in the set peaks at 50.8 GB, so
-# a single 128G tier covers everything with ~2.5x margin — and costs less in total than the two
-# tiers did. Single-threaded by construction (BART::gbart, not mc.gbart), so --cpus-per-task=1.
+# Sized from the 2026-09-28 run (job 61937625, `cluster_logs/07_2020_c2f/sacct_07_61937625.txt`):
+# peak MaxRSS median 3.8 GB, 99th percentile 15.6 GB, max 52.8 GB (S98). Only the five can11
+# prairie basins above exceed 20 GB (25-53 GB); the largest of the rest is 19.2 GB (S547).
+# Headroom: 1.25x (24G) and 1.36x (72G). Peak memory tracks subbasin size (ncell, backfill
+# rows, training pixels; residual SD 0.6 GB), so a new year's masks move it little. A flat
+# 128G billed every task as ~33 core-equivalents (10,037 core-eq-h for that run vs ~1,926 at
+# 24G/72G), and the scheduler, not the %30 cap, set that run's pace. Single-threaded by
+# construction (BART::gbart, not mc.gbart; CPU efficiency 0.98), so --cpus-per-task=1.
+# (The 64G + 750G split retired 2026-09-19 was a different thing: two scripts with hand-kept
+# --array lists, sized around 08A's assembly churn, fixed in 73e8b68.)
 #
-# If one index OOMs, give that index more room instead of re-tiering the file (keep the same
-# YEARS, since the index means year x subbasin):
-YEARS=<years> sbatch --array=<i> --mem=256G 07_train_and_backfill.sh
+# If one index OOMs, give that index more room (keep the same YEARS, since the index means
+# year x subbasin), and add its subbasin to BIG_SUBS in the helper:
+YEARS=<years> sbatch --array=<i> --mem=128G 07_train_and_backfill.sh
 ```
 
 Re-predicting birds:

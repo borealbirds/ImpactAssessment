@@ -18,6 +18,16 @@ suppressPackageStartupMessages({
   library(tidyverse)
 })
 
+# terra sizes its in-memory blocks from the NODE's MemAvailable (/proc/meminfo) and cannot see
+# the Slurm allocation, so on a 750 GB node it held whole BCR stacks in memory (A6, --mem=512G:
+# can3 peaked at 316 GB, can61/80/81 at 138-153 GB) and would be killed under a smaller request.
+# Cap it at 30% of the allocation; resample(near), cover and mask give the same cells in blocks.
+slurm_mem_mb <- suppressWarnings(as.numeric(Sys.getenv("SLURM_MEM_PER_NODE")))
+if (!is.na(slurm_mem_mb)) {
+  terra::terraOptions(memmax = 0.3 * slurm_mem_mb / 1024)
+  message(Sys.time(), " | terra memmax = ", round(0.3 * slurm_mem_mb / 1024, 1), " GB")
+}
+
 
 # set paths ------------------------------------------------------
 

@@ -70,6 +70,34 @@ local:    [10C rerun: done] ─────────────────�
      append across runs. So also check that every `subbasin_{i}_confusion.rds` postdates
      2026-09-28 19:00 UTC and that the last run in every `logs/Y2020_S{i}.log` has
      `footprint covariates set to 0`.
+   - **07 = job `61937625`, checked 2026-10-01** (`cluster_logs/07_2020_c2f/`): 672 `.out` end
+     `$ok TRUE` with no error line (tasks 1 and 2 have no `.out` on Fir, but their logs show
+     complete runs). In all 674 logs the last run sets the footprint covariates to 0 and ends
+     `done`, and 673 of 674 changed their pixel counts from the old-mask run (423 has one
+     backfill pixel both times). Log times (Fir local) run 09-28 12:11 → 09-29 18:44; the
+     "19:36 UTC" above is wrong, so run the `find` check with `-newermt '2026-09-28 12:00'`.
+     Runtime: median 15 min, max 4.9 h, 302 task-hours, driven by training pixels (r = 0.76).
+     The `%30` cap bound only 2% of the 30.6 h span; for 16% nothing ran, so the scheduler,
+     not the cap, set the pace. `STALE_CONFUSION=0` on Fir.
+     `sacct` (`cluster_logs/07_2020_c2f/sacct_07_61937625.txt`; `Rscripts/misc/sacct_summary.R`):
+     all 674 COMPLETED, CPU efficiency 0.98. Peak memory median 3.8 GB, 99th percentile
+     15.6 GB, max 52.8 GB. Only subbasins 57, 61, 62, 98 and 107 exceed 20 GB (25–53 GB; the
+     can11 prairie basins). Peak memory is predictable from subbasin size (ncell, backfill
+     rows, training pixels; residual SD 0.6 GB). At 128G every task bills 33 core-equivalents:
+     10,037 core-eq-h for this run. 24G for all but those five, and 72G for them, would have
+     billed 1,926 core-eq-h (see Loose ends).
+   - **11 = job `61937626` (128G, 24 h): pending 2+ days on `(Priority)`; to be cancelled and
+     resubmitted (2026-10-01).** A6's 11 (`60806856`, `--mem=512G`) peaked at 6.6–316 GB
+     (`cluster_logs/07_2020_c2f/11/sacct_11_60806856.txt`): can3 (task 6) 316 GB / 17.4 h;
+     can61, can80, can81 (12, 16, 17) 138–153 GB; can60 115 GB; all others ≤ 94 GB and ≤ 5.3 h
+     wall. terra sizes its blocks from the node's `MemAvailable` (`/proc/meminfo`; checked in
+     terra's `src/ram.cpp`) and cannot see the Slurm cap, so those peaks are what terra chose
+     to hold, not what 11 needs, and 128G would likely have been killed on those four BCRs.
+     `11.R` now caps terra at 30% of `SLURM_MEM_PER_NODE` (`memmax`; capped and uncapped runs
+     were `identical()` locally for resample/cover/mask); `.sh` defaults 64G / 12 h, and
+     `07_submit_backfill_years.sh` submits can3 (task 6 of each year block) separately at 24 h.
+     Resubmit: `--array=1-5,7-19 --time=12:00:00` and `--array=6 --time=24:00:00`. Check the
+     first short tasks (can42 = 9, can9 = 19, can82 = 18) with `sacct` for MaxRSS well under 64G.
    - 11: every `.out` ends with `done.`. Here too `sacct` is not enough: three code paths exit 0
      without writing. If a task OOMs:
      `YEARS=2020 sbatch --array=<i> --mem=256G 11_premosaic_backfilled_stacks.sh`.
@@ -175,6 +203,13 @@ have been stale or missing on Fir four times: `08A` with Fix B, 7 of 9 files in 
       sensitivity = uncapped.
 
 ## Loose ends
+
+- [x] **Right-size 07's memory: done 2026-10-01, staged on Fir (uncommitted).**
+      `07_submit_backfill_years.sh` submits two complementary arrays built from one list:
+      subbasins 57, 61, 62, 98, 107 (in every year block) at 72G, everything else at 24G; 11
+      waits on both. Tested with a stub `sbatch` for 1, 2 and 3 years: the two lists cover
+      every index exactly once. Headroom: 1.25× (24G) and 1.36× (72G) over the 2026-09-28 peaks.
+      If the `%30` cap starts binding on the next run, raise it.
 
 - [ ] **Move `12A` to the cluster** (needed for 100+ species). Elly's
       `def-ecknight/NationalModels/output/` matches G: (06_bootstraps and 2020 07_predictions
