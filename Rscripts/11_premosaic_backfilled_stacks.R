@@ -88,12 +88,12 @@ mosaic_backfilled_stacks <- function(sub_ids, year, ref) {
   #
   # here, we cut memory and IO by:
   # (1) cheap metadata sweep (unchanged from previous version)
-  # (2) pre-sample each subbasin's full stack to the BCR grid once,
-  #     writing to its own tempfile. ~80 resamples instead of ~200k
+  # (2) pre-sample each subbasin's full stack once, onto its own window of
+  #     the BCR grid, writing to its own tempfile. ~80 resamples instead of ~200k
   # (3) pre-open lightweight SpatRaster handles to the resampled tifs so
   #     the inner loop is a cheap name lookup + layer reference,
-  # (4) per variable, build a cover() chain across subbasin handles and
-  #     flush the accumulator to its own tempfile. The in-memory raster
+  # (4) per variable, merge the subbasin windows, extend to the BCR grid and
+  #     flush to its own tempfile. The in-memory raster
   #       is then dropped; only file paths persist across iterations.
   # (5) the returned SpatRaster is file-backed (2546 single-layer tifs);
   #     downstream mask + writeRaster can stream block-by-block.
@@ -114,7 +114,15 @@ mosaic_backfilled_stacks <- function(sub_ids, year, ref) {
   }, meta)
   if (length(meta) == 0) return(NULL)
 
-  # (2) pre-resample each subbasin's full stack to BCR grid (on disk)
+  # (2) pre-resample each subbasin's full stack onto its window of the BCR grid (on disk).
+  # Until 2026-10-02 each subbasin was resampled onto the WHOLE BCR grid, so steps 2 and 4 cost
+  # (subbasins x grid cells): 30-45 s per subbasin per million cells, 5 h for can81 (106 x 2.9M),
+  # ~11-15 h projected for can3 (71 x ~9M). At --mem=64G terra also sliced those whole-grid
+  # resamples, and can41 and can5 stalled for hours at 100% CPU on one subbasin (2026-10-01).
+  # A window aligned to the grid (snap = "out") gives the same cells, since "near" takes the
+  # source cell under each target cell's centre whatever the target's extent; the merged
+  # layers were identical() to the cover() of whole-grid layers once written, on aligned and
+  # 500 m-offset grids.
   rs_dir <- tempfile("premosaic_rs_")
   dir.create(rs_dir, recursive = TRUE, showWarnings = FALSE)
   for (mi in seq_along(meta)) {
@@ -130,7 +138,7 @@ mosaic_backfilled_stacks <- function(sub_ids, year, ref) {
     # PLANARCONFIG_CONTIG (BIP) made previous versions effectively unusable: 
     # ~23 min/var and >900h projected to flush all 2546 vars. 
     # BSQ collapses that to seconds per band-read.
-    terra::resample(r_c, ref1, method = "near",
+    terra::resample(r_c, terra::crop(ref1, e_int, snap = "out"), method = "near",
                     filename = pth, overwrite = TRUE,
                     wopt = list(gdal = c("INTERLEAVE=BAND",
                                          "COMPRESS=DEFLATE",
@@ -156,12 +164,16 @@ mosaic_backfilled_stacks <- function(sub_ids, year, ref) {
   layer_paths <- character(length(vars))
 
   for (k in seq_along(vars)) {
-    v   <- vars[k]
-    acc <- NULL
-    for (i in seq_along(sub_handles)) {
-      if (!(v %in% names_per[[i]])) next
-      r_layer <- sub_handles[[i]][[v]]
-      acc <- if (is.null(acc)) r_layer else terra::cover(acc, r_layer)
+    v      <- vars[k]
+    layers <- lapply(which(vapply(names_per, function(n) v %in% n, logical(1))),
+                     function(i) sub_handles[[i]][[v]])
+    acc    <- NULL
+    if (length(layers) > 0) {
+      # merge() keeps the first non-NA value in subbasin order, as the cover() chain did
+      acc <- if (length(layers) == 1L) layers[[1]] else terra::merge(terra::sprc(layers))
+      acc <- terra::extend(acc, ref1)
+      if (!terra::compareGeom(acc, ref1, stopOnError = FALSE))
+        stop("merged layer ", v, " is not on the BCR grid")
     }
     if (!is.null(acc)) {
       lp <- file.path(layer_dir, sprintf("layer_%05d.tif", k))
@@ -203,7 +215,9 @@ year     <- years[(task_id - 1L) %/% n_bcr + 1L]
 bcr_code <- bcr_vec[(task_id - 1L) %% n_bcr + 1L]
 message(Sys.time(), " | task=", task_id, " year=", year, " BCR=", bcr_code)
 
-out_dir  <- file.path(ia_dir, "data", "derived_data", "bart_models_mosaics", year)
+# MOSAIC_DIR redirects the output (e.g. MOSAIC_DIR=bart_models_mosaics_test) to check a code
+# change against the production mosaics without overwriting them.
+out_dir  <- file.path(ia_dir, "data", "derived_data", Sys.getenv("MOSAIC_DIR", "bart_models_mosaics"), year)
 out_path <- file.path(out_dir, paste0(bcr_code, "_backfilled.tif"))
 
 # subbasins for this BCR
