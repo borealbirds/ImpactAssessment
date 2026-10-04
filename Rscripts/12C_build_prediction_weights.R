@@ -91,11 +91,15 @@ year    <- 2020
 # Bump this whenever the weight definition changes.
 WEIGHT_VERSION <- "weight_v3_touches"
 
-# ---- Species from SLURM ------------------------------------------------------
+# ---- Species: SPECIES (comma-separated), one per array task -------------------
+# 12C_build_prediction_weights.sh sets SPECIES from its arguments.
 
-species_vec <- c("CAWA", "OVEN")
-# species_vec <- sort(c("BANS", "BARS", "BOBO", "CAWA", "EAWP", "EVGR", "GCTH", "GRSP", "GWWA", "LEYE", "OSFL"))
+species_vec <- strsplit(Sys.getenv("SPECIES"), "[, ]+")[[1]]
+if (length(species_vec) == 0L)
+  stop("set SPECIES: bash 12C_build_prediction_weights.sh OSFL GRSP")
 task_id <- as.integer(Sys.getenv("SLURM_ARRAY_TASK_ID"))
+if (is.na(task_id) || task_id < 1L || task_id > length(species_vec))
+  stop("array task ", task_id, " has no species in SPECIES=", Sys.getenv("SPECIES"))
 species <- species_vec[task_id]
 message(Sys.time(), " | building prediction weights for species=", species)
 

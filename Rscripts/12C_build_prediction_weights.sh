@@ -6,12 +6,17 @@
 #SBATCH --mem=64G
 #SBATCH --time=4:00:00
 #SBATCH --job-name=build_pred_weights
-#SBATCH --array=1-2
 #SBATCH --mail-user=mannfred@ualberta.ca
+# submit: bash 12C_build_prediction_weights.sh SPECIES [SPECIES ...]   (e.g. OSFL GRSP)
 
-# Build per-species x BCR prediction weight rasters (range x not-water x in-data-limit).
-# Run ONCE before 12D. Reads source masks from data/raw_data/v5_gis (no G: access).
-# Adjust --array to match the number of species in species_vec.
+if [ -z "${SLURM_JOB_ID:-}" ]; then
+  set -euo pipefail
+  [ $# -ge 1 ] || { echo "usage: bash 12C_build_prediction_weights.sh SPECIES [SPECIES ...]"; exit 1; }
+  export SPECIES=$(IFS=,; echo "$*")
+  J=$(sbatch --parsable --export=ALL --array=1-$# "$0")
+  echo "WEIGHTS species=$SPECIES 12C=$J (1-$#)"
+  exit 0
+fi
 
 module load StdEnv/2023
 module load gcc/12.3

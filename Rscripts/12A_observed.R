@@ -5,10 +5,14 @@
 # rewritten: September 11, 2026 to conform to V5 10.Truncate.R (commit f082866)
 # ---
 #
-# Run once per species on the local machine. For each Canadian BCR the species has
-# a BRT model for, read Elly's unclamped 32-bootstrap prediction surfaces from
-#   G:/Shared drives/BAM_NationalModels5/output/07_predictions/{species}/{species}_{bcr}_{year}.tif
-# apply V5's truncation transform, and write to
+# Run once per species, on the cluster (one array task per species):
+#   bash 12A_observed.sh OSFL GRSP
+# or locally, one species at a time: SPECIES=OSFL Rscript Rscripts/12A_observed.R
+# For each Canadian BCR the species has a BRT model for, read Elly's unclamped
+# 32-bootstrap prediction surfaces from
+#   {nm_root}/output/07_predictions/{species}/{species}_{bcr}_{year}.tif
+# (nm_root is the NationalModels directory on Fir, or G:/Shared drives/BAM_NationalModels5
+# locally), apply V5's truncation transform, and write to
 # ia_dir/data/derived_data/predictions/{species}/{bcr_code}/{year}/:
 #   observed_bootstraps.tif  (32 layers, densmax- AND q99.9-clamped, UNWEIGHTED)
 #   observed_mean.tif
@@ -16,9 +20,9 @@
 # plus one ia_dir/data/derived_data/predictions/{species}/truncation_params.rds
 # per species.
 #
-# After running locally, Globus-transfer observed_bootstraps.tif AND
-# truncation_params.rds to the same relative paths on the cluster. 12D/12F read
-# these rather than recomputing, which also eliminates floating-point drift
+# After a LOCAL run, Globus-transfer observed_bootstraps.tif AND truncation_params.rds
+# to the same relative paths on the cluster; a cluster run writes them in place. 12D/12F
+# read these rather than recomputing, which also eliminates floating-point drift
 # across parallel SLURM jobs.
 #
 # WHAT CHANGED (2026-09-11) and why it matters
@@ -95,8 +99,9 @@ terraOptions(memfrac = 0.60)
 
 nm_root <- "/home/mannfred/projects/def-ecknight/NationalModels"
 
-cc    <- FALSE
-local <- TRUE
+# inside a Slurm job this is the cluster; anywhere else, the local RProject
+cc    <- nzchar(Sys.getenv("SLURM_JOB_ID"))
+local <- !cc
 
 if (cc)            { ia_dir <- "/home/mannfred/scratch/impact_assessment" }
 if (!cc && local)  { ia_dir <- getwd() }
@@ -105,6 +110,11 @@ if (!cc && !local) { ia_dir <- file.path("G:/Shared drives/BAM_NationalModels5",
 
 # when running locally, BRT bootstrap models and raw prediction tifs are on G:
 if (!cc) { nm_root <- "G:/Shared drives/BAM_NationalModels5" }
+
+# terra sizes its blocks from the node's free RAM, not the job's allocation (see 11), so
+# cap it at 30% of the allocation, or it can hold whole stacks past --mem.
+slurm_mem_mb <- suppressWarnings(as.numeric(Sys.getenv("SLURM_MEM_PER_NODE")))
+if (is.finite(slurm_mem_mb)) terraOptions(memmax = 0.3 * slurm_mem_mb / 1024)
 
 source(file.path(ia_dir, "Rscripts", "12B_v5_truncate.R"))
 
@@ -117,11 +127,18 @@ if (!"densmax" %in% names(q.out))
   stop("q.out has no `densmax` column — SpeciesPredictionTruncationValues.Rdata is the ",
        "pre-2026-06-04 version. Restage it from G:/Shared drives/BAM_NationalModels5/data/.")
 
-# species from SLURM -----------------------------------------------------
+# species: SPECIES (comma-separated), one per array task -------------------
+# 12A_observed.sh sets SPECIES from its arguments. Without an array task id (a local
+# run), SPECIES must name exactly one species.
 
-species_vec <- c("CAWA", "OVEN")
-# species_vec <- sort(list.dirs(file.path(nm_root, "output/06_bootstraps"), full.names = FALSE, recursive = FALSE))
-task_id <- as.integer(Sys.getenv("SLURM_ARRAY_TASK_ID"))
+species_vec <- strsplit(Sys.getenv("SPECIES"), "[, ]+")[[1]]
+if (length(species_vec) == 0L)
+  stop("set SPECIES: bash 12A_observed.sh OSFL GRSP, or SPECIES=OSFL Rscript Rscripts/12A_observed.R")
+task_id <- as.integer(Sys.getenv("SLURM_ARRAY_TASK_ID",
+                                 if (length(species_vec) == 1L) "1" else ""))
+if (is.na(task_id) || task_id < 1L || task_id > length(species_vec))
+  stop("array task ", Sys.getenv("SLURM_ARRAY_TASK_ID"), " has no species in SPECIES=",
+       Sys.getenv("SPECIES"), " (a local run takes one species)")
 species <- species_vec[task_id]
 year    <- 2020
 

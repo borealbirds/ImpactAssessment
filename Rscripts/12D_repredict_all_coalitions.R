@@ -81,7 +81,11 @@ source(file.path(ia_dir, "Rscripts", "12G_gbm_tree_walk.R"))
 Rcpp::sourceCpp(file.path(ia_dir, "Rscripts", "12G_gbm_tree_walk.cpp"))
 
 # pick this task's species x BCR ---------------------------------------------------
-species_vec <- c("CAWA", "OVEN")   # 12H_merge_bcr_tables.R must list the same species and year
+# SPECIES (comma-separated) sets the task table; 12D_repredict_all_coalitions.sh sets it
+# from its arguments and passes the same value to the 12H it chains, which must agree.
+species_vec <- strsplit(Sys.getenv("SPECIES"), "[, ]+")[[1]]
+if (length(species_vec) == 0L)
+  stop("set SPECIES: bash 12D_repredict_all_coalitions.sh OSFL GRSP")
 year <- 2020
 
 tasks   <- coalition_task_table(species_vec, nm_root)
@@ -119,7 +123,10 @@ per_bcr <- predict_species_all_coalitions(species, year = year,
 # it is still written so 12H can tell "skipped" from "never ran". The temp-then-rename means
 # a task killed mid-write leaves no file, never a truncated one 12H would accept. code_md5
 # lets 12H refuse to merge BCRs produced by different versions of the prediction code.
-out_dir <- file.path(ia_dir, "data", "derived_data", "density_tables", "by_bcr")
+# DROP_Q99=1 (12F; TODO C3) writes under density_tables_noq99/, so it never mixes with production.
+drop_q99 <- Sys.getenv("DROP_Q99", "0") == "1"
+out_dir <- file.path(ia_dir, "data", "derived_data",
+                     if (drop_q99) "density_tables_noq99" else "density_tables", "by_bcr")
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 out_f <- file.path(out_dir, paste0(species, "_", year, "_", bcr, ".rds"))
 code_files <- file.path(ia_dir, "Rscripts", c("12E_shapley_utils.R", "12F_predict_species_all_coalitions.R",
@@ -129,6 +136,7 @@ saveRDS(list(species   = species, year = year, bcr = bcr, bcr_order = task$bcr_o
              job       = paste0(Sys.getenv("SLURM_ARRAY_JOB_ID", "local"), "_", task_id),
              created   = Sys.time(),
              test_n_boot = as.integer(Sys.getenv("TEST_N_BOOT", "0")),
+             drop_q99  = drop_q99,
              result    = if (length(per_bcr) > 0L) per_bcr[[1]] else NULL),
         paste0(out_f, ".tmp"))
 if (!file.rename(paste0(out_f, ".tmp"), out_f)) stop("could not move ", out_f, ".tmp into place")

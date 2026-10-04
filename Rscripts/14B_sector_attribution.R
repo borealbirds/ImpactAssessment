@@ -28,8 +28,8 @@
 #   shapley_bcr.csv       — aggregated to BCR
 #   shapley_national.csv  — aggregated to national
 #
-# Release filter: BCRs whose models BAM withheld (currently CAWA can40) are
-# dropped here, not upstream — see `withheld_models` below.
+# Release filter: BCRs whose models BAM withheld (the "remove" tab of BAM's
+# ModelReleaseDecisions.xlsx) are dropped here, not upstream — see `withheld_models` below.
 # ---
 
 suppressPackageStartupMessages({
@@ -53,10 +53,13 @@ source(file.path(ia_dir, "Rscripts", "12E_shapley_utils.R"))
 
 # ---- Paths -------------------------------------------------------------------
 
-dt_dir     <- file.path(ia_dir, "data/derived_data/density_tables")
+# DROP_Q99=1 reads and writes the no-q99 sensitivity run (12F; TODO C3). Its observed totals
+# (the % denominators) are still the q99-capped ones: 12F re-predicts only the footprint.
+drop_q99   <- Sys.getenv("DROP_Q99", "0") == "1"
+dt_dir     <- file.path(ia_dir, "data/derived_data", if (drop_q99) "density_tables_noq99" else "density_tables")
 basin_path <- file.path(ia_dir, "data/raw_data/hydrobasins_masked_merged_subset.gpkg")
 flag_path  <- file.path(ia_dir, "data/derived_data/rds_files/extrapolation_flags.csv")
-out_dir    <- file.path(ia_dir, "data/derived_data/sector_effects")
+out_dir    <- file.path(ia_dir, "data/derived_data", if (drop_q99) "sector_effects_noq99" else "sector_effects")
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
 # ---- Load hydrobasins --------------------------------------------------------
@@ -65,26 +68,32 @@ hydrobasins <- terra::vect(basin_path)
 
 # ---- BAM model release filter ------------------------------------------------
 # Our BCR discovery reads 06_bootstraps/{spp}/can*.Rdata, which returns every model
-# BAM FIT — a superset of the models BAM RELEASED. review/ModelReleaseDecisions.xlsx
-# ("remove" tab) withholds CAWA can40 on AUC. 12A/12D deliberately still produce it
-# (the products stay a complete record of what we ran); the release filter belongs
-# here, at the point where numbers are reported.
+# BAM FIT — a superset of the models BAM RELEASED. 12A/12D deliberately still produce
+# the withheld ones (the products stay a complete record of what we ran); the release
+# filter belongs here, at the point where numbers are reported.
+#
+# Every Canadian row of the "remove" tab of BAM's review/ModelReleaseDecisions.xlsx is
+# withheld; its 0/1 columns give the reasons. As of 2026-10-04 that is CAWA can40 (AUC),
+# GRSP can10 and can61, BOBO can10 (low density in the BCR) and LEYE can10 (both).
+# The workbook is a copy of G:/Shared drives/BAM_NationalModels5/review/
+# ModelReleaseDecisions.xlsx (gitignored: it is BAM's, not ours to publish).
 #
 # Set DROP_WITHHELD <- FALSE to keep them and inspect the difference.
-#
-# Verified 2026-09-11 against the workbook: the "remove" tab has 662 rows, of which
-# exactly one touches our two species (CAWA can40, AUC = 1; OVEN has none). At the
-# planned ~60-species scale, replace this literal with a read of the workbook —
-# 14B runs locally, so G: is reachable:
-#   readxl::read_excel(file.path(nm_root, "review", "ModelReleaseDecisions.xlsx"),
-#                      sheet = "remove") |> dplyr::select(species = spp, bcr = region)
 
 DROP_WITHHELD <- TRUE
 
+release_path <- file.path(ia_dir, "data/raw_data/ModelReleaseDecisions.xlsx")
+if (!file.exists(release_path))
+  stop("copy G:/Shared drives/BAM_NationalModels5/review/ModelReleaseDecisions.xlsx to ", release_path)
+remove_tab <- readxl::read_excel(release_path, sheet = "remove")
+remove_tab <- remove_tab[grepl("^can", remove_tab$region), ]
+flag_cols  <- setdiff(names(remove_tab), c("spp", "region", "mosaic"))
 withheld_models <- data.frame(
-  species = "CAWA",
-  bcr     = "can40",
-  reason  = "withheld by BAM (review/ModelReleaseDecisions.xlsx, 'remove' tab; AUC)",
+  species = remove_tab$spp,
+  bcr     = remove_tab$region,
+  reason  = paste0(remove_tab$region, " withheld by BAM (",
+                   apply(as.matrix(remove_tab[flag_cols]) == 1, 1,
+                         function(x) paste(flag_cols[which(x)], collapse = ", ")), ")"),
   stringsAsFactors = FALSE
 )
 

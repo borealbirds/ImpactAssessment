@@ -85,6 +85,12 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
          "the cluster before 12D. The frozen q99 cannot be recovered here.")
   trunc_params <- readRDS(params_path)
 
+  # DROP_Q99=1 is the sensitivity run without the frozen q99 cap (TODO C3; Open Limitation
+  # #6): only densmax caps the observed, d0 and bf sides. The observed side cannot come from
+  # observed_bootstraps.tif, which 12A clamped at q99, so the workers re-predict it from the
+  # observed covariates, and the parent checks that re-capping it at q99 gives the tif back.
+  drop_q99 <- Sys.getenv("DROP_Q99", "0") == "1"
+
   if (is.null(rdata_files))
     rdata_files <- list.files(file.path(nm_root, "output/06_bootstraps", species),
                               pattern = "can.*\\.Rdata$", full.names = TRUE)
@@ -138,7 +144,10 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
            "SpeciesPredictionTruncationValues.Rdata files.")
     message(Sys.time(), " | ", species, " ", bcr_code,
             " | caps: densmax=", signif(qsp, 6), " q99=", signif(q99, 6),
-            " (q99 binds ", round(qsp / q99, 1), "x lower)")
+            " (q99 binds ", round(qsp / q99, 1), "x lower)",
+            if (drop_q99) " | DROP_Q99: q99 not applied to obs, d0 or bf" else "")
+    # the identity gate below still caps at q99, since it checks against observed_bootstraps.tif
+    q99_cap <- if (drop_q99) Inf else q99
 
     sub_ids <- bcr_subbasins_ref |>
       dplyr::filter(bcr_code == !!bcr_code) |>
@@ -561,8 +570,17 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
         d0_c[pred_in_c] <- gbm_predict_design(model, gbm_design(model, X_d))
         rm(X_d)
       }
-      d0_c   <- pmin(pmin(d0_c, qsp), q99) * w_c
+      d0_c   <- pmin(pmin(d0_c, qsp), q99_cap) * w_c
       n_bad0 <- sum(is.na(d0_c))
+      # DROP_Q99: the observed side, densmax-capped and unweighted (the parent checks and weights it)
+      o_c <- NULL
+      if (drop_q99) {
+        o_c <- numeric(n_c)
+        if (length(pred_rows) > 0L)
+          o_c[pred_in_c] <- gbm_predict_design(model, gbm_design(model,
+                              as_model_factors(X_pred, model, cat_vars_shared)))
+        o_c <- pmin(o_c, qsp)
+      }
       d0 <- lapply(seq_along(all_cids), function(ci) {
         if (coal_state[ci] != 2L) return(NULL)
         coal_rowsum(matrix(d0_c, ncol = 1L), keep_rows[[ci]], zi_c, n_sub) * 100
@@ -612,7 +630,7 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
         # both V5 upper caps, in 10.Truncate.R order (densmax then the frozen q99), then
         # the prediction weight (V5 order: truncate, then range-multiply); symmetric with
         # the observed side, so bf - obs stays w*(bf - obs)
-        sc_d <- pmin(pmin(pred_c, qsp), q99) * w_c
+        sc_d <- pmin(pmin(pred_c, qsp), q99_cap) * w_c
         # NA audit. The reduce below has no na.rm, so one NA in a kept pixel NA-s that
         # subbasin's ENTIRE bf total while the obs side zeroes its NAs -- a one-sided loss.
         # complete_mask is built from draw 1 as a proxy for all 100 draws, so a pixel
@@ -631,7 +649,7 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
         coal_rowsum(sc, direct_rows[[ci]], zi_c, n_sub) * 100 +
           d0_infl[[ci]][, rep(1L, n_scen), drop = FALSE]
       })
-      list(bf = bf, d0 = d0, n_bad = as.numeric(n_bad + n_bad0))
+      list(bf = bf, d0 = d0, obs = o_c, n_bad = as.numeric(n_bad + n_bad0))
     }, mc.cores = n_cores, mc.preschedule = FALSE)   # one fork per bootstrap, freed on exit
 
     # A worker the kernel kills (e.g. out of memory) returns NULL, not a try-error.
@@ -655,6 +673,23 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     O_c <- vapply(obs_preds, function(r) terra::values(r, mat = FALSE)[super_idx[c_rows]],
                   numeric(length(c_rows)))
     if (is.null(dim(O_c))) O_c <- matrix(O_c, ncol = n_boot)
+    # DROP_Q99: swap in the re-predicted observed side, but only after it reproduces the tif
+    # once re-capped at q99, at every complete pixel and bootstrap (the identity gate samples
+    # ~4,500). Where the tif is NA it stays NA, so the two runs differ by the cap alone.
+    if (drop_q99) {
+      O_u  <- do.call(cbind, lapply(boot_res, `[[`, "obs"))
+      chk  <- pmin(O_u, q99) * w_c
+      bad  <- is.finite(O_c) & !(abs(chk - O_c) <= 1e-5 * abs(O_c) + 1e-30)
+      if (any(bad))
+        stop(species, " ", bcr_code, ": DROP_Q99 observed side, re-capped at q99, differs from ",
+             "observed_bootstraps.tif at ", sum(bad), " of ", sum(is.finite(O_c)), " pixel-bootstraps")
+      message(Sys.time(), " | ", species, " ", bcr_code, " | DROP_Q99 observed side reproduces ",
+              "observed_bootstraps.tif once re-capped (", sum(is.finite(O_c)), " pixel-bootstraps); ",
+              "q99 binds at ", round(100 * mean(O_u[pred_in_c, ] > q99), 2), "% of predicted ones; ",
+              "tif NA at ", sum(is.na(O_c[pred_in_c, ])), " of them")
+      O_c <- ifelse(is.na(O_c), NA_real_, O_u * w_c)
+      rm(O_u, chk, bad)
+    }
 
     # ---- coalition-INDEPENDENT obs_total (whole-subbasin), computed ONCE -------
     # mirrors predict_species_bcr: per bootstrap, zonal sum of obs_r*100 over subbasin zones.

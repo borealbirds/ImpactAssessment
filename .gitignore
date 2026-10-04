@@ -73,6 +73,9 @@ output_tables/
 # Staged raw V5 GIS masking layers (large; staged from G:, not versioned)
 data/raw_data/v5_gis/
 
+# BAM's model release decisions (copied from G: review/; BAM's, not ours to publish)
+data/raw_data/ModelReleaseDecisions.xlsx
+
 # Slurm job output pulled to the local tree for inspection
 slurm-*.out
 

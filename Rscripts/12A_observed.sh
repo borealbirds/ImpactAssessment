@@ -4,14 +4,19 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=16G
-#SBATCH --time=2:00:00
+#SBATCH --time=8:00:00
 #SBATCH --job-name=obs_predict
-#SBATCH --array=1-2
 #SBATCH --mail-user=mannfred@ualberta.ca
+# submit: bash 12A_observed.sh SPECIES [SPECIES ...]   (e.g. OSFL GRSP)
 
-# Phase 1: canonical observed-landscape predictions.
-# Run this BEFORE 12B_repredict_birds.sh (coalition runs).
-# Adjust --array to match the number of species.
+if [ -z "${SLURM_JOB_ID:-}" ]; then
+  set -euo pipefail
+  [ $# -ge 1 ] || { echo "usage: bash 12A_observed.sh SPECIES [SPECIES ...]"; exit 1; }
+  export SPECIES=$(IFS=,; echo "$*")
+  J=$(sbatch --parsable --export=ALL --array=1-$# "$0")
+  echo "OBS species=$SPECIES 12A=$J (1-$#)"
+  exit 0
+fi
 
 module load StdEnv/2023
 module load gcc/12.3

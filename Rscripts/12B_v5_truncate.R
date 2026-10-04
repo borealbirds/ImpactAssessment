@@ -59,9 +59,9 @@
 # Returns a list(stack, q99, densmax) so callers can persist the frozen params.
 # ---
 
+# sf is called as sf:: and only by v5_load_masks(), so 12A (no masks) runs where sf is absent
 suppressPackageStartupMessages({
   library(terra)
-  library(sf)
 })
 
 # Load the four static V5 masking layers once; reused across species and BCRs.

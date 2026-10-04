@@ -1,69 +1,54 @@
-# TODO (last updated 2026-09-28)
+# TODO (last updated 2026-10-04)
 
-> **Where we left off (2026-09-28).** C2f is decided, built and committed (`3fcef6d`; CLAUDE.md
-> Open Limitation #10). The HF masks (03) and the 16 sector layers (14A) were rebuilt from the
-> raw 300 m Hirsh-Pearson data, so 07 + 11 are rerunning for 2020 on Fir (submitted 2026-09-28).
-> 10C is done on the new masks. Masks, sector layers and both closures are staged on Fir.
+> **Where we left off (2026-10-04).** The C2f rerun is done end to end for 2020: 07 + 11 on the
+> new masks, C1 (12D + 12H) and 14B. The headline numbers are under Next action 5. C3 is done
+> too (Next action 6): without the frozen `q99.9` cap v(N) moves +1.2% (CAWA) and +0.05% (OVEN).
+> The first new-species batch (OSFL, GRSP, LEYE, BOBO) is under way (Next action 7).
 > The user wants the project finished: log small new problems under Loose ends and do not
 > reopen finished stages for them. Keep `writing/` off the internet: never commit or push it.
 >
-> This file was trimmed on 2026-09-28. The full record of finished work (every smoke, job id
-> and measurement) is `git show 3fcef6d:TODO.md`.
+> **Uncommitted as of 2026-10-02:**
+> - the 11 window/merge rewrite: `11.R`, both `.sh` files, and `misc/compare_mosaics.{R,sh}`;
+> - the C3 `DROP_Q99` switch in 12D, 12F, 12H and 14B (staged on Fir);
+> - species as arguments (`SPECIES`) in 12A, 12C, 12D, 12H and their `.sh`; 12A on the cluster;
+>   12B without `library(sf)`; 14B's withheld list from the workbook; `.gitignore` (staged on Fir,
+>   14B local only);
+> - `CLAUDE.md` and this file.
+>
+> Not this session's to commit:
+> - `14A_reproject_hirshpearson.R` has a comment-only change that nobody in this session made.
+>   Ask the user before committing it.
+> - `data/derived_data/rds_files/`, `sector_effects/` (now the C2f results) and
+>   `sector_effects_noq99/` (C3) stay out of git until the user decides.
+>
+> The full record of finished work is in `git show 3fcef6d:TODO.md` (trimmed 2026-09-28). The
+> 07/11 checking recipe that used to open this file is in `git show 994d90b:TODO.md`.
 
-## Handoff to a new chat (written 2026-09-28)
+## Globus from this laptop
 
-**Open the new chat with:** "Continue from the Handoff section of TODO.md. Here is my
-`sacct` output: <paste>". CLAUDE.md and the memory index load on their own.
-
-**State at hand-off.** All code and CLAUDE.md are committed and pushed (`e290d00`). Nothing is running
-locally. On Fir, 07 then 11 (2020, new masks) were submitted at 2026-09-28 19:36 UTC with
-`bash 07_submit_backfill_years.sh 2020` (since 2026-10-01 merged into `bash 07_train_and_backfill.sh 2020`).
-
-**What the new chat does not know:**
-- **The new 07 and 11 job ids.** The submit helper printed them as
-  `BACKFILL years=2020 07=<id> ... 11=<id>`. Otherwise run this on Fir and paste the output:
-  `sacct -X -S 2026-09-28 --name=backfill,premosaic -o JobID%24,JobName%12 | awk '{split($1,a,"_"); print a[1], $2}' | sort -u`
-- **The older run is still on Fir.** Don't mix it up with the new one. 07 `61546382` ran on
-  the old masks; its 674 `.out` files are still in `Rscripts/`, with copies in
-  `cluster_logs/07_2020_c2e/`. Its 11, `61546385`, was cancelled before it ran.
-- **Two directories are untracked on purpose.** `data/derived_data/rds_files/` (98 MB) and
-  `data/derived_data/sector_effects/` (the first C2 run's CSVs, which are stale and will be
-  overwritten by 14B) are not committed. The user was asked whether to commit them and has not
-  answered, so leave them out of git.
-
-**Checking 07 and 11 without SSH (Next action 1).** In PowerShell, with
-`$g = "C:\Users\mannf\AppData\Local\Python\pythoncore-3.14-64\Scripts\globus.exe"`,
-`$fir = "8dec4129-9ab4-451d-a45f-5b4b8471f7a3:/home/mannfred/scratch/impact_assessment"` and
-`$loc = "a7878ccc-747b-11ef-b4b8-8fef73a45f39:/C/Users/mannf/Drive/boreal_avian_modelling_project/ImpactAssessment/cluster_logs/07_2020_c2f"`,
-each pull is ONE filtered recursive task. Write the filters as `--opt=value`, or click
-glob-expands the `*` on Windows.
-- `& $g transfer --recursive "--include=slurm-<07 id>_*.out" "--exclude=*" "$fir/Rscripts/" "$loc/" --label "07 c2f outs" --notify off`
-- the same with `"--include=Y2020_S*.log"` from `"$fir/logs/"` into `"$loc/subbasin_logs/"`;
-- the same with `"--include=slurm-<11 id>_*.out"` into `"$loc/11/"`.
-
-Then:
-- Wait with `& $g task wait <task id>`.
-- Grep for the pass lines listed under Next action 1.
-- Ask the user to run this on Fir; it must print 0:
-  `find /home/mannfred/scratch/impact_assessment/data/derived_data/bart_models/2020 -name '*_confusion.rds' ! -newermt '2026-09-28 19:00 UTC' | wc -l`
-
-On the old masks, 7 subbasins had a single backfill pixel (119, 160, 221, 246, 247, 304, 423).
-08A skips BART for those, so their `.out` is tiny and their metrics file is 45 bytes. That is
-expected, and the set may shift on the new masks.
-
-**After that,** follow Next actions 3–6 in order. The user runs every cluster command. Give
-each command as a single line.
+- Write filters as `--opt=value` (`"--include=slurm-<id>_*.out" "--exclude=*"`): a bare `*`
+  is glob-expanded on Windows. `--exclude=by_bcr` did not keep that directory out of a
+  recursive pull (2026-10-02).
+- From Git Bash, commands that take a Fir path as its own argument (`globus rename`) need
+  `MSYS_NO_PATHCONV=1`, or the path is rewritten to `C:/Program Files/Git/...`.
+- Transfers stuck ACTIVE with `GC_NOT_CONNECTED` mean Globus Connect Personal is not running.
+  Start `C:\Program Files (x86)\Globus Connect Personal\bin\globus_connect_personal.exe`.
+- A log still being written fails checksum verification over and over; pass
+  `--no-verify-checksum` to pull it.
+- Globus Connect Personal cannot read Claude's scratchpad under `AppData` (`PERMISSION_DENIED`,
+  task stuck ACTIVE); stage outgoing files from the project folder.
+- Fir's `sacct -S/-E` times are Pacific, not UTC (Globus listings are UTC). Logs land in
+  `Rscripts/` on Fir; sort a listing by its time column before concluding nothing ran.
 
 ## Critical path
 
 ```
-cluster:  [07 + 11 rerun, 2020, new masks] ─► [wipe tables] ─► [C1 rerun: 12D + 12H] ─► [14B] ─► C3
-local:    [10C rerun: done] ──────────────────────────────────────────────────────────┘
+cluster:  [07 + 11: done] ─► [C1: done] ─► [14B: done] ─► [C3: done]
 ```
 
 **Next actions, in order:**
 
-1. **Check 07 + 11** (2020, new masks, submitted 2026-09-28).
+1. ~~**Check 07 + 11**~~ (2020, new masks), done 2026-10-02.
    - 07: all 674 `.out` end `$ok TRUE` with no error/OOM/timeout line. Pull them in ONE
      filtered Globus transfer: `--recursive "--include=slurm-<07 job>_*.out" "--exclude=*"`.
      `sacct` is not enough: `tryCatch` makes a failed subbasin exit `COMPLETED`, and the logs
@@ -86,40 +71,83 @@ local:    [10C rerun: done] ─────────────────�
      rows, training pixels; residual SD 0.6 GB). At 128G every task bills 33 core-equivalents:
      10,037 core-eq-h for this run. 24G for all but those five, and 72G for them, would have
      billed 1,926 core-eq-h (see Loose ends).
-   - **11 = job `61937626` (128G, 24 h): pending 2+ days on `(Priority)`; to be cancelled and
-     resubmitted (2026-10-01).** A6's 11 (`60806856`, `--mem=512G`) peaked at 6.6–316 GB
-     (`cluster_logs/07_2020_c2f/11/sacct_11_60806856.txt`): can3 (task 6) 316 GB / 17.4 h;
-     can61, can80, can81 (12, 16, 17) 138–153 GB; can60 115 GB; all others ≤ 94 GB and ≤ 5.3 h
-     wall. terra sizes its blocks from the node's `MemAvailable` (`/proc/meminfo`; checked in
-     terra's `src/ram.cpp`) and cannot see the Slurm cap, so those peaks are what terra chose
-     to hold, not what 11 needs, and 128G would likely have been killed on those four BCRs.
-     `11.R` now caps terra at 30% of `SLURM_MEM_PER_NODE` (`memmax`; capped and uncapped runs
-     were `identical()` locally for resample/cover/mask); `.sh` defaults 64G / 12 h, and
-     `07_train_and_backfill.sh` submits can3 (task 6 of each year block) separately at 24 h.
-     Resubmit: `--array=1-5,7-19 --time=12:00:00` and `--array=6 --time=24:00:00`. Check the
-     first short tasks (can42 = 9, can9 = 19, can82 = 18) with `sacct` for MaxRSS well under 64G.
-     **Resubmitted: the 12 h array is job `62431589`** (tasks 1–3 started 10:50 PDT 10-01; every
-     `.out` logs `terra memmax = 19.2 GB` and processes in blocks). **Fir's `11.R` is the
-     `278bc85` version on purpose** (12,154 bytes): HEAD differs only by a comment on line 190.
-     Stage HEAD's `11.R` only after both 11 arrays have finished (see Staging discipline).
-   - 11: every `.out` ends with `done.`. Here too `sacct` is not enough: three code paths exit 0
-     without writing. If a task OOMs:
-     `YEARS=2020 sbatch --array=<i> --mem=256G 11_premosaic_backfilled_stacks.sh`.
+   - **11: done 2026-10-02, all 19 BCRs** (`cluster_logs/07_2020_c2f/11/`; every `.out` ends
+     `done.`). Job `62431589` (64G / 12 h) built 16 of them with the `278bc85` `11.R`, which
+     caps terra at 30% of the allocation (`memmax`). They peaked at 5.6–33.5 GB and ran 0.57–1.0×
+     A6's wall time (`sacct_11_62431589.txt`). can41 and can5 stalled at 64G: one modest
+     subbasin each, hours at 100% CPU, flat ~5 GB, no disk I/O. They were rebuilt at 512G (job
+     `62468313`, 52 and 67 min). Both stalled inside the whole-grid resample, which the fix
+     removes.
+     can3 (71 subbasins, ~9M-cell grid) projected at 11–15 h, and its 24 h job pended a day.
+     **The fix:** `11.R` resamples each subbasin onto its own grid-aligned window and
+     `merge()`s per variable. The test build (job `62557048`, 32G / 3 h, `MOSAIC_DIR`) matched
+     the production can11, can42 and can81 in every layer (`misc/compare_mosaics.R`, job
+     `62557069`). It built can3 in 1.4 h and can81 in 2.0 h (was 5.0 h), peaking at 3.1–13.0 GB
+     of 32G. can3's mosaic was moved
+     into `bart_models_mosaics/2020/` and the test folder deleted. `.sh` defaults are now
+     32G / 4 h, and `07_train_and_backfill.sh` chains one 11 array (no 24 h can3 split).
+     Fir has this `11.R`, the new `.sh` and `07_train_and_backfill.sh`; none committed yet.
+     If a task OOMs: `YEARS=2020 sbatch --array=<i> --mem=64G 11_premosaic_backfilled_stacks.sh`.
 2. ~~10C~~, done 2026-09-28: 4 of 674 flagged (50, 72, 430, 481; was 72, 98, 481). Subbasin 98
    fell from 0.51 to 0.14 outside the AOA. `frac_outside_aoa` correlates 0.89 with the old run;
    median 1.6%, 90th percentile 14.3%. Log: `cluster_logs/10C_2026-09-28.log`.
-3. **Wipe, then rerun C1** (~1 h wall, ~64 billed core-equivalent-hours):
-   `cd /home/mannfred/scratch/impact_assessment/Rscripts && rm -f ../data/derived_data/density_tables/*.rds ../data/derived_data/density_tables/arrays/*.rds ../data/derived_data/density_tables/by_bcr/*.rds && sbatch 12D_repredict_all_coalitions.sh`
-   then `sbatch --dependency=afterany:<12D job id> 12H_merge_bcr_tables.sh`.
-   Pass: all 25 tasks `nice.`; the identity gate passes; each `superset pixels` line reports the
-   direct footprint; 12H logs `wrote Shapley samples` for both species.
-4. **Pull** the 510 tables, 18 arrays and the two `*_shapley_samples.rds` (`--notify off`). The
-   masks changed, so `obs_on_coalition` changes too; there is no `identical()` gate.
-5. **14B** locally (C2 rerun). For comparison, the first C2 run (2026-09-24, old masks, pre-C2e,
-   CAWA can40 withheld) gave CAWA v(N) = +574k on 4.47 M observed (roads 34%, pasture 22%,
-   crop 21%, built 18%) and OVEN v(N) = +3.53 M on 37.65 M (crop 33%, pasture 32%, built 21%,
+3. ~~**Wipe, then rerun C1**~~, done 2026-10-02: tables wiped; 12D = job `62596963`, 12H =
+   `62597111` (logs: `cluster_logs/C1_2026-10-02_c2f/`). All 25 tasks `nice.`. In each, the
+   identity gate passes for all 32 bootstraps at 1,123–3,117 observed-design pixels.
+   Complete weight > 0 superset pixels: 100% everywhere (CAWA can81: 75,908 of 75,919).
+   The direct footprint is 61–95% of the superset (OVEN can41 61%, can11 95%). Tasks ran 1–44 min.
+   12H: 255 tables per species, 9 arrays each, and the Shapley samples (CAWA 734 and OVEN 831
+   subbasin rows × 3,200).
+4. ~~**Pull**~~, done 2026-10-02: 512 tables + Shapley samples and 18 arrays, all dated today
+   locally (one recursive transfer; `--exclude=by_bcr` did not exclude, so `by_bcr/` came too).
+5. ~~**14B**~~ locally, done 2026-10-02 (`logs/14B_2026-10-02_c2f.log`; CAWA can40 withheld).
+   Sample means match the tables' Shapley values (max |diff| 4.7e-10), and sum(phi) = v(N) in
+   every sample. **CAWA v(N) = +757k** on 4.47 M observed (+16.9%; 5–95%: 649k–870k). Shares
+   of v(N): roads 42%, pasture 22%, crop 21%, built 11%, rail 2.2%; oil and gas, mines and
+   dams < 0.4% each. Direct +138k, vegetation +619k. **OVEN v(N) = +4.59 M** on 37.65 M
+   (+12.2%; 3.70–5.18 M). Shares: crop 35%, pasture 32%, roads 19%, built 13%, rail 1.4%;
+   mines −19k, dams −15k, oil and gas ≈ 0. Direct −1.68 M, vegetation +6.27 M; roads is
+   −1.27 M direct and +2.14 M vegetation, so roads carries the widest interval
+   (325k–1.21 M). The 4 AOA-flagged subbasins carry 23k (CAWA) and −3k (OVEN).
+   The first C2 run (2026-09-24: old masks, pre-C2e, can40 withheld) gave CAWA +574k (roads
+   34%, pasture 22%, crop 21%, built 18%) and OVEN +3.53 M (crop 33%, pasture 32%, built 21%,
    roads 11%).
-6. **C3:** the uncapped `q99.9` sensitivity pass.
+6. **C3:** the uncapped `q99.9` sensitivity pass. Built 2026-10-02 as `DROP_Q99=1`, read by
+   12F, 12D, 12H and 14B. Only densmax caps the observed, d0 and bf sides. 12F re-predicts the
+   observed footprint, because `observed_bootstraps.tif` is already q99-clamped, and stops
+   unless re-capping that prediction at q99 reproduces the tif at every predicted pixel and
+   bootstrap. Output goes to `density_tables_noq99/` and `sector_effects_noq99/`. The %
+   denominators stay the capped observed totals, because only the footprint is re-predicted.
+   Submitted as a can60 2-bootstrap smoke, then the full 12D (`afterok`), then 12H:
+   `S=$(sbatch --parsable --array=1-2 --time=01:00:00 --export=ALL,TEST_BCR=can60,TEST_N_BOOT=2,DROP_Q99=1 12D_repredict_all_coalitions.sh)`,
+   then `--dependency=afterok:$S --export=ALL,DROP_Q99=1` for 12D and `afterany` for 12H.
+   **Done 2026-10-02/04.** Smoke = job `62636061`, 12D = `62636072`, 12H = `62636104` (logs:
+   `cluster_logs/C3_2026-10-02_noq99/`). All 25 tasks `nice.`, with the identity gate passing for
+   all 32 bootstraps, and the observed side reproducing the tif once re-capped at every predicted
+   pixel × bootstrap. q99 binds at only 0–1.02% of those (OVEN can12 the most). 14B
+   (`logs/14B_noq99_2026-10-04.log`; `sector_effects_noq99/`): means match the tables
+   (max |diff| 5.2e-10), additivity exact. **Uncapped, v(N) moves +1.16% for CAWA** (756,594 →
+   765,389; 5–95% 650k–886k) **and +0.05% for OVEN** (4,591,911 → 4,594,430). By sector: CAWA
+   roads +6.1k (+1.9%), every other sector < 1k; OVEN roads −3.1k and pasture +3.7k, every other
+   < 1.4k. Shares do not move. By BCR, the biggest shift is CAWA can61 +5.5k (+2.1%) and OVEN
+   can14 +10.7k (+1.6%). Large % changes occur only where an impact is near 0 (CAWA can80
+   −1,945 → −1,262). Shapley SDs rise 0–7%. So the frozen cap's downward bias is real for CAWA
+   but small: 1% of v(N), far inside its 5–95% interval. The cap binds on the high-density
+   landscape, not on the footprint, where densities are low on both sides.
+7. **First new-species batch: OSFL, GRSP, LEYE, BOBO** (started 2026-10-04). They are species at
+   risk, chosen to differ from CAWA/OVEN: widespread boreal, grassland, wetland/northern,
+   farmland. (The rest of the at-risk list once in 12C: BANS, BARS, EAWP, EVGR, GCTH, GWWA.)
+   42 species × BCR tasks: OSFL 17, LEYE 11, BOBO 9, GRSP 5. They reach five BCRs CAWA/OVEN
+   never ran through 12F: can3 (LEYE), can5 (OSFL, LEYE), can9 (OSFL, BOBO), can72 (OSFL).
+   Withheld by BAM (14B drops them): GRSP can10 and can61, BOBO can10, LEYE can10.
+   Species are now arguments (`bash 12A_observed.sh OSFL GRSP LEYE BOBO`, same for 12C and 12D;
+   12D chains 12H). 12A runs on Fir (Fir's `07_predictions` has every species' 2020 tifs).
+   Ranges for the four are staged on Fir. Steps:
+   - [ ] 12A + 12C on Fir (independent; run together).
+   - [ ] Smoke: `TEST_BCR=can3,can5,can9,can72,can13 TEST_N_BOOT=2 bash 12D_repredict_all_coalitions.sh OSFL GRSP LEYE BOBO`
+     (9 tasks: every species and every new BCR).
+   - [ ] Full 12D + 12H, pull, 14B. Watch for 12F's "weight.tif is all-zero/NA over the
+     superset" stop (narrow ranges), and for tasks over 48G.
 
 **Multi-year:** 07 and 11 take years (`bash 07_train_and_backfill.sh 2010 2015 2020`), but
 each year needs `covariates_mosaiced_{year}.tif` (06; only 2020 exists) and that year's
@@ -205,9 +233,8 @@ have been stale or missing on Fir four times: `08A` with Fix B, 7 of 9 files in 
       - 12F harness (CAWA can60, 2 boots, pre-C2e backfill, so indicative): all-direct is
         `identical()` to smoke 7; none-direct gives a vegetation part of exactly 0; the real
         layers move v(N) −3,592 → −1,595 (roads −3,037 → −1,582).
-- [ ] **C3.** Sensitivity pass with the `q99.9` cap disabled; report the spread. The frozen cap
-      under-estimates impact in the highest-density pixels (counterfactual densities hit it more
-      often than observed), and it removes 4–12% of abundance. Headline = conformed;
+- [x] **C3.** Sensitivity pass with the `q99.9` cap disabled (done 2026-10-04, Next action 6).
+      Uncapped v(N): CAWA +1.16%, OVEN +0.05%; no sector share moves. Headline = conformed;
       sensitivity = uncapped.
 
 ## Loose ends

@@ -2,8 +2,9 @@
 # title: Impact Assessment: merge 12D's per-BCR results into the coalition tables 14B reads
 # author: Mannfred Boehm
 # ---
-# Run once every 12D task has finished:
-#   sbatch --dependency=afterany:<12D job id> 12H_merge_bcr_tables.sh
+# Run once every 12D task has finished. `bash 12D_repredict_all_coalitions.sh <species>`
+# chains it with the same SPECIES; by hand:
+#   SPECIES=OSFL,GRSP sbatch --dependency=afterany:<12D job id> 12H_merge_bcr_tables.sh
 # (afterany, not afterok: a failed 12D task must reach the completeness check below, which
 # names the array indices to resubmit, instead of leaving this job pending forever.)
 #
@@ -30,10 +31,17 @@ if (!cc && !local) { ia_dir <- file.path("G:/Shared drives/BAM_NationalModels5",
 source(file.path(ia_dir, "Rscripts", "12E_shapley_utils.R"))
 source(file.path(ia_dir, "Rscripts", "12F_predict_species_all_coalitions.R"))
 
-species_vec <- c("CAWA", "OVEN")   # must match 12D_repredict_all_coalitions.R
+# SPECIES (comma-separated) must be the value 12D ran with; 12D_repredict_all_coalitions.sh
+# passes it on when it chains this job. Only these species' tables are written.
+species_vec <- strsplit(Sys.getenv("SPECIES"), "[, ]+")[[1]]
+if (length(species_vec) == 0L)
+  stop("set SPECIES to the species 12D ran (12D_repredict_all_coalitions.sh chains this job with it)")
 year <- 2020
 
-dt_dir  <- file.path(ia_dir, "data", "derived_data", "density_tables")
+# DROP_Q99=1 merges the no-q99 sensitivity run (12F; TODO C3) in its own directory
+drop_q99 <- Sys.getenv("DROP_Q99", "0") == "1"
+dt_dir  <- file.path(ia_dir, "data", "derived_data",
+                     if (drop_q99) "density_tables_noq99" else "density_tables")
 arr_dir <- file.path(dt_dir, "arrays")
 dir.create(arr_dir, recursive = TRUE, showWarnings = FALSE)
 
@@ -49,11 +57,13 @@ test_n_boot <- Sys.getenv("TEST_N_BOOT", "")
 test_export <- if (nchar(test_bcr) > 0L)
   paste0(" --export=ALL,TEST_BCR=", test_bcr,
          if (nchar(test_n_boot) > 0L) paste0(",TEST_N_BOOT=", test_n_boot) else "") else ""
+if (drop_q99) test_export <- paste0(if (nchar(test_export) > 0L) test_export else " --export=ALL", ",DROP_Q99=1")
 missing <- tasks[!file.exists(tasks$file), ]
 if (nrow(missing) > 0L)
   stop(nrow(missing), " per-BCR result(s) missing: ",
        paste0(missing$species, " ", missing$bcr, collapse = ", "),
-       " - resubmit with: sbatch --array=", paste(missing$task, collapse = ","), test_export,
+       " - resubmit with: SPECIES=", paste(species_vec, collapse = ","),
+       " sbatch --array=", paste(missing$task, collapse = ","), test_export,
        " 12D_repredict_all_coalitions.sh (add --mem=64G if its log shows oom_kill or dead workers)")
 
 recs <- lapply(tasks$file, readRDS)
@@ -82,6 +92,10 @@ if (!identical(prov$n_boot[1], if (nchar(test_n_boot) > 0L && test_n_boot != "0"
   stop("per-BCR results were run with TEST_N_BOOT=", prov$n_boot[1], " but this merge has TEST_N_BOOT=",
        if (nchar(test_n_boot) > 0L) test_n_boot else "(unset)",
        " - pass the same TEST_N_BOOT to 12H as to 12D, so a smoke is never merged as production")
+rec_q99 <- vapply(recs, function(r) isTRUE(r$drop_q99), logical(1L))
+if (any(rec_q99 != drop_q99))
+  stop(sum(rec_q99 != drop_q99), " per-BCR file(s) in ", dt_dir, " have DROP_Q99 ",
+       if (drop_q99) "unset" else "set", ", unlike this merge")
 if (any(prov$n_boot != "all"))
   message(Sys.time(), " | NOTE: these are TEST_N_BOOT=", prov$n_boot[1], " smoke results")
 
