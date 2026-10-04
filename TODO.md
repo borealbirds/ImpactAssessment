@@ -7,15 +7,11 @@
 > The user wants the project finished: log small new problems under Loose ends and do not
 > reopen finished stages for them. Keep `writing/` off the internet: never commit or push it.
 >
-> **Uncommitted as of 2026-10-02:**
-> - the 11 window/merge rewrite: `11.R`, both `.sh` files, and `misc/compare_mosaics.{R,sh}`;
-> - the C3 `DROP_Q99` switch in 12D, 12F, 12H and 14B (staged on Fir);
-> - species as arguments (`SPECIES`) in 12A, 12C, 12D, 12H and their `.sh`; 12A on the cluster;
->   12B without `library(sf)`; 14B's withheld list from the workbook; `.gitignore` (staged on Fir,
->   14B local only);
-> - `CLAUDE.md` and this file.
+> **Committed and pushed 2026-10-04:** the 11 window/merge rewrite (`d846f66`), and the C3
+> `DROP_Q99` switch plus species as job arguments (`b7f1cbb`). Fir's `Rscripts/` matches them
+> (14B runs locally only).
 >
-> Not this session's to commit:
+> Still uncommitted:
 > - `14A_reproject_hirshpearson.R` has a comment-only change that nobody in this session made.
 >   Ask the user before committing it.
 > - `data/derived_data/rds_files/`, `sector_effects/` (now the C2f results) and
