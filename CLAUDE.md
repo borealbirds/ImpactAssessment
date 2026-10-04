@@ -352,7 +352,7 @@ data/
         └── continuous_holdout_metrics_w_importance.rds
 ```
 
-Large spatial files (`.tif`, `.gpkg`, `.shp`) and most `.rds` files are gitignored. Versioned outputs are the CSV accuracy/confusion matrices in `data/derived_data/rds_files/`.
+Large spatial files (`.tif`, `.gpkg`, `.shp`) and most `.rds` files are gitignored. The CSV outputs in `data/derived_data/rds_files/` (accuracy/confusion matrices) and `sector_effects*/` (14B) are kept local, not versioned (user decision, 2026-10-04).
 
 ## Open Limitations (updated 2026-09-15)
 

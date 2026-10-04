@@ -7,15 +7,11 @@
 > The user wants the project finished: log small new problems under Loose ends and do not
 > reopen finished stages for them. Keep `writing/` off the internet: never commit or push it.
 >
-> **Committed and pushed 2026-10-04:** the 11 window/merge rewrite (`d846f66`), and the C3
-> `DROP_Q99` switch plus species as job arguments (`b7f1cbb`). Fir's `Rscripts/` matches them
-> (14B runs locally only).
->
-> Still uncommitted:
-> - `14A_reproject_hirshpearson.R` has a comment-only change that nobody in this session made.
->   Ask the user before committing it.
-> - `data/derived_data/rds_files/`, `sector_effects/` (now the C2f results) and
->   `sector_effects_noq99/` (C3) stay out of git until the user decides.
+> **Committed and pushed 2026-10-04:** the 11 window/merge rewrite (`d846f66`), the C3
+> `DROP_Q99` switch plus species as job arguments (`b7f1cbb`), and the 14A comment
+> (`b966ee7`). Fir's `Rscripts/` matches them (14B runs locally only).
+> `data/derived_data/rds_files/`, `sector_effects/` and `sector_effects_noq99/` stay local,
+> never committed (user, 2026-10-04).
 >
 > The full record of finished work is in `git show 3fcef6d:TODO.md` (trimmed 2026-09-28). The
 > 07/11 checking recipe that used to open this file is in `git show 994d90b:TODO.md`.
