@@ -17,9 +17,14 @@
 #                          reservoirs (HP Tables 2-4). It also takes in the 300-600 m band of
 #                          national/major highways and the 300-900 m band of the Trans-Canada,
 #                          since a score does not identify the road type.
-#   mines                  score >= 6: the 0-600 m band (Table 5), plus 600-1500 m of large mines
-#   oil_gas                score 10: the site cell (HP scores are integers, 10 at the site
-#                          decaying to 1 near 5 km)
+#   mines                  score >= 6: the 0-600 m band (Table 5), plus 600-1500 m of large mines.
+#                          Most sites are large: median 79 300 m cells (~7 km2, a 1.5 km disc)
+#   oil_gas                score 10: the core around the site, a disc of ~29 300 m cells (900 m
+#                          radius, ~2.6 km2), not one cell (HP scores are integers, 10 at the
+#                          site decaying to 1 near 5 km)
+# HP mapped mines and oil/gas as points, so these discs, not the real pits or well fields, set
+# the direct area; it is 4.8% (mines) and 7.7% (oil_gas) of their 1 km footprint. The "any"
+# rule below enlarges each disc to whole 1 km cells (x2.2 mines, x2.9 oil_gas; 2026-10-01).
 #
 # Aggregation is "max", never bilinear: bilinear downsampling spreads each 300 m cell over
 # 2x2 1 km cells, so the layers this script used to write (bilinear, until 2026-09-28) marked
