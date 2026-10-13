@@ -69,7 +69,8 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
   #
   # The old l.out$denshthresh low-density zeroing was deleted from V5's pipeline
   # (it has no counterpart in 10.Truncate.R) and is not applied. l.out still ships
-  # in the .Rdata; it is simply unused.
+  # in the .Rdata; it is simply unused. DENS_MIN (below) is our own low-density floor,
+  # a sensitivity run only.
   if (!"densmax" %in% names(q.out))
     stop("q.out has no `densmax` column - SpeciesPredictionTruncationValues.Rdata ",
          "is the pre-2026-06-04 version. Restage it from G:/Shared drives/",
@@ -89,7 +90,19 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
   # #6): only densmax caps the observed, d0 and bf sides. The observed side cannot come from
   # observed_bootstraps.tif, which 12A clamped at q99, so the workers re-predict it from the
   # observed covariates, and the parent checks that re-capping it at q99 gives the tif back.
-  drop_q99 <- Sys.getenv("DROP_Q99", "0") == "1"
+  #
+  # DENS_MIN=<birds/ha> is the sensitivity run with a low-density floor (TODO C4): every
+  # capped density below it is set to 0, per pixel and per sample, BEFORE the weight, on the
+  # observed, d0 and bf sides alike (as V5's deleted denshthresh zeroed the capped density).
+  # It removes the thin density the BRT predicts over unsuitable habitat, which a large
+  # footprint turns into many birds (CAWA can11: ~0.002 birds/ha over 440k km2).
+  sens     <- sensitivity_run()
+  drop_q99 <- sens$drop_q99
+  dens_min <- sens$dens_min
+  floor_dens <- function(x) {
+    if (dens_min > 0) x[which(x < dens_min)] <- 0
+    x
+  }
 
   if (is.null(rdata_files))
     rdata_files <- list.files(file.path(nm_root, "output/06_bootstraps", species),
@@ -145,7 +158,9 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     message(Sys.time(), " | ", species, " ", bcr_code,
             " | caps: densmax=", signif(qsp, 6), " q99=", signif(q99, 6),
             " (q99 binds ", round(qsp / q99, 1), "x lower)",
-            if (drop_q99) " | DROP_Q99: q99 not applied to obs, d0 or bf" else "")
+            if (drop_q99) " | DROP_Q99: q99 not applied to obs, d0 or bf" else "",
+            if (dens_min > 0) paste0(" | DENS_MIN: capped densities < ", dens_min,
+                                     " birds/ha set to 0 on obs, d0 and bf") else "")
     # the identity gate below still caps at q99, since it checks against observed_bootstraps.tif
     q99_cap <- if (drop_q99) Inf else q99
 
@@ -289,9 +304,16 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     if (!isTRUE(terra::compareGeom(weight_r, stack_obs[[1]], stopOnError = FALSE)))
       weight_r <- terra::resample(weight_r, stack_obs[[1]], method = "near")
     weight_super <- terra::values(weight_r, mat = FALSE)[super_idx]
-    if (all(!is.finite(weight_super)) || sum(weight_super, na.rm = TRUE) == 0)
-      stop(species, " ", bcr_code, ": weight.tif is all-zero/NA over the superset - ",
-           "it would zero every density in this BCR. Rebuild it with 12A2.")
+    # A weight that is 0 over the whole BCR is broken. One that is 0 only over the footprint
+    # is a species whose range misses the footprint here (BAWW, BBWA can41): its impact in
+    # this BCR is 0 and its observed birds still count (obs_total), so it runs on, and the
+    # pred_rows guards below skip every prediction.
+    if (!isTRUE(terra::global(weight_r, "max", na.rm = TRUE)[[1]] > 0))
+      stop(species, " ", bcr_code, ": weight.tif is all-zero/NA over the BCR - ",
+           "it would zero every density in this BCR. Rebuild it with 12C.")
+    if (sum(weight_super, na.rm = TRUE) == 0)
+      message(Sys.time(), " | ", species, " ", bcr_code, " | weight is 0 at every footprint ",
+              "pixel (range misses the footprint): impact here is 0")
 
     # observed covariates at superset pixels -------------------------------------
     # Only the layers some bootstrap model reads (predict.gbm selects var.names anyway),
@@ -357,16 +379,51 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     }
     draw_covs <- c(draw_covs, mean_only_covs)
 
-    # categorical backfill at superset pixels (constant across scenarios) --------
+    # Modelled blanks (08B_deploy_pbart.R). Where the training land leaves a covariate blank
+    # (SCANFIheightcv_* where there are no trees), 08A marks the backfilled pixels that should
+    # be blank too: <v>_blank == 1. They reach gbm as NA_real_, its missing branch, as on such
+    # land in V5's own observed predictions, and the gate below counts them as complete: a
+    # blank is part of the backfill, not missing backfill. A backfill from before 2026-10-12
+    # has no _blank layers, so nothing is blanked.
+    blank_super <- setNames(lapply(union(draw_covs, cat_vars_shared), function(v) {
+      bl <- paste0(v, "_blank")
+      if (!bl %in% names(stack_bf)) return(logical(length(super_idx)))
+      terra::values(stack_bf[[bl]], mat = FALSE)[super_idx] %in% 1
+    }), union(draw_covs, cat_vars_shared))
+    for (v in draw_covs) draw_vals_super[[v]][blank_super[[v]], ] <- NA_real_
+
+    # categorical backfill at superset pixels: the drawn classes <v>_class_001..100 (08B), one
+    # column per BART draw, so a scenario's draw index picks its classes as it picks the
+    # continuous draws. A backfill from before 2026-10-12 has only the modal class <v>, which is
+    # then used for every draw (one column). Where a pixel has no drawn class but a modal one,
+    # the modal class fills it, as <v>_mean fills the continuous draws above.
     cat_vals_super <- setNames(
       lapply(cat_vars_shared, function(v) {
         lyr_name <- if (v %in% names(stack_bf)) v else paste0(v, "_mean")
-        if (!lyr_name %in% names(stack_bf)) {
+        cls      <- paste0(v, "_class_", sprintf("%03d", seq_len(n_draws)))
+        has_mode <- lyr_name %in% names(stack_bf)
+        mode_v   <- if (has_mode) terra::values(stack_bf[[lyr_name]], mat = FALSE)[super_idx]
+        if (all(cls %in% names(stack_bf))) {
+          m <- terra::values(stack_bf[[cls]], mat = TRUE)[super_idx, , drop = FALSE]
+          if (has_mode) {
+            fill <- rowSums(!is.na(m)) == 0L & is.finite(mode_v)
+            if (any(fill)) {
+              m[fill, ] <- mode_v[fill]
+              message(Sys.time(), " | ", species, " ", bcr_code, " | ", v, ": filled ", sum(fill),
+                      " superset pixels without drawn classes from the modal class")
+            }
+          }
+        } else if (has_mode) {
+          message(Sys.time(), " | ", species, " ", bcr_code, " | ", v,
+                  ": no drawn classes in the mosaic, using the modal class for every draw")
+          m <- matrix(mode_v, ncol = 1L)
+        } else {
           message(Sys.time(), " | WARNING: no backfilled layer for categorical var ", v,
                   " — filling NA")
-          return(rep(NA_integer_, length(super_idx)))
+          return(matrix(NA_real_, length(super_idx), 1L))
         }
-        terra::values(stack_bf[[lyr_name]], mat = FALSE)[super_idx]
+        m[blank_super[[v]], ] <- NA_real_
+        m
       }), cat_vars_shared)
 
     # canonical observed bootstraps (from 12A; always present now that the colleague's
@@ -384,6 +441,8 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     # apply prediction weight to observed density (range/water/extent masking).
     # weights BOTH O_c (obs_on source) and obs_total_byboot (zonal) downstream,
     # mirroring the retired predict_species_bcr where a single weighted obs_preds fed both quantities.
+    # DENS_MIN floors the capped tif before the weight, as the workers floor d0 and bf.
+    if (dens_min > 0) obs_preds <- lapply(obs_preds, function(r) terra::ifel(r < dens_min, 0, r))
     obs_preds <- lapply(obs_preds, function(r) r * weight_r)
     message(Sys.time(), " | ", species, " ", bcr_code, " | loaded ",
             length(obs_preds), " canonical observed bootstraps (weighted)")
@@ -394,7 +453,7 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
 
     # ---- complete-case mask over the SUPERSET design matrix (coalition-free) ---
     X_rep <- X_obs_super
-    for (v in cat_vars_shared) if (v %in% names(X_rep)) X_rep[[v]] <- cat_vals_super[[v]]
+    for (v in cat_vars_shared) if (v %in% names(X_rep)) X_rep[[v]] <- cat_vals_super[[v]][, 1L]
     for (v in dist_shared)     if (v %in% names(X_rep)) X_rep[[v]] <- 0
     # Categoricals are gated on the RAW backfilled class, not on a factor: a class some
     # bootstrap never saw is not missing backfill, and each model routes it as predict.gbm
@@ -410,8 +469,10 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     # signal itself, so they MUST be complete. Range/water/extent is handled separately
     # by weight_super (12A2), not by this gate. A single complete_mask still drives BOTH
     # the re-predicted field and obs_on (via keep_rows), so obs/bf parity is preserved.
+    # A modelled blank (blank_super) is complete.
     backfilled_vars <- intersect(c(draw_covs, cat_vars_shared), model_vars_shared)
-    complete_mask <- stats::complete.cases(X_rep[, backfilled_vars, drop = FALSE])
+    complete_mask <- Reduce(`&`, lapply(backfilled_vars, function(v) !is.na(X_rep[[v]]) | blank_super[[v]]),
+                            rep(TRUE, nrow(X_rep)))
     message(Sys.time(), " | ", species, " ", bcr_code, " | complete superset pixels: ",
             sum(complete_mask), " / ", length(super_idx),
             " (", round(100 * mean(complete_mask), 1), "%)")
@@ -526,7 +587,7 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     # dominate memory (CAWA can11: 17 covariates x 652,655 superset rows x 100 draws x 8 B
     # = 8.9 GB, 35% of it never predicted), so keep just those rows, one matrix at a time.
     X_pred <- X_obs_super[pred_rows, , drop = FALSE]; rm(X_obs_super)
-    cat_vals_pred  <- lapply(cat_vals_super, function(v) v[pred_rows]); rm(cat_vals_super)
+    cat_vals_pred  <- lapply(cat_vals_super, function(v) v[pred_rows, , drop = FALSE]); rm(cat_vals_super)
     draw_vals_pred <- draw_vals_super; rm(draw_vals_super)
     for (v in names(draw_vals_pred))
       draw_vals_pred[[v]] <- draw_vals_pred[[v]][pred_rows, , drop = FALSE]
@@ -541,7 +602,8 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
     n_cores <- max(1L, as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", "1")))
     message(Sys.time(), " | ", species, " ", bcr_code, " | sampling ", n_boot,
             " bootstraps x ", n_scen, " scenarios on ", n_cores, " core(s)")
-    multi_draw <- any(vapply(draw_vals_pred[draw_covs], ncol, integer(1L)) > 1L)
+    multi_draw <- any(vapply(c(draw_vals_pred[draw_covs], cat_vals_pred), ncol, integer(1L)) > 1L)
+    ci_full    <- match(2L^n_sectors, all_cids)        # the all-sector coalition (cid 256)
 
     boot_res <- parallel::mclapply(seq_along(b.list), function(i) {
       model <- b.list[[i]]
@@ -570,7 +632,7 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
         d0_c[pred_in_c] <- gbm_predict_design(model, gbm_design(model, X_d))
         rm(X_d)
       }
-      d0_c   <- pmin(pmin(d0_c, qsp), q99_cap) * w_c
+      d0_c   <- floor_dens(pmin(pmin(d0_c, qsp), q99_cap)) * w_c
       n_bad0 <- sum(is.na(d0_c))
       # DROP_Q99: the observed side, densmax-capped and unweighted (the parent checks and weights it)
       o_c <- NULL
@@ -590,21 +652,43 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
         if (coal_state[ci] != 2L) return(NULL)
         d0[[ci]] - coal_rowsum(matrix(d0_c, ncol = 1L), direct_rows[[ci]], zi_c, n_sub) * 100
       })
+      # per-pixel counterfactual of the all-sector coalition for the pixel maps: d0 here, and
+      # the mean over this bootstrap's scenarios on its direct pixels once sc is filled below
+      cf_full <- d0_c
       rm(d0_c); invisible(gc(full = FALSE))
 
       # design matrix built ONCE per bootstrap; per draw only the draw columns change
       if (length(pred_rows) > 0L) {
         X_k <- X_pred
-        for (v in cat_vars_shared) if (v %in% names(X_k)) X_k[[v]] <- cat_vals_pred[[v]]
+        for (v in cat_vars_shared) if (v %in% names(X_k)) {
+          cv <- cat_vals_pred[[v]]
+          X_k[[v]] <- cv[, if (ncol(cv) == 1L) 1L else chosen_k[1L]]
+        }
         for (v in dist_shared)     if (v %in% names(X_k)) X_k[[v]] <- 0
         X_k  <- as_model_factors(X_k, model, cat_vars_shared)
         dcol <- match(draw_covs, model$var.names)           # NA: not read by this model
+        # drawn classes change per draw too: their 0-based codes in THIS model's levels, as
+        # as_model_factors() + gbm_design() build them (a class it never saw -> NA, the
+        # missing branch); a model without levels for the variable reads it raw, as there
+        ccol <- match(cat_vars_shared, model$var.names)
+        ccol[vapply(cat_vars_shared, function(v) ncol(cat_vals_pred[[v]]) == 1L, logical(1L))] <- NA
+        cat_code <- function(j, k) {
+          lv <- model$var.levels[[ccol[j]]]
+          x  <- cat_vals_pred[[cat_vars_shared[j]]][, k]
+          if (is.null(lv) || length(lv) == 0L) return(as.double(x))
+          as.numeric(factor(as.character(x), levels = as.character(lv))) - 1
+        }
         for (v in draw_covs) if (v %in% names(X_k)) {
           dv <- draw_vals_pred[[v]]
           X_k[[v]] <- dv[, if (ncol(dv) == 1L) 1L else chosen_k[1L]]
         }
         D <- gbm_design(model, X_k)
         gbm_check_fast(model, X_k, D, label = paste(species, bcr_code, "bootstrap", i))
+        # D holds the first scenario's draw, so its class columns are gbm_design's own coding
+        for (j in which(!is.na(ccol)))
+          if (!identical(cat_code(j, chosen_k[1L]), D[, ccol[j]]))
+            stop(species, " ", bcr_code, " bootstrap ", i, ": drawn-class codes for ",
+                 cat_vars_shared[j], " differ from gbm_design()'s")
         rm(X_k)
       }
 
@@ -625,12 +709,13 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
             dv <- draw_vals_pred[[draw_covs[j]]]
             D[, dcol[j]] <- dv[, if (ncol(dv) == 1L) 1L else chosen]
           }
+          for (j in which(!is.na(ccol))) D[, ccol[j]] <- cat_code(j, chosen)
           pred_c[pred_in_c] <- gbm_predict_design(model, D)
         }
         # both V5 upper caps, in 10.Truncate.R order (densmax then the frozen q99), then
         # the prediction weight (V5 order: truncate, then range-multiply); symmetric with
-        # the observed side, so bf - obs stays w*(bf - obs)
-        sc_d <- pmin(pmin(pred_c, qsp), q99_cap) * w_c
+        # the observed side, so bf - obs stays w*(bf - obs). DENS_MIN floors before the weight.
+        sc_d <- floor_dens(pmin(pmin(pred_c, qsp), q99_cap)) * w_c
         # NA audit. The reduce below has no na.rm, so one NA in a kept pixel NA-s that
         # subbasin's ENTIRE bf total while the obs side zeroes its NAs -- a one-sided loss.
         # complete_mask is built from draw 1 as a proxy for all 100 draws, so a pixel
@@ -649,7 +734,11 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
         coal_rowsum(sc, direct_rows[[ci]], zi_c, n_sub) * 100 +
           d0_infl[[ci]][, rep(1L, n_scen), drop = FALSE]
       })
-      list(bf = bf, d0 = d0, obs = o_c, n_bad = as.numeric(n_bad + n_bad0))
+      if (coal_state[ci_full] == 2L) {
+        dr <- direct_rows[[ci_full]]
+        cf_full[dr] <- rowMeans(sc[dr, , drop = FALSE])
+      }
+      list(bf = bf, d0 = d0, obs = o_c, cf_full = cf_full, n_bad = as.numeric(n_bad + n_bad0))
     }, mc.cores = n_cores, mc.preschedule = FALSE)   # one fork per bootstrap, freed on exit
 
     # A worker the kernel kills (e.g. out of memory) returns NULL, not a try-error.
@@ -836,6 +925,38 @@ predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
         obs_total_mean = ot_stats$mean,  obs_total_sd = ot_stats$sd,
         obs_on_coalition_mean = ooc_stats$mean, obs_on_coalition_sd = ooc_stats$sd,
         bf_on_coalition_mean = bf_stats$mean,   bf_on_coalition_sd = bf_stats$sd)
+    }
+
+    # ---- per-pixel change of the all-sector coalition, for the pixel maps (18) ----------
+    # Mean over all samples of the observed and the counterfactual density at each footprint
+    # pixel the tables sum (birds/km2, weighted). Summed over a subbasin's pixels they must give
+    # its cid-256 table entry, so the maps add up to the tables; stop() otherwise.
+    if (coal_state[ci_full] == 2L) {
+      kr_full <- keep_rows[[ci_full]]
+      cf_px   <- Reduce(`+`, lapply(boot_res, `[[`, "cf_full"))[kr_full] / n_boot * 100
+      O0      <- O_c[kr_full, , drop = FALSE]; O0[is.na(O0)] <- 0
+      obs_px  <- rowMeans(O0) * 100
+      zk      <- factor(zi_c[kr_full], levels = seq_len(n_sub))
+      sub_sum <- function(v) { s <- as.numeric(tapply(v, zk, sum)); s[is.na(s)] <- 0; s }
+      tb      <- coalition_tables[[ci_full]]
+      has_px  <- !is.nan(tb$obs_on_coalition_mean)
+      if (!isTRUE(all.equal(sub_sum(cf_px), tb$bf_on_coalition_mean, tolerance = 1e-8)) ||
+          !isTRUE(all.equal(sub_sum(obs_px)[has_px], tb$obs_on_coalition_mean[has_px], tolerance = 1e-8)))
+        stop(species, " ", bcr_code, ": per-pixel means do not sum to the cid-256 table")
+      px_dir <- file.path(ia_dir, "data", "derived_data", paste0("density_tables", sens$suffix), "pixel_change")
+      dir.create(px_dir, recursive = TRUE, showWarnings = FALSE)
+      px_r   <- terra::rast(subbasin_zone_r, nlyrs = 2L)
+      px_val <- matrix(NA_real_, terra::ncell(px_r), 2L)
+      px_val[super_idx[c_rows[kr_full]], ] <- cbind(obs_px, cf_px)
+      terra::values(px_r) <- px_val
+      names(px_r) <- c("obs", "cf")
+      px_f <- file.path(px_dir, paste0(species, "_", year, "_", bcr_code, ".tif"))
+      terra::writeRaster(px_r, sub("\\.tif$", "_partial.tif", px_f), overwrite = TRUE,
+                         datatype = "FLT4S", gdal = "COMPRESS=DEFLATE")
+      if (!file.rename(sub("\\.tif$", "_partial.tif", px_f), px_f)) stop("could not move ", px_f, " into place")
+      message(Sys.time(), " | ", species, " ", bcr_code, " | wrote ", px_f, " (", length(kr_full),
+              " footprint pixels; they sum to the cid-256 table)")
+      rm(px_r, px_val, O0, cf_px, obs_px)
     }
 
     list(coalition_tables = coalition_tables,

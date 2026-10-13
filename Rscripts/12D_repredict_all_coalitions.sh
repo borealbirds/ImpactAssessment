@@ -25,7 +25,7 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
   [ $N -ge 1 ] || { echo "no can* models for SPECIES=$SPECIES${TEST_BCR:+ in TEST_BCR=$TEST_BCR}"; exit 1; }
   J=$(sbatch --parsable --export=ALL --array=1-$N "$0")
   H=$(sbatch --parsable --export=ALL --dependency=afterany:$J 12H_merge_bcr_tables.sh)
-  echo "COAL species=$SPECIES${TEST_BCR:+ TEST_BCR=$TEST_BCR}${TEST_N_BOOT:+ TEST_N_BOOT=$TEST_N_BOOT}${DROP_Q99:+ DROP_Q99=$DROP_Q99} 12D=$J (1-$N) 12H=$H"
+  echo "COAL species=$SPECIES${TEST_BCR:+ TEST_BCR=$TEST_BCR}${TEST_N_BOOT:+ TEST_N_BOOT=$TEST_N_BOOT}${DROP_Q99:+ DROP_Q99=$DROP_Q99}${DENS_MIN:+ DENS_MIN=$DENS_MIN} 12D=$J (1-$N) 12H=$H"
   exit 0
 fi
 

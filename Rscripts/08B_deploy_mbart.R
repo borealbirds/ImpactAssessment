@@ -1,3 +1,10 @@
+# 100 drawn-class layers <b>_class_001..100, each from `draw(n)` (n classes, ecological codes)
+add_class_draws <- function(out_layers, b, draw, n) {
+  for (d in seq_len(100L))
+    out_layers[[paste0(b, "_class_", sprintf("%03d", d))]] <- unname(draw(n))
+  out_layers
+}
+
 deploy_mbart <- function(
     b,
     df_train,
@@ -88,6 +95,8 @@ deploy_mbart <- function(
       out_layers[[b]] <- b_mode
       out_layers[[paste0(b, "_maxprob")]] <- b_maxprob
       out_layers[[paste0(b, "_entropy")]] <- b_entropy
+      set.seed(abs(as.integer(sprintf("%d%03d", subbasin_index, which(biotic_cols==b)))))
+      out_layers <- add_class_draws(out_layers, b, function(n) inv_map[sample(names(tab), n, replace = TRUE, prob = probs)], 1L)
       
       logp("[%s] single backfill pixel: skipped mbart()", b)
       
@@ -125,6 +134,8 @@ deploy_mbart <- function(
        out_layers[[b]] <- b_mode
        out_layers[[paste0(b, "_maxprob")]] <- rep(b_maxprob, nrow(df_backfill_bart))
        out_layers[[paste0(b, "_entropy")]] <- rep(b_entropy, nrow(df_backfill_bart))
+       out_layers <- add_class_draws(out_layers, b, function(n) inv_map[sample(names(tab), n, replace = TRUE, prob = probs)],
+                                     nrow(df_backfill_bart))
 
        logp("[%s] degenerate after holdout split: single class", b)
 
@@ -136,13 +147,23 @@ deploy_mbart <- function(
        ))
     }
     
+    # mbart2 fits one probit model per class h in 1..K against y == h (K = the classes in its
+    # training rows), so those classes must be numbered 1..K. A class that fell only in the
+    # holdout would leave a gap: one model would fit an all-zero response and the top class
+    # would never be fitted. Renumber over the training split's classes; the holdout pixels
+    # keep their true codes for the metrics.
+    holdout_codes <- present[y_int[holdout_idx]]
+    train_codes   <- present[y_train_int]
+    present       <- present[sort(unique(y_train_int))]
+    y_train_int   <- match(train_codes, present)
+
     # multinomial bart keeps every 10th posterior sample (gbart keeps every sample)
     # so mbart will take at least 10 times longer
     # gbart assumes continuous residuals -> conjugate priors -> less autocorrelation -> no thinning
     # mbart uses latent variables -> non-conjugate updates -> more autocorrelation -> needs thinning
     # mbart runs K times (e.g. 11 classes will take 11 times longer than gbart)
     fit <- BART::mbart2(x.train = as.matrix(df_train_bart),
-                        y.train = y_int[-holdout_idx],
+                        y.train = y_train_int,
                         x.test  = as.matrix(df_backfill_bart),
                         type = "pbart",
                         k = 3,
@@ -183,12 +204,34 @@ deploy_mbart <- function(
     out_layers[[b]]                          <- b_mode
     out_layers[[paste0(b, "_maxprob")]]      <- b_maxprob
     out_layers[[paste0(b, "_entropy")]]      <- b_entropy
+
+    # drawn classes, what 12F uses: in each of 100 posterior draws, every pixel's class is sampled
+    # from that draw's class probabilities. The modal class above (kept for the metrics) gives
+    # the majority class to every pixel where it is likeliest, so it over-represents it and
+    # erases minority classes: on BOBO can13's footprint, mixed forest 65% vs 29% on the
+    # nearest training land, herbs 0% vs 5% (16C, 2026-10-09).
+    # The probabilities are each class's probit model, P(y = k) = pnorm(z_k), normalised to sum
+    # to 1. mbart2's own prob.test is exp(z_k) / sum(exp(z)), a softmax meant for logits: on the
+    # narrower probit scale it flattens the probabilities, roughly doubling the rare classes
+    # (held-out training pixels, can13 subbasin 98: herbs 3.1% observed, 6.1% softmax, 3.2%
+    # normalised probit; lower log loss in subbasins 98, 72, 56). Within a draw both rank the
+    # classes alike, so only the drawn classes, not the modal class, depend on the choice.
+    draw_idx <- sample(nrow(fit$yhat.test), 100L)
+    for (d in seq_along(draw_idx)) {
+      P  <- stats::pnorm(matrix(fit$yhat.test[draw_idx[d], ], ncol = K_model, byrow = TRUE))
+      cp <- P
+      for (j in seq_len(K_model)[-1L]) cp[, j] <- cp[, j - 1L] + P[, j]
+      u  <- stats::runif(nrow(P)) * cp[, K_model]
+      k  <- pmin(1L + rowSums(cp < u), K_model)
+      out_layers[[paste0(b, "_class_", sprintf("%03d", d))]] <- present[fit$cats][k]
+    }
+    rm(P, cp)
     
     # collect metrics for categorical covariate b
     if (K >= 2){
       metrics[[length(metrics) + 1L]] <- collect_metrics_mbart(
         fit,
-        y         = present[y_int[-holdout_idx]],
+        y         = train_codes,
         X_train   = df_train_bart,
         covariate = b,
         subbasin  = subbasin_index,
@@ -204,7 +247,7 @@ deploy_mbart <- function(
     metrics[[length(metrics) + 1L]] <- collect_holdout_metrics_mbart(
       fit       = fit,
       pred      = pred,
-      actual_holdout_class = present[y_int[holdout_idx]],
+      actual_holdout_class = holdout_codes,
       covariate = b,
       subbasin  = subbasin_index,
       year      = year,
@@ -216,8 +259,8 @@ deploy_mbart <- function(
     prob_ecol <- matrix(pred$prob.test.mean, ncol = K_model, byrow = TRUE)
     colnames(prob_ecol) <- present[fit$cats]
     
-    yhat_holdout_class <- present[max.col(prob_ecol, ties.method = "first")]
-    actual_holdout_class <- present[y_int[holdout_idx]]
+    yhat_holdout_class <- present[fit$cats][max.col(prob_ecol, ties.method = "first")]
+    actual_holdout_class <- holdout_codes
     
     confusion[[length(confusion) + 1L]] <- data.frame(
       covariate = b,

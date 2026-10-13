@@ -99,3 +99,21 @@ canonical_sectors <- function() {
   sort(c("built", "crop", "dam_and_associated_reservoir",
          "mines", "oil_gas", "pasture", "rail", "roads"))
 }
+
+#' Which sensitivity run 12D/12F/12H/14B are in, from the environment
+#' DROP_Q99=1 leaves the frozen q99 cap out (TODO C3). DENS_MIN=<birds/ha> zeroes every capped
+#' density below it, before the weight, on the observed, d0 and bf sides alike (TODO C4).
+#' Each run reads and writes its own directories, density_tables{suffix}/ and
+#' sector_effects{suffix}/; production has suffix "".
+#' @return list(drop_q99, dens_min, suffix)
+sensitivity_run <- function() {
+  drop_q99 <- Sys.getenv("DROP_Q99", "0") == "1"
+  dm_env   <- Sys.getenv("DENS_MIN", "")
+  dens_min <- if (nchar(dm_env) == 0L) 0 else suppressWarnings(as.numeric(dm_env))
+  if (!is.finite(dens_min) || dens_min < 0)
+    stop("DENS_MIN must be a density in birds/ha >= 0, not '", dm_env, "'")
+  if (drop_q99 && dens_min > 0)
+    stop("DROP_Q99 and DENS_MIN are separate sensitivity runs: set one of them")
+  list(drop_q99 = drop_q99, dens_min = dens_min,
+       suffix = if (drop_q99) "_noq99" else if (dens_min > 0) paste0("_dmin", format(dens_min)) else "")
+}

@@ -53,13 +53,15 @@ source(file.path(ia_dir, "Rscripts", "12E_shapley_utils.R"))
 
 # ---- Paths -------------------------------------------------------------------
 
-# DROP_Q99=1 reads and writes the no-q99 sensitivity run (12F; TODO C3). Its observed totals
-# (the % denominators) are still the q99-capped ones: 12F re-predicts only the footprint.
-drop_q99   <- Sys.getenv("DROP_Q99", "0") == "1"
-dt_dir     <- file.path(ia_dir, "data/derived_data", if (drop_q99) "density_tables_noq99" else "density_tables")
+# A sensitivity run reads and writes its own density_tables{suffix}/ and sector_effects{suffix}/
+# (12E sensitivity_run()). DROP_Q99=1 (TODO C3): the observed totals (the % denominators) are
+# still the q99-capped ones, since 12F re-predicts only the footprint. DENS_MIN=<birds/ha>
+# (TODO C4): the observed totals are floored too, so they are lower than production's.
+sens       <- sensitivity_run()
+dt_dir     <- file.path(ia_dir, "data/derived_data", paste0("density_tables", sens$suffix))
 basin_path <- file.path(ia_dir, "data/raw_data/hydrobasins_masked_merged_subset.gpkg")
 flag_path  <- file.path(ia_dir, "data/derived_data/rds_files/extrapolation_flags.csv")
-out_dir    <- file.path(ia_dir, "data/derived_data", if (drop_q99) "sector_effects_noq99" else "sector_effects")
+out_dir    <- file.path(ia_dir, "data/derived_data", paste0("sector_effects", sens$suffix))
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
 # ---- Load hydrobasins --------------------------------------------------------

@@ -38,10 +38,10 @@ if (length(species_vec) == 0L)
   stop("set SPECIES to the species 12D ran (12D_repredict_all_coalitions.sh chains this job with it)")
 year <- 2020
 
-# DROP_Q99=1 merges the no-q99 sensitivity run (12F; TODO C3) in its own directory
-drop_q99 <- Sys.getenv("DROP_Q99", "0") == "1"
-dt_dir  <- file.path(ia_dir, "data", "derived_data",
-                     if (drop_q99) "density_tables_noq99" else "density_tables")
+# A sensitivity run (DROP_Q99=1, TODO C3; DENS_MIN=<birds/ha>, TODO C4; see 12F) is merged
+# in its own directory, density_tables{suffix}/
+sens    <- sensitivity_run()
+dt_dir  <- file.path(ia_dir, "data", "derived_data", paste0("density_tables", sens$suffix))
 arr_dir <- file.path(dt_dir, "arrays")
 dir.create(arr_dir, recursive = TRUE, showWarnings = FALSE)
 
@@ -57,7 +57,9 @@ test_n_boot <- Sys.getenv("TEST_N_BOOT", "")
 test_export <- if (nchar(test_bcr) > 0L)
   paste0(" --export=ALL,TEST_BCR=", test_bcr,
          if (nchar(test_n_boot) > 0L) paste0(",TEST_N_BOOT=", test_n_boot) else "") else ""
-if (drop_q99) test_export <- paste0(if (nchar(test_export) > 0L) test_export else " --export=ALL", ",DROP_Q99=1")
+sens_export <- c(if (sens$drop_q99) "DROP_Q99=1", if (sens$dens_min > 0) paste0("DENS_MIN=", sens$dens_min))
+if (length(sens_export) > 0L)
+  test_export <- paste0(if (nchar(test_export) > 0L) test_export else " --export=ALL", ",", sens_export)
 missing <- tasks[!file.exists(tasks$file), ]
 if (nrow(missing) > 0L)
   stop(nrow(missing), " per-BCR result(s) missing: ",
@@ -93,9 +95,14 @@ if (!identical(prov$n_boot[1], if (nchar(test_n_boot) > 0L && test_n_boot != "0"
        if (nchar(test_n_boot) > 0L) test_n_boot else "(unset)",
        " - pass the same TEST_N_BOOT to 12H as to 12D, so a smoke is never merged as production")
 rec_q99 <- vapply(recs, function(r) isTRUE(r$drop_q99), logical(1L))
-if (any(rec_q99 != drop_q99))
-  stop(sum(rec_q99 != drop_q99), " per-BCR file(s) in ", dt_dir, " have DROP_Q99 ",
-       if (drop_q99) "unset" else "set", ", unlike this merge")
+if (any(rec_q99 != sens$drop_q99))
+  stop(sum(rec_q99 != sens$drop_q99), " per-BCR file(s) in ", dt_dir, " have DROP_Q99 ",
+       if (sens$drop_q99) "unset" else "set", ", unlike this merge")
+rec_dmin <- vapply(recs, function(r) if (is.null(r$dens_min)) 0 else r$dens_min, numeric(1L))
+if (any(rec_dmin != sens$dens_min))
+  stop(sum(rec_dmin != sens$dens_min), " per-BCR file(s) in ", dt_dir, " have DENS_MIN ",
+       paste(unique(rec_dmin[rec_dmin != sens$dens_min]), collapse = ", "),
+       ", unlike this merge's ", sens$dens_min)
 if (any(prov$n_boot != "all"))
   message(Sys.time(), " | NOTE: these are TEST_N_BOOT=", prov$n_boot[1], " smoke results")
 

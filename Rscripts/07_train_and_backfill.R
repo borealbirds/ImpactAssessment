@@ -138,6 +138,11 @@ stack_y <- terra::rast(stack_path)
 # define categorical features
 categorical_responses = c("ABoVE_1km", "NLCD_1km","MODISLCC_1km", "MODISLCC_5x5","SCANFI_1km","VLCE_1km")
 
+# each land-cover layer's open-water class: left out of its training pixels, so the backfill
+# never predicts water (08A). SCANFI 8, VLCE 20, MODIS IGBP 17 "water bodies". ABoVE_1km and
+# NLCD_1km are not in the covariate mosaic, so they are never backfilled.
+water_classes <- list(SCANFI_1km = 8, VLCE_1km = 20, MODISLCC_1km = 17, MODISLCC_5x5 = 17)
+
 # low- and high-HF masks (training vs backfilled pixels) for this year's footprint:
 # hirshpearson/CanHF_1km_{lessthan1,morethan1}_{year}.tif, or the undated files for 2020.
 # Another year's footprint differs from 2020's, so a year without its own masks stops here;
@@ -176,6 +181,7 @@ backfill_results <- tryCatch(
                   quiet          = FALSE,
                   neworder       = neworder,
                   categorical_responses = categorical_responses,
+                  water_classes         = water_classes,
                   all_subbasins_subset  = all_subbasins_subset,
                   cc = cc
                 ), # close train_and_backfill_subbasin_s

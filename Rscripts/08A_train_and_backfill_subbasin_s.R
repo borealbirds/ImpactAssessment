@@ -1,25 +1,99 @@
+# BART predictors for one response: the training rows' predictors and the backfill's, with the
+# same columns in the same order. Used by the amount models (gbart/mbart) and the blank model
+# (pbart), each with its own training rows.
+prep_bart_design <- function(df_train_bart, df_backfill, logp) {
+
+  # drop predictors that are all NAs
+  df_train_bart <- df_train_bart[, colSums(!is.na(df_train_bart)) > 0, drop = FALSE]
+  logp("training pixels = %d", nrow(df_train_bart))
+  logp("training predictors = %d", ncol(df_train_bart))
+
+  # drop predictors with zero variance
+  # note: in subbasin 57 we had the unlikely case of only a single non-NA value for CAfire, which gives sd()=NA
+  col_sd <- sapply(df_train_bart, function(x) sd(as.numeric(x), na.rm = TRUE))
+  df_train_bart <- df_train_bart[, !is.na(col_sd) & col_sd > 0 , drop = FALSE]
+
+  # subset backfill dataframe to the same abiotic_cols, biotic_cols, lat/long
+  # because we can't backfill covariates that we didn't train models for
+  df_backfill_bart  <- df_backfill[, colnames(df_train_bart), drop = FALSE]
+
+  # check that the backfill dataframe doesn't have any all-NA predictors (different pixels than training locations, so it's possible..)
+  # if it does, remove them from both training and backfill dataframes. Except a predictor that
+  # is blank on part of the training land: there an all-blank backfill is information (e.g. a
+  # backfill blank everywhere for SCANFIheightcv_1km, as no trees), which its `_isNA` flag below
+  # carries, as it does on the training land.
+  flaggable <- colSums(is.na(df_train_bart)) > 0L & colSums(!is.na(df_train_bart)) > 0L
+  df_backfill_bart <- df_backfill_bart[, colSums(!is.na(df_backfill_bart)) > 0 | flaggable, drop = FALSE]
+  df_train_bart <- df_train_bart[, colnames(df_backfill_bart), drop = FALSE]
+
+  # impute (and flag) partial-NA predictors (mirror gbm's native NA handling)
+  # BART cannot tolerate NA: any row with an NA predictor yields a NaN
+  # posterior draw, which then drops the pixel from the counterfactual entirely.
+  # for every predictor that still has NAs (e.g. greenup values on lakes, add a binary `<col>_isNA`
+  # indicator and replace the NA with the median value from the training data.
+  # The indicator lets BART split on "was missing" (preserving informative missingness, e.g. water), while the
+  # fill keeps the row complete so a real posterior draw is produced.
+  # A backfilled biotic predictor is blank only where 08B_deploy_pbart.R modelled it blank, so
+  # its flag reads as it does on the training land rather than 0 on every backfilled pixel.
+  na_cols <- names(df_train_bart)[
+    colSums(is.na(df_train_bart)) > 0L | colSums(is.na(df_backfill_bart)) > 0L]
+
+  na_cols <- setdiff(na_cols, c("x", "y"))   # never flag the scaled coordinates
+  for (cna in na_cols) {
+    fill <- stats::median(df_train_bart[[cna]], na.rm = TRUE)
+    if (!is.finite(fill)) fill <- 0          # guard (every col has >=1 non-NA here)
+    tr_flag <- as.integer(is.na(df_train_bart[[cna]]))
+    bf_flag <- as.integer(is.na(df_backfill_bart[[cna]]))
+    # only keep the indicator if it varies in training (BART needs variance); when the
+    # NA is backfill-only (e.g. phenology on water absent from low-HF training) the flag
+    # carries no training signal, so the fill alone is used.
+    # these pixels are typically water and are masked downstream by weight.tif.
+    if (length(unique(tr_flag)) > 1L) {
+      flag_name <- paste0(cna, "_isNA")
+      df_train_bart[[flag_name]]    <- tr_flag
+      df_backfill_bart[[flag_name]] <- bf_flag
+    }
+    df_train_bart[[cna]][is.na(df_train_bart[[cna]])]       <- fill
+    df_backfill_bart[[cna]][is.na(df_backfill_bart[[cna]])] <- fill
+  }
+  # keep train/backfill column sets identical and in the same order after additions
+  df_backfill_bart <- df_backfill_bart[, colnames(df_train_bart), drop = FALSE]
+  if (length(na_cols) > 0L)
+    logp("imputed+flagged %d partial-NA predictor(s): %s",
+         length(na_cols), paste(na_cols, collapse = ", "))
+
+  list(train = df_train_bart, backfill = df_backfill_bart)
+}
+
+
 train_and_backfill_subbasin_s <- function(
-  subbasin_index, 
-  year, 
-  stack_y,     # SpatRaster 
-  lowhf_mask,  # SpatRaster 
-  highhf_mask, # SpatRaster 
+  subbasin_index,
+  year,
+  stack_y,     # SpatRaster
+  lowhf_mask,  # SpatRaster
+  highhf_mask, # SpatRaster
   all_subbasins_subset, # SpatVector
   abiotic_vars, # tibble with column `predictor`
   biotic_vars,  # tibble with column `predictor`
   categorical_responses, # character vector of layer names
+  water_classes, # named list: each land-cover layer's open-water class code(s)
   ia_dir,
-  neworder, 
+  neworder,
   quiet = FALSE,
   cc
 ) {
-  
+
   # source BART metrics summary functions
   source(file.path(ia_dir, "Rscripts", "08B_deploy_gbart.R"))
   source(file.path(ia_dir, "Rscripts", "08B_deploy_mbart.R"))
-  
+  source(file.path(ia_dir, "Rscripts", "08B_deploy_pbart.R"))
+
+  # BART_MODELS_DIR (default bart_models) sends a test run's backfills and logs elsewhere
+  bart_dir <- Sys.getenv("BART_MODELS_DIR", "bart_models")
+
   # for logging progress
-  logfile <- file.path(ia_dir, "logs", sprintf("Y%d_S%d.log", year, subbasin_index))
+  logfile <- file.path(ia_dir, "logs", if (bart_dir == "bart_models") "" else bart_dir,
+                       sprintf("Y%d_S%d.log", year, subbasin_index))
   logp <- make_logger(logfile)
   on.exit(logp("done"), add = TRUE)
   
@@ -50,7 +124,9 @@ train_and_backfill_subbasin_s <- function(
   # df_train will have NAs filtered per covariate using `idx` in `for (b in biotic_cols) {`
   cov_train_s <- terra::mask(x = cov_s, mask = lowhf_mask_s)
   df_train    <- terra::as.data.frame(cov_train_s, xy = TRUE, na.rm = FALSE)
-  
+  # the low-HF rows themselves, blank covariates included (for the blank model, 08B_deploy_pbart.R)
+  train_rows  <- which(terra::values(lowhf_mask_s, mat = FALSE) == 1)
+
   # put marked pixels (1s) from highhf_mask_s into a dataframe
   # keep track of non-NA pixels in `backfill_idx`
   # these will be used for re-populating an empty raster with backfill values 
@@ -108,7 +184,30 @@ train_and_backfill_subbasin_s <- function(
     
     # training data: keep only the rows where biotic feature `b` is observed
     idx <- which(!is.na(df_train[[b]]))
-    
+
+    # A land-cover layer's open-water class is left out of its training rows, so the backfill
+    # never predicts water: a footprint pixel's counterfactual is land. (Production 2026-09-28
+    # labelled 94% of can13 subbasin 72's backfill SCANFI_1km water; 7% of its training land was.)
+    # Observed water is masked by weight.tif on both sides regardless.
+    if (b %in% names(water_classes)) {
+      is_water <- df_train[[b]][idx] %in% water_classes[[b]]
+      if (any(is_water))
+        logp("[%s] %d water training pixels (class %s) left out", b, sum(is_water),
+             paste(water_classes[[b]], collapse = "/"))
+      idx <- idx[!is_water]
+    }
+
+    # biotic predictors that precede `b` in `neworder`
+    if (!(b %in% categorical_responses)){
+      b_before <- biotic_cols_cont[seq_len(match(b, biotic_cols_cont) - 1)]
+    } else {
+      b_before <- biotic_cols_cont 
+    }
+  
+    # the predictors for b are abiotic_cols, b_before, and lat/long
+    # note: categorical biotic features excluded from predicting continuous biotic features
+    predictors <- c(abiotic_cols, b_before, "x", "y")
+
     # check that sample size of b > 1, and for b invariance
     if (length(idx) == 0 || length(unique(df_train[[b]][idx])) < 2) {
       
@@ -123,134 +222,92 @@ train_and_backfill_subbasin_s <- function(
         out_layers[[b]]                     <- rep(const_val, nrow(df_backfill))
         out_layers[[paste0(b, "_maxprob")]] <- rep(1,          nrow(df_backfill))
         out_layers[[paste0(b, "_entropy")]] <- rep(0,          nrow(df_backfill))
+        for (d in seq_len(100L))
+          out_layers[[paste0(b, "_class_", sprintf("%03d", d))]] <- rep(const_val, nrow(df_backfill))
       } else {
         out_layers[[paste0(b, "_mean")]] <- rep(const_val, nrow(df_backfill))
         out_layers[[paste0(b, "_sd")]]   <- rep(0,          nrow(df_backfill))
       }
       
       logp("[%s] constant in subbasin: backfill raster populated with %s", b, const_val)
-      next
-    }
-    
-    # biotic predictors that precede `b` in `neworder`
-    if (!(b %in% categorical_responses)){
-      b_before <- biotic_cols_cont[seq_len(match(b, biotic_cols_cont) - 1)]
+
     } else {
-      b_before <- biotic_cols_cont 
-    }
   
-    # the predictors for b are abiotic_cols, b_before, and lat/long
-    # note: categorical biotic features excluded from predicting continuous biotic features
-    predictors <- c(abiotic_cols, b_before, "x", "y")
-  
-    # create training data frame (i.e. predictors) for b
-    # columns are abiotic_cols, biotic_cols (except b), lat/long
-    # rows are pixel locations with low HF (idx are non-NA cells for b)
-    df_train_bart <- df_train[idx, predictors, drop = FALSE]
-  
-    # drop predictors that are all NAs
-    df_train_bart <- df_train_bart[, colSums(!is.na(df_train_bart)) > 0]
-    logp("training pixels = %d", nrow(df_train_bart))
-    logp("training predictors = %d", ncol(df_train_bart))
-    
-    # drop predictors with zero variance
-    # note: in subbasin 57 we had the unlikely case of only a single non-NA value for CAfire, which gives sd()=NA
-    col_sd <- sapply(df_train_bart, function(x) sd(as.numeric(x), na.rm = TRUE))
-    df_train_bart <- df_train_bart[, !is.na(col_sd) & col_sd > 0 , drop = FALSE] 
-    
-    # subset backfill dataframe to the same abiotic_cols, biotic_cols, lat/long
-    # because we can't backfill covariates that we didn't train models for
-    df_backfill_bart  <- df_backfill[, colnames(df_train_bart), drop = FALSE]
-    
-    # check that the backfill dataframe doesn't have any all-NA predictors (different pixels than training locations, so it's possible..)
-    # if it does, remove them from both training and backfill dataframes
-    df_backfill_bart <- df_backfill_bart[, colSums(!is.na(df_backfill_bart )) > 0]
-    df_train_bart <- df_train_bart[, colnames(df_backfill_bart), drop = FALSE]
+      # create training data frame (i.e. predictors) for b
+      # columns are abiotic_cols, biotic_cols (except b), lat/long
+      # rows are pixel locations with low HF (idx are non-NA cells for b)
+      design <- prep_bart_design(df_train[idx, predictors, drop = FALSE], df_backfill, logp)
 
-    # impute (and flag) partial-NA predictors (mirror gbm's native NA handling)
-    # BART cannot tolerate NA: any row with an NA predictor yields a NaN
-    # posterior draw, which then drops the pixel from the counterfactual entirely. 
-    # for every predictor that still has NAs (e.g. greenup values on lakes, add a binary `<col>_isNA`
-    # indicator and replace the NA with the median value from the training data. 
-    # The indicator lets BART split on "was missing" (preserving informative missingness, e.g. water), while the
-    # fill keeps the row complete so a real posterior draw is produced. 
-    na_cols <- names(df_train_bart)[
-      colSums(is.na(df_train_bart)) > 0L | colSums(is.na(df_backfill_bart)) > 0L]
-    
-    na_cols <- setdiff(na_cols, c("x", "y"))   # never flag the scaled coordinates
-    for (cna in na_cols) {
-      fill <- stats::median(df_train_bart[[cna]], na.rm = TRUE)
-      if (!is.finite(fill)) fill <- 0          # guard (every col has >=1 non-NA here)
-      tr_flag <- as.integer(is.na(df_train_bart[[cna]]))
-      bf_flag <- as.integer(is.na(df_backfill_bart[[cna]]))
-      # only keep the indicator if it varies in training (BART needs variance); when the
-      # NA is backfill-only (e.g. phenology on water absent from low-HF training) the flag
-      # carries no training signal, so the fill alone is used. 
-      # these pixels are typically water and are masked downstream by weight.tif.
-      if (length(unique(tr_flag)) > 1L) {
-        flag_name <- paste0(cna, "_isNA")
-        df_train_bart[[flag_name]]    <- tr_flag
-        df_backfill_bart[[flag_name]] <- bf_flag
-      }
-      df_train_bart[[cna]][is.na(df_train_bart[[cna]])]       <- fill
-      df_backfill_bart[[cna]][is.na(df_backfill_bart[[cna]])] <- fill
+      # select BART method for a continuous or categorical feature
+      if (!(b %in% categorical_responses)){
+        
+        res <- deploy_gbart(
+          b               = b,
+          df_train        = df_train,
+          df_train_bart   = design$train,
+          df_backfill     = df_backfill,
+          df_backfill_bart= design$backfill,
+          idx             = idx,
+          biotic_cols     = biotic_cols,
+          subbasin_index  = subbasin_index,
+          year            = year,
+          metrics         = metrics,
+          out_layers      = out_layers,
+          logp            = logp,
+          cc              = cc,
+          ia_dir          = ia_dir
+        )
+        
+        df_backfill <- res$df_backfill
+        metrics     <- res$metrics
+        out_layers  <- res$out_layers
+        
+      } else { 
+        
+        res <- deploy_mbart(
+          b               = b,
+          df_train        = df_train,
+          df_train_bart   = design$train,
+          df_backfill     = df_backfill,
+          df_backfill_bart= design$backfill,
+          idx             = idx,
+          biotic_cols     = biotic_cols,
+          subbasin_index  = subbasin_index,
+          year            = year,
+          metrics         = metrics,
+          confusion       = confusion,
+          out_layers      = out_layers,
+          logp            = logp,
+          cc              = cc,
+          ia_dir          = ia_dir
+        )
+        
+        df_backfill <- res$df_backfill
+        metrics     <- res$metrics
+        confusion   <- res$confusion
+        out_layers  <- res$out_layers
+      
+      } # close backfilling protocol
     }
-    # keep train/backfill column sets identical and in the same order after additions
-    df_backfill_bart <- df_backfill_bart[, colnames(df_train_bart), drop = FALSE]
-    if (length(na_cols) > 0L)
-      logp("imputed+flagged %d partial-NA predictor(s): %s",
-           length(na_cols), paste(na_cols, collapse = ", "))
 
-    # select BART method for a continuous or categorical feature
-    if (!(b %in% categorical_responses)){
-      
-      res <- deploy_gbart(
-        b               = b,
-        df_train        = df_train,
-        df_train_bart   = df_train_bart,
-        df_backfill     = df_backfill,
-        df_backfill_bart= df_backfill_bart,
-        idx             = idx,
-        biotic_cols     = biotic_cols,
-        subbasin_index  = subbasin_index,
-        year            = year,
-        metrics         = metrics,
-        out_layers      = out_layers,
-        logp            = logp,
-        cc              = cc,
-        ia_dir          = ia_dir
-      )
-      
-      df_backfill <- res$df_backfill
-      metrics     <- res$metrics
-      out_layers  <- res$out_layers
-      
-    } else { 
-      
-      res <- deploy_mbart(
-        b               = b,
-        df_train        = df_train,
-        df_train_bart   = df_train_bart,
-        df_backfill     = df_backfill,
-        df_backfill_bart= df_backfill_bart,
-        idx             = idx,
-        biotic_cols     = biotic_cols,
-        subbasin_index  = subbasin_index,
-        year            = year,
-        metrics         = metrics,
-        confusion       = confusion,
-        out_layers      = out_layers,
-        logp            = logp,
-        cc              = cc,
-        ia_dir          = ia_dir
-      )
-      
-      df_backfill <- res$df_backfill
-      metrics     <- res$metrics
-      confusion   <- res$confusion
-      out_layers  <- res$out_layers
-    
-    } # close backfilling protocol
+    # where the training land leaves `b` blank, model where the backfill should be blank too
+    # (08B_deploy_pbart.R). The amount layers keep BART's values; `<b>_blank` = 1 marks the
+    # pixels 12F hands to the bird model as NA, and the cascade below sees them as NA.
+    p_blank <- deploy_pbart_blank(
+      b              = b,
+      df_train       = df_train,
+      train_rows     = train_rows,
+      df_backfill    = df_backfill,
+      predictors     = predictors,
+      biotic_cols    = biotic_cols,
+      subbasin_index = subbasin_index,
+      logp           = logp
+    )
+    if (!is.null(p_blank)) {
+      df_backfill[[b]][p_blank > 0.5] <- NA
+      out_layers[[paste0(b, "_pblank")]] <- p_blank
+      out_layers[[paste0(b, "_blank")]]  <- as.integer(p_blank > 0.5)
+    }
     
     logp("[%s] fit done in %.1fs", b, proc.time()[3] - t0)
 
@@ -289,7 +346,7 @@ train_and_backfill_subbasin_s <- function(
   names(result_raster) <- created
   
   # write
-  out_dir <- file.path(ia_dir, "data", "derived_data", "bart_models", year, sprintf("subbasin_%s", subbasin_index))
+  out_dir <- file.path(ia_dir, "data", "derived_data", bart_dir, year, sprintf("subbasin_%s", subbasin_index))
   dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
   terra::writeRaster(
     result_raster,
