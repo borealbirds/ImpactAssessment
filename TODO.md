@@ -26,10 +26,9 @@
 > The user wants the project finished: log small new problems under Loose ends and do not
 > reopen finished stages for them. Keep `writing/` off the internet: never commit or push it.
 >
-> Committed and pushed through `e619087` (2026-10-04), and Fir's `Rscripts/` matches that
-> commit (12D closure checksum-synced 2026-10-05; retired files removed 2026-10-06). The C4
-> `DENS_MIN` edits to 12D/12E/12F/12H/14B (2026-10-06), C5's 12F pixel output (staged on Fir
-> 2026-10-07) and the new script 18 are uncommitted. `rds_files/`,
+> Committed and pushed through `3efbe3a` (2026-10-13: C2d, C4, C5, 14C, 16C, 18). Fir's
+> `Rscripts/` was staged file by file during that work, so checksum-sync the 12D closure before
+> the next 12D run ("Staging discipline"). `rds_files/`,
 > `sector_effects/` and `sector_effects_noq99/` stay local, never committed (user, 2026-10-04).
 > SSH is 2FA, so the user runs every cluster command; Globus works without it.
 >
