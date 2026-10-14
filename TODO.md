@@ -14,12 +14,28 @@
 > (62, 98, 107). Those stacks now exceed what terra holds in memory at 32G (memmax 9.6 GB:
 > 6.6–14.6 GB as doubles, up from 5.5 GB before the class and blank layers), and terra's block
 > path stalls on ~2400-layer pixel-interleaved stacks. Resubmitted: 07 for 23–30, 247, 423, then
-> 11 for all 19 at 128G / 8 h (it skips mosaics newer than their backfills).
+> 11 for all 19 at 128G / 8 h (it skips mosaics newer than their backfills). The reruns all
+> succeeded, and all 19 11 tasks finished: it rebuilt can5, can10–13, can61, can71 and can80
+> (can5 last, 17:33) and skipped the other 11 as newer than all their backfills.
+> The 12D smoke on can11 (GRSP, 2 bootstraps, job 64818278; 12H 64818279) passed: identity
+> gate 2989/2989, 100% of weight > 0 footprint pixels complete, `pixel_change` sums to cid 256.
+> GRSP can11 keeps 1.32 of today's birds on the all-sector footprint (production 0.39; 16C's
+> kNN 1.41), so industry now costs GRSP there ~220k birds instead of adding 440k.
 > Next:
-> 1. Run a 12D smoke on can11 (`TEST_BCR=can11 TEST_N_BOOT=2`), since 12F's new paths have
->    only run through 16C's mirror.
-> 2. Wipe the six species' tables, then run 12D + 12H for CAWA, OVEN, OSFL, LEYE, GRSP, BOBO.
-> 3. Run 14B, 14C and 18 locally.
+> 1. ~~Run a 12D smoke on can11~~ (done, above).
+> 2. ~~12D + 12H for CAWA, OVEN, OSFL, LEYE, GRSP, BOBO~~: 12D `64874085` (67 tasks), 12H
+>    `64874086` `nice.` (log in `cluster_logs/c2d_6spp/`). Their tables, Shapley samples and
+>    `pixel_change/` were pulled (435 MB) to test 18; 14B and 14C ran locally on them
+>    (`logs/14{B,C}_c2d_6spp_2026-10-13.log`; 14B 2 min, 14C 7 s), so the local `sector_effects/`
+>    CSVs are current for these six. Change as % of the no-industry population: BOBO +86.4,
+>    GRSP +6.6, LEYE -0.7, OSFL -3.3, OVEN -8.8, CAWA -13.3.
+> 3. Run 14B, 14C and 18 on Fir: `bash 14B_sector_attribution.sh` (14B + 14C, then 18 chained).
+>    It reproduces the local CSVs and is the first Fir run of the terra-only 18. Pull only
+>    `sector_effects/*.csv` and `output_figures/*.png`.
+>    18 dropped `sf` (2026-10-13): run with each version on these six species' inputs, terra and
+>    sf gave identical subbasin areas (to 3e-11), colour limits and grid totals (each equal to
+>    14B's national), and PNGs within 2/255 on ≤ 0.017% of pixels. 18 takes ~3 min fixed plus
+>    23–44 s per species locally (146 species ≈ 1.5–2 h; the .sh asks 4 h).
 > 4. Redo the C3 (`DROP_Q99`) and C4 (`DENS_MIN`) sensitivity runs if they are to be reported.
 > 5. The PDF report is the very last step.
 > The Results table below is pre-C2d.
@@ -97,10 +113,10 @@ tab for their withheld BCRs.
    `TEST_BCR=<bcrs> TEST_N_BOOT=2 bash 12D_repredict_all_coalitions.sh SP1 SP2`.
 4. Full run: `bash 12D_repredict_all_coalitions.sh SP1 SP2` (12H is chained). Check every task
    for `nice.` and the identity gate.
-5. Pull with one filtered recursive transfer of `density_tables/`
-   (`--include=SP1_*`, one per species, then `--exclude=*`). It also descends into `arrays/`
-   and `by_bcr/`.
-6. Run 14B locally. It reads every species in `density_tables/`.
+5. After the last 12H, run `bash 14B_sector_attribution.sh <12H job id>` on Fir (14B + 14C,
+   then 18 chained). 14B reads every species in `density_tables/`; `SPECIES=...` in front limits
+   18's maps. Pull only `sector_effects/*.csv` and `output_figures/*.png`; `density_tables/`
+   stays on Fir.
 
 **All remaining species (started 2026-10-08):** `Rscripts/run_species_batches.sh` drives steps
 2–4 for `Rscripts/species_todo.txt`: 140 species, 1,557 species × BCR tasks (Fir listing:
@@ -160,7 +176,8 @@ at a time; `MAX=` resizes). Tested locally against a mock of Fir's `06_bootstrap
       bottleneck, the gaps between waves are: QOS `normal` sets no MaxSubmitPU/MaxJobsPU, so rerun
       with `MAX=900` (2 waves; under Slurm's default MaxArraySize of 1001). 12H MaxRSS 10.5 GB for 394 files
       (~0.027 GB/file), so 32G holds a wave of up to ~1,000 files.
-- [ ] Pulling all 140 needs ~10–12 GB locally (Shapley samples ~50–70 MB per species).
+- [x] ~~Pulling all 140 needs ~10–12 GB locally~~: no pull is needed now that 14B, 14C and 18 run
+      on Fir (2026-10-13).
 
 ## Globus from this laptop
 
@@ -197,6 +214,10 @@ have been stale or missing on Fir four times: `08A` with Fix B, 7 of 9 files in 
 - Closures: 07/11 = `07` `.R`+`.sh`, `08A`, `08B_*`, `09_*`, `11` `.R`+`.sh`.
   12D/12H = `12D` `.R`+`.sh`, `12E`, `12F`, `12G` `.R`+`.cpp`, `12H` `.R`+`.sh`.
   12A = `12A` `.R`+`.sh`, `12B`. 12C = `12C` `.R`+`.sh`.
+  14B = `14B` `.R`+`.sh`, `14C`, `18` `.R`+`.sh`, `12E`, `data/raw_data/species_names.csv`,
+  `data/raw_data/ModelReleaseDecisions.xlsx`,
+  `data/derived_data/rds_files/extrapolation_flags.csv` (10C runs locally; Fir's copy was a
+  pre-AOA one from May until 2026-10-13).
 
 ---
 
@@ -277,7 +298,7 @@ have been stale or missing on Fir four times: `08A` with Fix B, 7 of 9 files in 
             9/9 arrays, Shapley samples; `Rscripts/misc/verify_12f_can60_local.R`'s smoke-7 baseline
             predates C2f, so the comparison is old vs new 12F on the same inputs).
           - **14-subbasin test 1, 2026-10-12** (jobs 64595258/9, `BART_MODELS_DIR=
-            bart_models_blank_test`; backfills in `cluster_logs/grassland_diag/bart_models_blank_test/`;
+            bart_models_blank_test`; backfills were in `cluster_logs/grassland_diag/bart_models_blank_test/` (deleted 2026-10-13);
             `BF_NEW_DIR=bart_models_blank_test Rscript Rscripts/16C_...`, log
             `logs/16C_2026-10-12_blanktest.log`, output `grassland_diagnostics/bart_models_blank_test/`).
             Share of observed birds kept on the direct footprint (16C's 8-bootstrap × 10-draw check,
@@ -300,7 +321,7 @@ have been stale or missing on Fir four times: `08A` with Fix B, 7 of 9 files in 
             lower log loss in subbasins 98, 72, 56. 08B now draws classes from normalised pnorm(z)
             (the modal class is unaffected). Test 1 ran without it and without the all-blank rule.
           - **14-subbasin test 2, 2026-10-12** (both changes; jobs 64633705/6, `BART_MODELS_DIR=
-            bart_models_blank_test2`; backfills in `cluster_logs/grassland_diag/bart_models_blank_test2/`,
+            bart_models_blank_test2`; backfills were in `cluster_logs/grassland_diag/bart_models_blank_test2/` (deleted 2026-10-13),
             log `logs/16C_2026-10-12_blanktest2.log`, output `grassland_diagnostics/bart_models_blank_test2/`).
             Same seeds as test 1, so only the class conversion differs. Production → test 1 → test 2
             (kNN): GRSP can11 0.34 → 0.97 → 0.99 (1.41); BOBO can11 0.63 → 0.60 → 0.61 (0.65);
@@ -357,6 +378,10 @@ have been stale or missing on Fir four times: `08A` with Fix B, 7 of 9 files in 
 
 ## Loose ends
 
+- [x] ~~18 maps only the six first species~~: fixed 2026-10-13. 18 takes `SPECIES` (default:
+      every species in 14B's tables), titles from `data/raw_data/species_names.csv` (all 146), and
+      skips and reports a failing species instead of stopping the batch.
+
 - [ ] **08B's modal land-cover class distorts class shares (16C, BOBO can13).** mbart's per-pixel
       `max.col` class, used for every draw, erases minority classes. On the studied can13 farmland,
       SCANFI_1km after BART: mixed forest 65% (kNN 29%, training land 38%), broadleaf 21% (kNN 43%),
@@ -383,7 +408,8 @@ have been stale or missing on Fir four times: `08A` with Fix B, 7 of 9 files in 
       both methods agree on the direction. Report it as method sensitivity, with 10C's AOA flags.
 - [ ] **11 needs 128G for can11, can12, can13 and can61 since the C2d backfills** (~2400 layers
       per subbasin). At the .sh's 32G, subbasins 62, 98 and 107 fall to terra's block path, which
-      stalled > 4 h on one subbasin (2026-10-13). The .sh still says 32G / 4 h; a later rerun
+      stalled > 4 h on one subbasin (2026-10-13). At 128G (job 64788561) subbasin 62 took 37 s
+      and all of can11 30 min, so the in-memory path is what matters. The .sh still says 32G / 4 h; a later rerun
       passes `--mem=128G --time=08:00:00` (or 07's .sh could pass it when it chains 11).
 - [ ] 12A on Fir (optional check): run it for CAWA into a scratch dir and diff against the
       G:-built `observed_bootstraps.tif` / `truncation_params.rds`.
@@ -397,8 +423,15 @@ have been stale or missing on Fir four times: `08A` with Fix B, 7 of 9 files in 
       `covariates_mosaiced_2020_PREORIG.tif`, `old_bilinear/`, the localtest
       `hirshpearson_c2f_*` layers, `c2f_test/`, `sub1_zeroed/`, `c1_old/`, `c1_new/` and the two
       old extrapolation-flag CSVs (~6 GB). Earlier (2026-10-07): local `by_bcr/` folders, two
-      pre-v3 `weight.tif`, the 16A/17 outputs. Still deletable once C2d is done:
-      `cluster_logs/sanity/` (6.7 GB). Check `Get-PSDrive C` before any large pull.
+      pre-v3 `weight.tif`, the 16A/17 outputs. Check `Get-PSDrive C` before any large pull.
+      Cleanup 2026-10-13 (user, ~8.5 GB): the blank-test backfills (`grassland_diag/bart_models_blank_test{,2}/`;
+      their 16C results stay in `grassland_diagnostics/`), the pre-C2d `grassland_diag/backfill/`
+      (16C's T1 reads it: pull the new production backfills there before rerunning 16C), the
+      pre-C2d local `density_tables/` and `density_tables_dmin0.005/` files, the April–June
+      `bart_models/2020/*/…_backfill.tif`, `bart_models_smoke/`, the C2f run's slurm and subbasin
+      logs (its `sacct` files stay), and ~105 May–Sept debugging files in `logs/`. Kept for a
+      16C rerun: `grassland_diag/models/`, `predictions/` and `cluster_logs/sanity/` (now 287 MB).
+      The C2d production 07/11 logs and the can11 12D smoke are in `cluster_logs/07_2020_c2d/`.
 - [ ] `15C_singletons_plot.R:150` reads `predictions_coalitions/`, deleted on both ends, so the
       map panel is broken. Regenerate via `save_arrays_ids` if wanted.
 - [ ] **Pre-2020 years** need historical footprint layers (not the 2020 masks), each year's

@@ -30,6 +30,10 @@
 #
 # Release filter: BCRs whose models BAM withheld (the "remove" tab of BAM's
 # ModelReleaseDecisions.xlsx) are dropped here, not upstream — see `withheld_models` below.
+#
+# Runs on Fir, where 12H writes its inputs: 14B_sector_attribution.sh runs 14B, then 14C and 18,
+# so only the CSVs and figures come back (sbatch --dependency=afterok:<12H job> ...). Run
+# locally (Rscript Rscripts/14B_sector_attribution.R) it reads the local data/ tree instead.
 # ---
 
 suppressPackageStartupMessages({
@@ -39,8 +43,9 @@ suppressPackageStartupMessages({
 
 # ---- Execution context -------------------------------------------------------
 
-cc    <- FALSE
-local <- TRUE
+# inside a Slurm job this is the cluster; anywhere else, the local RProject
+cc    <- nzchar(Sys.getenv("SLURM_JOB_ID"))
+local <- !cc
 
 if (cc)            { ia_dir <- "/home/mannfred/scratch/impact_assessment" }
 if (!cc && local)  { ia_dir <- getwd() }

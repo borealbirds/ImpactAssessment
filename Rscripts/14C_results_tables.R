@@ -22,8 +22,9 @@
 # read and write their own directories, as in 14B.
 # ---
 
-cc    <- FALSE
-local <- TRUE
+# inside a Slurm job this is the cluster; anywhere else, the local RProject
+cc    <- nzchar(Sys.getenv("SLURM_JOB_ID"))
+local <- !cc
 
 if (cc)            { ia_dir <- "/home/mannfred/scratch/impact_assessment" }
 if (!cc && local)  { ia_dir <- getwd() }
