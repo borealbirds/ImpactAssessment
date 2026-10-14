@@ -51,34 +51,34 @@ Scripts are numbered in execution order:
 | `08A_train_and_backfill_subbasin_s.R` | sourced | Core `train_and_backfill_subbasin_s()` function; loops over biotic covariates in hierarchy order. Backfills with the footprint ("Disturbance") covariates at 0 (Open Limitation #9) |
 | `08B_deploy_gbart.R` | sourced | `deploy_gbart()`: Gaussian BART for continuous biotic covariates (log1p-transformed, 90/10 train/holdout split) |
 | `08B_deploy_mbart.R` | sourced | `deploy_mbart()`: Multinomial BART for categorical land-cover covariates. Writes the modal class (metrics only) and 100 drawn classes `<cov>_class_###`, each sampled from one posterior draw's normalised probit probabilities (see **Categorical covariates**) |
-| `08B_deploy_pbart.R` | sourced | `deploy_pbart_blank()`: probit BART on all the training land for where a biotic covariate is blank (e.g. `SCANFIheightcv_*` where there is no canopy); 08A blanks the backfill where P > 0.5 and writes `<cov>_blank` / `<cov>_pblank`. A covariate blank on all the training land is blank everywhere (TODO C2d) |
+| `08B_deploy_pbart.R` | sourced | `deploy_pbart_blank()`: probit BART on all the training land for where a biotic covariate is blank (e.g. `SCANFIheightcv_*` where there is no canopy); 08A blanks the backfill where P > 0.5 and writes `<cov>_blank` / `<cov>_pblank`. A covariate blank on all the training land is blank everywhere |
 | `09_collect_metrics_gbart/mbart.R` | sourced | Collect in-sample BART metrics |
 | `09_collect_holdout_metrics_gbart/mbart.R` | sourced | Collect holdout BART metrics |
 | `10A_process_backfill_metrics.R` | local | Aggregate per-subbasin metrics and confusion matrices into CSVs |
 | `10B_inspect_backfill_metrics.R` | local | Inspect and visualize model accuracy |
 | `10C_abiotic_extrapolation_diagnostics.R` | local | Area of applicability (Meyer & Pebesma 2021) of each subbasin's low-HF training pixels in the natural abiotic predictors 08A trains BART on (its footprint "Disturbance" class excluded; see Open Limitation #9); flags a subbasin when > 50% of its backfilled pixels fall outside → `extrapolation_flags.csv`. Needs `FNN` (installed locally, not on Fir) |
 | `10D_BART_posterior_diagnostics.R` + `.sh` | cluster | Test whether the 100 stored BART posterior draws (subsampled from gbart()'s 700) cover the posterior's shape and tails — `12F` resamples 1 of the 100 per counterfactual scenario |
-| `11_premosaic_backfilled_stacks.R` + `.sh` | cluster | Mosaic per-subbasin BART backfill rasters into BCR-wide stacks (run before 12). One array task per year × BCR (`YEARS` as for 07; 19 tasks per year); 32G / 4h / 1 core. Rebuilds any mosaic older than one of its subbasin backfills and writes under a `_partial` name renamed on completion. Each subbasin is resampled onto its own grid-aligned window of the BCR grid and the windows are `merge()`d per variable (resampling onto the whole grid took up to 17 h per BCR; `misc/compare_mosaics.R` showed identical output). `MOSAIC_DIR` redirects the output for tests. It caps terra at 30% of the Slurm allocation (`memmax`), because terra sizes its blocks from the node's free RAM, not the job's |
-| `12A_observed.R` + `.sh` | cluster (or local) | Reads Elly's unclamped 32-bootstrap prediction tifs and bootstrap model `.Rdata` from `{nm_root}/output/{07_predictions,06_bootstraps}/{species}/`, applies V5's two-stage truncation (via `12B_v5_truncate.R`), and writes `observed_bootstraps.tif` (32-layer clamped stack, UNmasked), `observed_mean.tif`, `observed_sd.tif` and per-species `truncation_params.rds` to `data/derived_data/predictions/`. Canadian BCRs (`can*`) only. On Fir: `bash 12A_observed.sh OSFL GRSP` (one array task per species; 16G / 8 h; skips BCRs already done). Locally (`SPECIES=OSFL Rscript Rscripts/12A_observed.R`) it reads G: instead, and the outputs must be Globus-transferred before 12D |
+| `11_premosaic_backfilled_stacks.R` + `.sh` | cluster | Mosaic per-subbasin BART backfill rasters into BCR-wide stacks (run before 12). One array task per year × BCR (`YEARS` as for 07; 19 tasks per year); the .sh asks 32G / 4h / 1 core, but since C2d (~2400 layers per subbasin) can11, can12, can13 and can61 need 128G / 8h (at 32G terra falls to its block path and stalls; TODO Loose ends). Rebuilds any mosaic older than one of its subbasin backfills and writes under a `_partial` name renamed on completion. Each subbasin is resampled onto its own grid-aligned window of the BCR grid and the windows are `merge()`d per variable. `MOSAIC_DIR` redirects the output for tests. It caps terra at 30% of the Slurm allocation (`memmax`), because terra sizes its blocks from the node's free RAM, not the job's |
+| `12A_observed.R` + `.sh` | cluster (or local) | Reads Elly's unclamped 32-bootstrap prediction tifs and bootstrap model `.Rdata` from `{nm_root}/output/{07_predictions,06_bootstraps}/{species}/`, applies V5's two-stage truncation (via `12B_v5_truncate.R`), and writes `observed_bootstraps.tif` (32-layer clamped stack, UNmasked), `observed_mean.tif`, `observed_sd.tif` and per-species `truncation_params.rds` to `data/derived_data/predictions/`. Canadian BCRs (`can*`) only. One array task per species (16G / 8 h; skips BCRs already done). Run locally (`SPECIES=OSFL Rscript Rscripts/12A_observed.R`) it reads G: instead, and the outputs must be Globus-transferred before 12D |
 | `12B_v5_truncate.R` | sourced | `v5_truncate()`: line-for-line port of V5 `analysis/10.Truncate.R` (as of V5 `f082866`). Applies both upper caps (`densmax`, then the 99.9th-percentile `q99`) and the range/water/extent masks. Sourced by `12A`, so it is staged on the cluster; only `v5_load_masks()` (validation) needs `sf`, which it calls as `sf::`. `q99` can be passed in frozen and the legacy EPSG:3978 step skipped |
-| `12C_build_prediction_weights.R` + `.sh` | cluster | Build per-species×BCR `weight.tif` (= range membership × not-water × inside-data-limit × **inside the BCR's own polygon**), replicating V5 `10.Truncate` range/water/extent/mosaic masking; all four terms use `touches = TRUE` (Open Limitation #7). Reads source masks from `data/raw_data/v5_gis/` (no G: access); each species needs `v5_gis/ranges/{species}.tif`, copied from G: `gis/ranges/` and staged. Grid template is the BCR stack. Run ONCE per species before 12D: `bash 12C_build_prediction_weights.sh OSFL GRSP`. 12F multiplies BOTH observed and backfilled density by this weight, preserving obs/bf symmetry (`w·bf − w·obs = w·(bf − obs)`). |
-| `12D_repredict_all_coalitions.R` + `.sh` | cluster | Entry point: re-predict bird densities for ALL 255 coalitions, ONE SLURM array task per species × BCR (`coalition_task_table()` in 12F: every species' `06_bootstraps` files in `list.files()` order). Species come from `SPECIES`: `bash 12D_repredict_all_coalitions.sh OSFL GRSP` counts the tasks, submits the array and chains 12H with the same `SPECIES`. Sources 12E, 12F, 12G (and compiles `12G_gbm_tree_walk.cpp`); writes one `density_tables/by_bcr/{species}_{year}_{bcr}.rds` per task (atomically; a BCR 12F skips is still written, with `result = NULL`). Requires `observed_bootstraps.tif` present (hard error if missing). |
+| `12C_build_prediction_weights.R` + `.sh` | cluster | Build per-species×BCR `weight.tif` (= range membership × not-water × inside-data-limit × **inside the BCR's own polygon**), replicating V5 `10.Truncate` range/water/extent/mosaic masking; all four terms use `touches = TRUE` (Open Limitation #7). Reads source masks from `data/raw_data/v5_gis/` (no G: access); each species needs `v5_gis/ranges/{species}.tif`, copied from G: `gis/ranges/` and staged. Grid template is the BCR stack. Run once per species before 12D. 12F multiplies BOTH observed and backfilled density by this weight (`w·bf − w·obs = w·(bf − obs)`). |
+| `12D_repredict_all_coalitions.R` + `.sh` | cluster | Entry point: re-predict bird densities for ALL 255 coalitions, ONE SLURM array task per species × BCR (`coalition_task_table()` in 12F: every species' `06_bootstraps` files in `list.files()` order); its .sh sizes the array from `SPECIES` and chains 12H. Sources 12E, 12F, 12G (and compiles `12G_gbm_tree_walk.cpp`); writes one `density_tables/by_bcr/{species}_{year}_{bcr}.rds` per task (atomically; a BCR 12F skips is still written, with `result = NULL`). Requires `observed_bootstraps.tif` (hard error if missing). |
 | `12G_gbm_tree_walk.R` + `.cpp` | sourced | Bit-identical replacement for gbm's compiled tree walk (`gbm_pred`), 3.6–4.4× faster: gbm makes three R API calls per node visited, this hoists them. `gbm_design()` builds predict.gbm's design matrix once per bootstrap; `gbm_check_fast()` `stop()`s in every 12F worker unless the fast path is `identical()` to `predict.gbm`. The `.cpp` also holds `coal_rowsum()`, 12F's copy-free, bit-identical coalition `rowsum` |
 | `12H_merge_bcr_tables.R` + `.sh` | cluster | Run after 12D (`--dependency=afterany`; 12D's `.sh` chains it), with the same `SPECIES`, and writes only those species' tables. Checks every expected species × BCR has a per-BCR result (names the array indices to resubmit if not), that all came from one version of 12E/12F/12G (`code_md5`), then binds them in `06_bootstraps` order → `density_tables/{species}_{year}_coalition_{cid}.rds` (cid 2..256) and `arrays/`, plus `{species}_{year}_shapley_samples.rds` (per-sample subbasin Shapley values, stacked across BCRs in table row order) |
 | `12E_shapley_utils.R` | sourced | Coalition enumeration, Shapley value computation utilities |
-| `12F_predict_species_all_coalitions.R` | sourced | `predict_species_all_coalitions()`: builds the backfilled field ONCE per species×BCR over the all-8-sectors superset, then reduces all 255 coalitions as cheap masked `rowsum`s (bit-identical to the retired per-coalition path). Runs joint BRT×BART sampling; each bootstrap worker reduces its own field to per-coalition subbasin sums, so the full pixels × 3200 matrix is never built. `rdata_files` / `return_per_bcr` let 12D run one BCR; `combine_bcr_results()` (used by 12H) does the cross-BCR bind. Also predicts each bootstrap once with observed vegetation and the footprint covariates at 0 (`d0`), for the direct/vegetation split (Open Limitation #9). Also applies `shapley_weight_matrix()` (12E) to every (bootstrap, scenario) sample, giving per-sample subbasin Shapley values `[n_sub × 8 × 3200]` for 14B's uncertainty (Shapley is linear in v, so the samples' mean equals the Shapley value of the tables' means). Also holds `coalition_task_table()` and `coalition_array_ids()`. Uses two masks per coalition: backfilled vegetation only on its sectors' direct footprint, `d0` on the rest of its footprint (Open Limitation #10); needs `{sector}_direct.tif` from 14A. Writes `density_tables{suffix}/pixel_change/{species}_{year}_{bcr}.tif` (mean obs and cf of the all-sector coalition at each footprint pixel, for 18) after checking that its pixels sum to the cid-256 table. |
+| `12F_predict_species_all_coalitions.R` | sourced | `predict_species_all_coalitions()`: builds the backfilled field ONCE per species×BCR over the all-8-sectors superset, then reduces all 255 coalitions as masked `rowsum`s (see **12F invariants**). Joint BRT×BART sampling; each bootstrap worker reduces its own field to per-coalition subbasin sums. Also predicts each bootstrap with observed vegetation and the footprint covariates at 0 (`d0`), for the direct/vegetation split (Open Limitation #9); backfilled vegetation goes only on a coalition's direct footprint, `d0` on the rest (Open Limitation #10; needs 14A's `{sector}_direct.tif`). Applies `shapley_weight_matrix()` (12E) to every (bootstrap, scenario) sample → per-sample subbasin Shapley values `[n_sub × 8 × 3200]` for 14B (Shapley is linear in v, so their mean equals the Shapley value of the tables' means). Writes `pixel_change/{species}_{year}_{bcr}.tif` (mean obs and cf of the all-sector coalition at each footprint pixel, for 18) after checking its pixels sum to the cid-256 table. Also holds `coalition_task_table()`, `coalition_array_ids()` and `combine_bcr_results()` (12H's cross-BCR bind). |
 | `13_importance_of_covs_used_in_counterfactual.R` | cluster | Assess percentile importance of backfilled covariates in V5 bird models |
 | `14A_reproject_hirshpearson.R` | local | Build each of the 8 sectors' 1 km layers on the CanHF mask grid from the raw 300 m Hirsh-Pearson rasters (`raw_300m/`, Borealis doi:10.5683/SP2/EVKAVL): `{sector}.tif` (max score) and `{sector}_direct.tif` (any direct 300 m cell; Open Limitation #10). Run after `03`, before `12D`; both are staged to the cluster. Optional args name a subset of sectors (~5 min each) |
-| `14B_sector_attribution.R` + `.sh` | cluster | `bash 14B_sector_attribution.sh [12H job id]` submits one job running 14B then 14C (1 core, 16G / 4 h; after 12H when its id is given) and chains `18_map_population_change.sh` after it. Plain `sbatch` runs 14B + 14C only. It needs `data/raw_data/ModelReleaseDecisions.xlsx` and 10C's `rds_files/extrapolation_flags.csv` on Fir (both staged 2026-10-13; 10C runs locally). Reads 12H's per-sample subbasin Shapley values for every species in `density_tables/`, sums them bottom-up (subbasin → BCR → national) SAMPLE BY SAMPLE and summarises each level (mean, SD, 5th/95th percentiles) → `sector_effects/shapley_*.csv`; stops unless the sample means equal the Shapley values of the coalition tables' means. Splits every value into a direct and a vegetation part (Open Limitation #9). **This is where BAM's release filter lives** (`DROP_WITHHELD` / `withheld_models`): every Canadian row of the "remove" tab of BAM's `review/ModelReleaseDecisions.xlsx` (read from a gitignored copy at `data/raw_data/ModelReleaseDecisions.xlsx`) is withheld, e.g. CAWA `can40` (AUC), but is deliberately still produced upstream, so the products stay a complete record of what we ran and only the reported numbers are filtered |
+| `14B_sector_attribution.R` + `.sh` | cluster | Its .sh runs 14B then 14C in one job (1 core, 16G / 4 h) and chains 18. Needs `data/raw_data/ModelReleaseDecisions.xlsx` and 10C's `rds_files/extrapolation_flags.csv` on Fir (10C runs locally). Reads 12H's per-sample subbasin Shapley values for every species in `density_tables/`, sums them bottom-up (subbasin → BCR → national) SAMPLE BY SAMPLE and summarises each level (mean, SD, 5th/95th percentiles) → `sector_effects/shapley_*.csv`; stops unless the sample means equal the Shapley values of the coalition tables' means. Splits every value into a direct and a vegetation part (Open Limitation #9). **This is where BAM's release filter lives** (`DROP_WITHHELD` / `withheld_models`): every Canadian row of the "remove" tab of BAM's `review/ModelReleaseDecisions.xlsx` (gitignored copy at `data/raw_data/ModelReleaseDecisions.xlsx`) is withheld, e.g. CAWA `can40` (AUC), but deliberately still produced upstream, so only the reported numbers are filtered |
 | `14C_results_tables.R` | cluster | Run after 14B, by 14B's `.sh`. One row per species, from the Shapley samples over the BCRs 14B kept (release filter): `sector_effects/results_summary.csv` (observed and no-industry populations, the change industry made, and that change as % of the no-industry population) and `results_sectors.csv` (each sector's change as % of the no-industry population), each with 5th/95th percentiles. **Reported sign is the opposite of 14B's**: change = observed − counterfactual = −v(N), so negative = birds lost to industry, as the maps (18) show it. A % interval divides each sample by its own no-industry total. Stops unless its means equal 14B's national CSV |
 | `15A_plot_population_distributions.R` | local | Plot empirical population distributions, observed vs counterfactual, from the bootstrap × scenario arrays `12D` saves to `density_tables/arrays/` |
 | `15B_preliminary_singletons.R` | local | Interim pre-Shapley single-sector standalone impacts at footprint / watershed / BCR scales → `logs/15B_singletons_summary.csv`. Superseded by `14B`'s exact Shapley values for attribution; retained for the scale-dependent reporting `15C` plots |
-| `15C_singletons_plot.R` | local | Render `15B`'s summary CSV as sector impacts at the three geographic scales |
+| `15C_singletons_plot.R` | local | Render `15B`'s summary CSV as sector impacts at the three geographic scales (map panel broken: its `predictions_coalitions/` input is deleted) |
 | `16A_lowHF_isnot_a_proxy.R` | local | Test the premise that low-HF pixels are not a spatial proxy for the pre-industrial state |
 | `16B_map_sampled_subbasins.R` | local | Map the 16 subbasins `16A` samples, reproducing the index from the same seed without re-running the RF pipeline |
-| `16C_grassland_decline_diagnostics.R` | local | Is the BOBO / GRSP decline (can11, can13) a backfill artefact? On the subbasins carrying 80% of it, with 12F's models, caps, weights and design rules (it `stop()`s unless it reproduces 12F's observed pixels and the cid-256 table): T1 replaces BART's vegetation by a hot-deck kNN draw from the subbasin's own training land (every training pixel a donor, missing values copied as V5 sees them); T2 swaps one backfilled covariate at a time; T3 checks the survey range (`var.levels`) and partial dependence; T4 the area of applicability; T5 quantile-maps the backfill onto the training land's values. Inputs pulled from Fir into `cluster_logs/grassland_diag/`; output `rds_files/grassland_diagnostics/`. ~75 min |
+| `16C_grassland_decline_diagnostics.R` | local | Is the BOBO / GRSP change in can11/can13 a backfill artefact? On the subbasins carrying most of it, with 12F's models and design rules (it `stop()`s unless it reproduces 12F's observed pixels and the cid-256 table), it compares BART's backfill with a kNN hot-deck from the training land (T1), one-covariate swaps (T2), survey range and partial dependence (T3), the AOA (T4) and quantile mapping (T5). Inputs in `cluster_logs/grassland_diag/`; output `rds_files/grassland_diagnostics/`. ~75 min. Found the C2d defect |
 | `17_detect_historical_hf_extent.R` | local | Detect whether the 2020 HF mask was smaller in earlier years, via PCA distance between observed and backfilled biotic vectors inside the HF mask |
-| `18_map_population_change.R` + `.sh` | cluster | Chained after 14B's job, or alone: `SPECIES=CAWA,OVEN sbatch 18_map_population_change.sh` (every species in 14B's tables when `SPECIES` is unset) → `output_figures/`. Runs on Fir, where `pixel_change/` lives. terra only, no `sf`: ggplot2 draws terra's polygons with `geom_polygon` (one subgroup per ring, so holes are cut out). Titles from `data/raw_data/species_names.csv` (BAMexploreR's `spp_tbl` plus 8 codes it lacks; a species not in it is titled by its code). A failing species is reported and skipped, and the job fails at the end. Maps of what industry did to each species (obs − cf; red = decline), clipped to Canada: per-subbasin birds/km² (`change_map_abs_*`), CAWA/OVEN % change, and the pixel-level change summed into 10 km cells (`change_grid_*`, from 12F's `pixel_change/` rasters; stops unless the cells add up to 14B's national change). Honours `DENS_MIN`/`DROP_Q99` like 14B and keeps production's colour scale for a sensitivity run |
+| `18_map_population_change.R` + `.sh` | cluster | Chained after 14B's job, or alone with `SPECIES` (default: every species in 14B's tables) → `output_figures/`. Runs on Fir, where `pixel_change/` lives; terra only, no `sf`. Titles from `data/raw_data/species_names.csv` (BAMexploreR's `spp_tbl` plus 8 codes it lacks; a species not in it is titled by its code). A failing species is reported and skipped, and the job fails at the end. Maps of what industry did to each species (obs − cf; red = decline), clipped to Canada: per-subbasin birds/km² (`change_map_abs_*`), CAWA/OVEN % change, and the pixel-level change summed into 10 km cells (`change_grid_*`, from 12F's `pixel_change/` rasters; stops unless the cells add up to 14B's national change). Honours `DENS_MIN`/`DROP_Q99` like 14B and keeps production's colour scale for a sensitivity run |
 | `misc/` | local | Downstream analysis (population summaries, visualization, vegetation vs. mines) plus one-off diagnostics/profiling not in the execution-order pipeline (`diag_*`, `analyze_seff`, `check_model_complexity`, `debug_*`, `figure_*`) |
 
 ## Transferring Files to the Cluster (Globus)
@@ -125,15 +125,18 @@ bash 07_train_and_backfill.sh 2010 2015 2020
 # --mem=128G is only a safe default for hand-submitted indices. 07 overwrites its outputs and
 # 11 rebuilds any mosaic older than its inputs, so a rerun needs no wipe.
 
-# Memory, from the 2026-09-28 run (`cluster_logs/07_2020_c2f/sacct_07_61937625.txt`): peak
-# MaxRSS median 3.8 GB, max 52.8 GB; only the five can11 prairie basins (57, 61, 62, 98, 107)
-# exceed 20 GB, hence 72G for them and 24G for the rest. Peak memory tracks subbasin size, so
-# a new year moves it little. Memory is what Alliance bills (128G for every task billed 5x
-# more). Single-threaded (BART::gbart), so --cpus-per-task=1.
+# Memory (`cluster_logs/07_2020_c2f/sacct_07_61937625.txt`; the C2d run fit the same tiers):
+# peak MaxRSS median 3.8 GB, max 52.8 GB; only the five can11 prairie basins (57, 61, 62, 98,
+# 107) exceed 20 GB, hence 72G for them and 24G for the rest. Memory is what Alliance bills.
+# Single-threaded (BART::gbart), so --cpus-per-task=1.
 #
 # If one index OOMs, give that index more room (keep the same YEARS, since the index means
 # year x subbasin), and add its subbasin to BIG_SUBS in 07_train_and_backfill.sh:
 YEARS=<years> sbatch --array=<i> --mem=128G 07_train_and_backfill.sh
+
+# 07 chains 11 at the .sh's 32G / 4 h, too little for can11, can12, can13 and can61 since C2d.
+# Resubmit those (11 skips mosaics newer than their backfills), or all 19:
+YEARS=2020 sbatch --array=1-19 --mem=128G --time=08:00:00 11_premosaic_backfilled_stacks.sh
 ```
 
 Re-predicting birds:
@@ -152,22 +155,23 @@ bash 12A_observed.sh OSFL GRSP
 # two can run together). Reads data/raw_data/v5_gis (stage ranges/{species}.tif first) +
 # Regions/BAM_BCR_NationalModel_Unbuffered.shp; writes weight.tif per species x BCR.
 bash 12C_build_prediction_weights.sh OSFL GRSP
-# weight.tif is a HARD dependency: 12F stops if it is missing, and rejects an all-zero/NA one.
-# Since Fix B median-imputes partial-NA covariates, water / out-of-range / out-of-extent pixels
-# no longer drop out via complete.cases() on their own, so weight.tif is the only masking left.
-# An unmasked run is quietly wrong, not obviously broken (7.8x over-count on CAWA can10).
+# weight.tif is a HARD dependency and the only masking left (water / out-of-range /
+# out-of-extent pixels no longer drop out of complete.cases(); an unmasked run over-counted
+# CAWA can10 7.8x, quietly). 12F stops if it is missing, stale, or 0/NA over the whole BCR; a
+# species whose range misses the footprint (BAWW, BBWA can41) runs on with impact 0.
 # weight.tif carries its version in its band name ("weight_v3_touches"): 12C rebuilds a stale
 # one and 12F refuses to run against it, so no manual `rm` is ever needed.
 
 # Phase 2: ONE array task per species x BCR computes ALL 255 coalitions for that BCR in a
-# single pass (see "12F restructure invariants" below), then 12H merges.
+# single pass (see "12F invariants" below), then 12H merges.
 # `bash 12D_repredict_all_coalitions.sh <species>` counts the species' can* models (honouring
-# TEST_BCR), submits that array at 8 cores / 48G / 03:00:00, and chains 12H (afterany) with the
-# same environment; the task table is printed at the top of every 12D log. An index past the
-# table's end exits 0. Per-species outputs never overwrite other species', so a new batch
-# needs no wipe; the wipe below is for re-running the SAME species.
-# Sized from C1 (peak MaxRSS 28.8 GiB, OVEN can61); the longest task is ~45 min (can11). A
-# task killed for memory is resubmitted alone with --mem=64G.
+# TEST_BCR), submits that array at 8 cores / 48G / 03:00:00, and chains 12H (afterany, 32G /
+# 3 h) with the same environment; the task table is printed at the top of every 12D log. An
+# index past the table's end exits 0. Per-species outputs never overwrite other species', so a
+# new batch needs no wipe; the wipe below is for re-running the SAME species.
+# Sized from 807 tasks of 80 species (pre-C2d): MaxRSS median 16.9 GB, max 44.8 GB (can11);
+# median 5.7 min, max 66 min (AMRO can11). A task killed for memory is resubmitted alone
+# with --mem=64G.
 #
 # For a FRESH full re-run of the same species, delete their stale outputs first. `rm -f` on
 # files, never `rm -rf` on a directory: 15A reads arrays/. 12H refuses to merge per-BCR files
@@ -182,8 +186,9 @@ bash 12D_repredict_all_coalitions.sh CAWA OVEN          # 12D array + 12H; print
 # to resubmit.
 
 # Many species: run_species_batches.sh reads species_todo.txt and runs 12A + 12C for all of
-# them (`prep`), a can42 smoke (`smoke`), and 12D + 12H in waves of <= MAX=400 tasks so the
-# queue stays small (`plan`, then `wave 1`, `wave 2`, ... one at a time).
+# them (`prep`), a can42 smoke (`smoke`), and 12D + 12H in waves of <= MAX tasks (default
+# 400; MAX=900 fits under Slurm's MaxArraySize of 1001) (`plan`, then `wave 1`, `wave 2`, ...
+# one at a time).
 
 # Smoke test (2 bootstraps): TEST_BCR filters the task table to the listed BCRs of every
 # species, and the chained 12H gets the same TEST_BCR and TEST_N_BOOT (it refuses to merge
@@ -203,7 +208,7 @@ SPECIES=CAWA,OVEN,OSFL,GRSP,LEYE,BOBO sbatch 18_map_population_change.sh
 # (DROP_Q99=1 bash 12D_repredict_all_coalitions.sh CAWA OVEN), and run 14B as
 # `DROP_Q99=1 bash 14B_sector_attribution.sh`. They read and write density_tables_noq99/ and
 # sector_effects_noq99/, never the production directories.
-# Low-density floor (TODO C4): DENS_MIN=0.005 does the same with every capped density below
+# Low-density floor (C4): DENS_MIN=0.005 does the same with every capped density below
 # 0.005 birds/ha set to 0, per pixel and sample, before the weight, on the obs, d0 and bf sides
 # (observed totals included). Directories: density_tables_dmin0.005/, sector_effects_dmin0.005/.
 # 12E sensitivity_run() parses both switches and refuses them together.
@@ -211,36 +216,13 @@ SPECIES=CAWA,OVEN,OSFL,GRSP,LEYE,BOBO sbatch 18_map_population_change.sh
 
 ## Fir Cluster Specifications
 
-**Cluster**: Fir, operated by Simon Fraser University (SFU), part of the Digital Research Alliance of Canada.
-- Login: `fir.alliancecan.ca`
-- Automation (non-interactive scripts): `robot.fir.alliancecan.ca`
-- rsync/scp: use login node (dedicated DTN not yet available)
-- Globus: collection `alliancecan#fir-globus` (endpoint ID already in Globus section above)
-
-**CPU nodes** (what our jobs use):
-- 864 nodes × 192 cores, 750 GB RAM per node
-- 2× AMD EPYC 9655 (Zen 5) @ 2.7 GHz; 24 CCDs per node (8 cores/CCD, 8 NUMA nodes)
-- Local NVMe: 7.84 TB per node
-- Interconnect: InfiniBand NDR, 27:5 blocking over islands of 216 nodes
-
-**SLURM limits and recommended directives (CPU jobs)**:
-- Max walltime: `--time=7-00:00:00` (168 h); min 1 h (test jobs: 5 min)
-- Max per node: 192 cores, 750 GB RAM → `--mem=750G` or use `--mem-per-cpu`
-- Keep threads within one CCD for best cache locality: `--cpus-per-task=8`
-- To fill a full node: `--ntasks-per-node=24 --cpus-per-task=8`
-- Always specify `--account=def-bayne` (the allocation every job script in `Rscripts/` uses — not `def-ecknight`, which is only the project *directory* path)
-- No partition flag needed for standard CPU jobs (default partition is used)
-
-**Storage** (all on 51 PB DDN Lustre):
-- `$HOME` — small quota, cannot be increased; avoid writing job output here
-- `$HOME/scratch` (`$SCRATCH`) — large quota, **no backup**, files purged automatically; use for all job I/O (`ia_dir` lives here)
-- `$HOME/project/${def-project-id}` — large adjustable quota, daily backup; use for outputs to keep long-term
-- All three mounts share the same Lustre filesystem; storage access is non-blocking
-
-**Site-specific policies**:
-- `crontab` is not supported — use `robot.fir.alliancecan.ca` for automation
-- Compute nodes have full internet access
-- SCRATCH files are purged automatically — copy important outputs to PROJECT promptly
+Fir (SFU, Digital Research Alliance of Canada). Login `fir.alliancecan.ca`; automation via
+`robot.fir.alliancecan.ca` (no `crontab`); Globus collection `alliancecan#fir-globus`.
+- CPU nodes: 192 cores (8 per CCD, so `--cpus-per-task=8` keeps threads cache-local), 750 GB RAM.
+- Max walltime 7 days. No partition flag needed. Always `--account=def-bayne` (the allocation
+  every job script uses — not `def-ecknight`, which is only the project *directory* path).
+- Storage: `$HOME` is small; `$HOME/scratch` (where `ia_dir` lives) is large, **not backed up and
+  purged automatically**, so copy outputs to keep to `$HOME/project/...` (backed up daily).
 
 ## Key Architecture Decisions
 
@@ -255,7 +237,7 @@ SPECIES=CAWA,OVEN,OSFL,GRSP,LEYE,BOBO sbatch 18_map_population_change.sh
 **Blanks are modelled, not filled.** BART always returns a value, but some V5 covariates are missing by design (`SCANFIheightcv_*` where canopy height is 0), and gbm sends that NA down its missing branch.
 - `08B_deploy_pbart.R` models where each biotic covariate is blank. A blanked backfill is NA to the later covariates in the hierarchy, so their Fix B `_isNA` flag is 1 there as on the training land.
 - 12F passes blanks to gbm as `NA_real_` and counts them as complete.
-- Without this, every backfilled pixel looked treed (`_isNA` = 0), which made GRSP's can11 decline an artefact (TODO C2d).
+- Without this, every backfilled pixel looked treed (`_isNA` = 0), which made GRSP's can11 decline an artefact (C2d, found by 16C).
 
 **Coordinate scaling**: Within each subbasin, lat/lon are centered and scaled before being added as predictors to improve BART performance.
 
@@ -263,12 +245,12 @@ SPECIES=CAWA,OVEN,OSFL,GRSP,LEYE,BOBO sbatch 18_map_population_change.sh
 
 **Re-prediction**: `11_premosaic` mosaics backfilled subbasin rasters into BCR-wide stacks. `12A_observed.R` (on Fir) writes the truncated `observed_bootstraps.tif` per species×BCR, a hard dependency for `12D`/`12F`. `12D_repredict_all_coalitions.R` runs ONE array task per species × BCR and computes all 255 coalitions in a single pass: it sources `12F_predict_species_all_coalitions.R`, which builds the backfilled field ONCE over the BCR's all-8-sectors superset and reduces every coalition as a cheap masked `rowsum`; `12H` merges the per-BCR files. For a given coalition S of sectors, pixels where any sector in S has footprint (AND CanHF ≥ 1) get the footprint covariates at 0, and those in the DIRECT footprint of a sector in S also get backfilled vegetation (Open Limitation #10); all other pixels use observed. Joint BART×BRT sampling nests BART posterior draws inside BRT bootstrap iterations.
 
-**12F restructure invariants**: The joint-sampling seed depends only on species, BCR, bootstrap `i`, and scenario `k` — never the coalition. So for fixed (species, BCR, i, k) the backfilled density field over pixels is identical across all 255 coalitions; the coalition only selects which pixels are masked in, never the backfilled value at a pixel. This is what licenses computing the backfilled field ONCE over the all-8-sectors superset and reducing each coalition as a cheap masked `rowsum`. Correctness constraints that must hold for the restructure to stay bit-identical to the (retired) per-coalition path:
+**12F invariants**: The joint-sampling seed depends only on species, BCR, bootstrap `i`, and scenario `k` — never the coalition. So for fixed (species, BCR, i, k) the backfilled density field over pixels is identical across all 255 coalitions; the coalition only selects which pixels are masked in, never the backfilled value at a pixel. This is what licenses computing the backfilled field ONCE over the all-8-sectors superset and reducing each coalition as a masked `rowsum`. Constraints that must hold:
 - The complete-case mask is identical between obs and bf (a single `keep` drives both).
 - BART draws are log1p-scaled → `expm1` before use; non-finite → NA, never 0.
 - Categorical `var.levels` are indexed by `match()` against `var.names`, never by name.
-- BOTH V5 upper caps are applied per pixel in the gbm step and DO feed the density table: `pmin(pmin(pred_vec, qsp), q99)` (12F:350, where `qsp` is the densmax cap). `densmax` is `q.out$densmax` (the old `$q` column no longer exists); `q99` is the per-BCR 99.9th percentile **frozen from the observed landscape** by 12A and read from `predictions/{species}/truncation_params.rds`. It must never be re-derived from a counterfactual, or the cap enters the obs/bf contrast. The observed side is pre-clamped by 12A, so both sides carry identical caps.
-- Grouped `_draw_*` reads use INTERLEAVE=BAND (now once per BCR).
+- BOTH V5 upper caps are applied per pixel in the gbm step and DO feed the density table: `pmin(pmin(pred, qsp), q99)`, where `qsp` is the densmax cap (`q.out$densmax`; there is no `$q` column). `q99` is the per-BCR 99.9th percentile **frozen from the observed landscape** by 12A and read from `predictions/{species}/truncation_params.rds`. It must never be re-derived from a counterfactual, or the cap enters the obs/bf contrast. The observed side is pre-clamped by 12A, so both sides carry identical caps.
+- Grouped `_draw_*` reads use INTERLEAVE=BAND (once per BCR).
 - **Missing covariates reach gbm as `NA_real_`, never `NaN`.** `terra::values()` returns missing
   cells as `NaN`, and gbm's tree walk sends ONLY `NA_real_` down a split's missing branch (a
   `NaN` fails the `<` test and goes right). V5's observed predictions used the missing branch,
@@ -375,7 +357,7 @@ data/
 
 Large spatial files (`.tif`, `.gpkg`, `.shp`) and most `.rds` files are gitignored. The CSV outputs in `data/derived_data/rds_files/` (accuracy/confusion matrices) and `sector_effects*/` (14B) are kept local, not versioned (user decision, 2026-10-04).
 
-## Open Limitations (updated 2026-10-06)
+## Open Limitations (updated 2026-10-13)
 
 Numbers are cited from code and `TODO.md`, so closed items keep their number.
 
@@ -387,7 +369,7 @@ Numbers are cited from code and `TODO.md`, so closed items keep their number.
 
 3. **No spatial spillover**: The formula `cf = obs_on_non_coalition + backfilled_on_coalition` assumes removing a coalition's footprint only affects birds on those pixels. Edge effects, area sensitivity, and functional connectivity mean impacts extend beyond the footprint boundary (especially important for linear features like roads and seismic lines).
 
-9. **Footprint covariates in the counterfactual (DECIDED 2026-09-25, `TODO.md` C2e)**. V5's
+9. **Footprint covariates in the counterfactual (DECIDED 2026-09-25, C2e; record in `git show 3fcef6d:TODO.md`)**. V5's
    "Disturbance" predictor class (CanHF_1km/_5x5, canroad_1km/_5x5, CCNL_1km night lights) is
    human footprint. The counterfactual has no industry, so a backfilled pixel carries no
    footprint: a backfilled forest cannot sit on top of a road. Both uses therefore set the
@@ -398,23 +380,20 @@ Numbers are cited from code and `TODO.md`, so closed items keep their number.
    footprint itself) and a vegetation part (`bf − d0`). Positive responses to modest
    disturbance can be real (Mahon et al. 2019, Ecol. Appl. 29:e01895: deciduous-associated
    species, Ovenbird included, increase with wide linear features), so the direct part is
-   reported, not removed. It can be large and of opposite sign (OVEN roads: −1.27 M direct,
-   +2.14 M vegetation).
+   reported, not removed. It can be large and of opposite sign (OVEN roads, C2d run: −1.27 M
+   direct, +1.74 M vegetation).
    The part rests on thin survey support: in the can11/12/13 models at least 90%
    of survey locations have CanHF_1km ≥ 6–7 and canroad_5x5 ≥ 0.3–0.5 (gbm `var.levels`
    deciles), so the response at 0 comes from the low tail. The 5×5 covariates are exact only
    for the all-sector coalition: for a partial one, zeroing them also removes other sectors'
    footprint within the neighbourhood.
    (b) **BART.** 07's `abiotic_vars` includes the class. 08A trains on observed values and
-   backfills with the class at 0, which is inside the low-HF training range. (Backfilling with
-   each pixel's observed values, beyond that range, held vegetation at the training edge: as if
-   the road were still there. In a local test, relative to dropping the class, observed values
-   moved backfilled means by −15% to +32% and 0 by −6% to +73%;
-   `Rscripts/misc/diag_extreme_bcr_bart_footprint.R`.)
-   `10C` excludes the class from its extrapolation diagnostic: its observed values are
+   backfills with the class at 0, which is inside the low-HF training range (each pixel's
+   observed values, beyond that range, held vegetation at the training edge: as if the road
+   were still there). `10C` excludes the class from its extrapolation diagnostic: its observed values are
    outside the training range by construction.
 
-10. **What counts as a sector's footprint (DECIDED 2026-09-28, `TODO.md` C2f): two masks.**
+10. **What counts as a sector's footprint (DECIDED 2026-09-28, C2f; same record): two masks.**
     Hirsh-Pearson scores roads, rail, mines, reservoirs and oil and gas by distance band, so a
     sector's pressure layer includes influence zones around the mapped feature. The split
     follows their own: direct pressure is "the actual footprint such as physical removal of
@@ -446,47 +425,36 @@ Numbers are cited from code and `TODO.md`, so closed items keep their number.
 
 4. ~~**Uncertainty combination is ad hoc**~~: **Addressed** by joint sampling in 12F: each (bootstrap, scenario) pair draws a fresh BART realization inside the BRT bootstrap loop, so no post-hoc variance combination is needed.
 
-5. ~~**Backfill coverage collapse**~~: **Fixed and validated.** `12F` drops footprint pixels
-   whose backfilled design is incomplete, and this once dropped 98.5–99.7% of coalition pixels
-   in some BCRs. Two causes:
-   (a) `CAfire` (an IA-only backfill predictor) encoded "unburned 1985–2020" as `NA`, and BART's
-   `NaN` cascaded down the hierarchy. `02` recodes `NA → 0` (with `1/(ysf+1)`, never-burned is
-   the `ysf → ∞` limit).
-   (b) Partial-NA V5 covariates (`StandardGreenup`/`StandardDormancy`): gbm sends `NA_real_` down
-   a missing branch, BART does not. **Fix B**: `08A` median-imputes with an `_isNA` flag.
-   **Fix A**: `12F` gates only on backfilled covariates. Recoding phenology was rejected: unlike
-   CAfire, these ARE V5 covariates.
-   Every 12D run since has ≥ 99.9% of weight > 0 footprint pixels complete in every BCR
-   (exception: LEYE can3, 82.7%; `TODO.md` Loose ends).
+5. ~~**Backfill coverage collapse**~~: **Fixed.** `12F` drops footprint pixels whose
+   backfilled design is incomplete; this once dropped 98.5–99.7% in some BCRs. `02` recodes
+   CAfire's "never burned" `NA → 0`; **Fix B**: `08A` median-imputes partial-NA V5 covariates
+   (phenology) with an `_isNA` flag; **Fix A**: `12F` gates only on backfilled covariates. Every
+   12D run since keeps ≥ 99.9% of weight > 0 footprint pixels in every BCR except can3 (82.7%
+   before C2d, which should fix it; `TODO.md` Loose ends).
 
 6. **The frozen `q99.9` cap biases impact downward, slightly**: `T(S) = clamp(clamp(S, densmax),
    q99) × weight` is applied identically to observed and every counterfactual, with **`q99`
    frozen from the observed landscape** (`predictions/{species}/truncation_params.rds`).
    Freezing is mandatory: a cap re-derived per counterfactual would adapt to the landscape being
    differenced. It is not neutral, because counterfactual densities hit the frozen ceiling more
-   often. **Measured 2026-10-04 (C3, `DROP_Q99=1`): small.** Uncapped, v(N) rises 1.16% (CAWA)
-   and 0.05% (OVEN), and no sector share moves; q99 binds at only 0–1% of observed footprint
-   pixels. In the C3 run, 12F re-predicts the observed footprint (the tif is q99-clamped) and
-   stops unless re-capping it reproduces the tif.
-   Two durable facts: `q.out`'s schema is `spp, thresh, countmax, densmax` — **there is no `$q`
-   column**, and `pmin(x, NULL)` returns `numeric(0)` *silently*, so `12F` guards the schema and
-   `stop()`s. And `q99` binds 1.2×–35× lower than `densmax` for CAWA/OVEN (up to 740× in some
-   new-species BCRs), so it is the binding cap almost everywhere.
+   often. **Measured 2026-10-04 (C3, `DROP_Q99=1`, pre-C2d): small.** Uncapped, v(N) rises
+   1.16% (CAWA) and 0.05% (OVEN), and no sector share moves; q99 binds at only 0–1% of observed
+   footprint pixels. With `DROP_Q99`, 12F re-predicts the observed footprint (the tif is
+   q99-clamped) and stops unless re-capping it reproduces the tif.
+   `q.out`'s schema is `spp, thresh, countmax, densmax` — **there is no `$q` column**, and
+   `pmin(x, NULL)` returns `numeric(0)` *silently*, so `12F` guards the schema and `stop()`s.
+   `q99` is the binding cap almost everywhere (1.2×–35× below `densmax` for CAWA/OVEN).
 
 7. ~~**Two masking defects in `weight.tif`**~~: **Fixed 2026-09-11.** Kept because both are easy
    to reintroduce:
-   (a) **V5 prediction grids are BUFFERED 100 km past their subunit**, deliberately, for V5's
-   feathered border blend; V5 crops to the subunit after mosaicking (`10.Truncate.R:146`). We
-   stage the pre-mosaic `07_predictions`, where 59–71% of non-NA pixels lie outside the subunit,
-   and 329 of 674 subbasins straddle more than one BCR. Without the crop each straddling
-   subbasin was summed under every BCR it touches (populations 2.2×–14.6× too high). `12C`'s
-   `inbcr` term uses `Regions/BAM_BCR_NationalModel_Unbuffered.shp` (identical geometry to V5's
-   `Subregions_Mosaics_EPSG3978.shp`).
-   (b) **`terra::rasterize()` defaults to `touches = FALSE`**, while V5's `mask(vect, inverse =
-   TRUE)` and `crop(vect, mask = TRUE)` behave as `touches = TRUE`. On the 29,545-polygon water
-   mask the centre rule let through 4.9–7.7% of abundance. All terms pass `touches = TRUE`.
-   Both moved absolute populations only; shares were far less affected because the weight
-   multiplies both sides. Harness: `Rscripts/misc/verify_weight_vs_v5_masking.R`.
+   (a) **V5 prediction grids are BUFFERED 100 km past their subunit** (for V5's border blend;
+   V5 crops after mosaicking, `10.Truncate.R:146`), and we read the pre-mosaic
+   `07_predictions`. Without `12C`'s `inbcr` crop (`Regions/BAM_BCR_NationalModel_Unbuffered.shp`,
+   identical to V5's `Subregions_Mosaics_EPSG3978.shp`), each subbasin straddling BCRs was
+   summed under every BCR it touches (populations 2.2×–14.6× too high).
+   (b) **`terra::rasterize()` defaults to `touches = FALSE`**, while V5's `mask()`/`crop()`
+   behave as `touches = TRUE` (the centre rule let through 4.9–7.7% of abundance on water). All
+   terms pass `touches = TRUE`. Harness: `Rscripts/misc/verify_weight_vs_v5_masking.R`.
    **Load-bearing invariant when adding a mask term**: `weight.tif` must be non-NA everywhere.
    That is how we reproduce V5's `mask.i[is.na(mask.i)] <- 0` (`10.Truncate.R:141`) under a sum —
    range NA→0 via `classify`, and every `rasterize()` called with `background = 0`. A new term
