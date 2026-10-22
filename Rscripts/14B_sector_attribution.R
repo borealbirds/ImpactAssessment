@@ -231,6 +231,13 @@ for (sy in seq_len(nrow(species_years))) {
     }
   }
 
+  # BAM withheld every BCR of some species (BGGN, BWWA, DUNL, GWWA, NESP, SPGR, YBCU, YTVI as
+  # of 2026-10-14): nothing is left to report, so they are absent from 14B's tables, 14C and 18
+  if (sum(vapply(dt_list, nrow, integer(1))) == 0L) {
+    message("  no subbasin rows left after the release filter: ", sp, " is left out")
+    next
+  }
+
   # get the set of all BCRs x subbasins across coalitions
   all_rows <- bind_rows(dt_list, .id = "coal_id")
   bcr_sub_ref <- distinct(all_rows, bcr, subbasin)

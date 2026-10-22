@@ -8,19 +8,41 @@ library(BAMexploreR)
 library(tidyverse)
 library(terra)
 
-# set root path
-root <- "G:/Shared drives/BAM_NationalModels5"
-ia_dir <- file.path(root, "data", "Extras", "sandbox_data", "impactassessment_sandbox")
+# terra::project() returns different VALUES under memory pressure (see 12A), so pin memfrac
+terraOptions(memfrac = 0.60)
+
+# inside a Slurm job this is the cluster (Fir), which holds Elly's BCR stacks (NationalModels/
+# gis/stacks, as 11 and 12F read them); anywhere else, the Google Drive sandbox
+cc <- nzchar(Sys.getenv("SLURM_JOB_ID"))
+
+if (cc) {
+  root       <- "/home/mannfred/projects/def-ecknight/NationalModels"
+  ia_dir     <- "/home/mannfred/scratch/impact_assessment"
+  input_dir  <- file.path(ia_dir, "data", "raw_data")
+  outdir     <- file.path(input_dir, "covariates_mosaiced")
+} else {
+  root       <- "G:/Shared drives/BAM_NationalModels5"
+  ia_dir     <- file.path(root, "data", "Extras", "sandbox_data", "impactassessment_sandbox")
+  input_dir  <- ia_dir
+  outdir     <- ia_dir
+}
+
+# terra sizes its blocks from the node's free RAM, not the job's allocation (see 11), so
+# cap it at 30% of the allocation
+slurm_mem_mb <- suppressWarnings(as.numeric(Sys.getenv("SLURM_MEM_PER_NODE")))
+if (is.finite(slurm_mem_mb)) terraOptions(memmax = 0.3 * slurm_mem_mb / 1024)
 
 # import industry-subbasin multi-polygon
-all_subbasins_subset <- vect(file.path(ia_dir, "hydrobasins_masked_merged_subset.gpkg"))
+all_subbasins_subset <- vect(file.path(input_dir, "hydrobasins_masked_merged_subset.gpkg"))
 
 # identify BCRs needed for mosaicing (19 BCRs)
 bcrs_needed <- BAMexploreR::bam_get_bcr(version = "v5", ext = all_subbasins_subset)
-  
-# define temporal scope
-# years <- seq(from = 1990, to = 2015, by = 5)
-years <- seq(from = 2020, to = 2020, by = 5)
+
+# years to build: YEARS, comma-separated, from the environment (default 2020), as in 07 and 11.
+# `bash 06_build_covariate_stacks.sh 1995 2000` runs one array task per year.
+years <- suppressWarnings(as.integer(strsplit(trimws(Sys.getenv("YEARS", "2020")), "[, ]+")[[1]]))
+if (length(years) == 0L || anyNA(years))
+  stop("YEARS must be comma-separated years, e.g. YEARS=2015,2020; got '", Sys.getenv("YEARS"), "'")
 
 # -----------------------------------------------------
 # for every year, import BCR covariate stacks and mosaic
@@ -37,69 +59,75 @@ build_mosaics_by_year <- function(
     outdir     = file.path(ia_dir),
     soil_cache = NULL
 ){
-  
+
   # set a cache so that the soil data doesn't need to be loaded on every iteration
   if (is.null(soil_cache)) soil_cache <- new.env(parent = emptyenv())
-  
+
   # define output directory and file names
   dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
   out_files <- setNames(vector("list", length(years)), as.character(years))
   target_crs <- terra::crs(all_subbasins_subset)
-  
+
+  # 07 reads covariates by name, so every year's mosaic must carry the 2020 mosaic's layers, in
+  # the same order, on the same grid
+  ref_path <- file.path(outdir, "covariates_mosaiced_2020.tif")
+
   # for every year, find all BCR stacks
   for (y in years) {
 
     files_y <- file.path(stacks_dir, paste0(bcrs_needed, "_", y, ".tif"))
-    files_y <- files_y[file.exists(files_y)]
-    
-    # import relevant stacks for current year and crop 
+    if (!all(file.exists(files_y)))
+      stop("year ", y, ": no BCR stack at ", paste(files_y[!file.exists(files_y)], collapse = ", "))
+    message("year ", y, ": mosaicking ", length(files_y), " BCR stacks from ", stacks_dir)
+
+    # import relevant stacks for current year and crop
     stacks <- lapply(files_y, function(f) {
-      
+
       # import stack f
       r <- terra::rast(f)
-      
+
       # guard tiles with missing crs
       if (is.na(terra::crs(r)) || terra::crs(r) == "") terra::crs(r) <- target_crs
-      
-      # project the bounding box of the all_subbasins_subset 
+
+      # project the bounding box of the all_subbasins_subset
       # then crop the current stack (less memory downstream)
       subb_local_ext <- terra::project(
         terra::ext(all_subbasins_subset),
         from = target_crs,
         to   = terra::crs(r))
-     
+
       terra::crop(r, subb_local_ext)  # extent crop only
     })
-    
+
     # index covariate names from the current stack
     all_vars <- unique(unlist(lapply(stacks, names)))
-  
+
     # progress bar for per-variable loop
     pb   <- utils::txtProgressBar(min = 0, max = length(all_vars), style = 3)
     prog <- 0L
-    
+
     # create containers for mosaics to go into
     mos_layers <- vector("list", length(all_vars))
     names(mos_layers) <- all_vars
     tmpl_5072 <- NULL
-    
+
     # nested loop over layers within stacks: nm is a single covariate (layer) name
     for (nm in all_vars) {
-      
+
       # for every stack, if nm (covariate) exists pull it as a single SpatRaster
       lyr_list <- lapply(stacks, function(r) if (nm %in% names(r)) r[[nm]] else NULL)
-      
+
       # drop NULLs so we're left with only the stacks that actually have nm layer
       lyr_list <- Filter(Negate(is.null), lyr_list)
-      
+
       # if no layers had that variable, skip mosaicing this variable and move on
       if (length(lyr_list) == 0L) next
-      
+
       # check if nm layer is categorical
       is_cat <- nm %in% categorical_predictors
       if (is_cat) lyr_list <- lapply(lyr_list, terra::as.factor)
-      
-      # if layer exists in more than one BCR, mosaic 
+
+      # if layer exists in more than one BCR, mosaic
       mos <- if (length(lyr_list) == 1L) {
         lyr_list[[1]]
       } else {
@@ -108,12 +136,12 @@ build_mosaics_by_year <- function(
           c(lyr_list, list(fun = if (is_cat) "modal" else "mean"))
         )
       }
-      
+
       # ensure categorical predictors remain factors after mosaicing
       names(mos) <- nm
       if (is_cat) mos <- terra::as.factor(mos)
-      
-      
+
+
       # project current covariate (nm) to 5072; first one becomes the template grid
       if (is.null(tmpl_5072)) {
         mos_5072 <- terra::project(
@@ -131,85 +159,92 @@ build_mosaics_by_year <- function(
           filename = tempfile(fileext = ".tif"), overwrite = TRUE
         )
       }
-      
+
       # ensure categorical layers are factors
       if (is_cat) mos_5072 <- terra::as.factor(mos_5072)
-      
+
       # store
       mos_layers[[nm]] <- mos_5072
-      
+
       # update progress bar
       prog <- prog + 1L
       if (prog %% 5L == 0L || prog == length(all_vars)) utils::setTxtProgressBar(pb, prog)
-      
+
       } # close nested loop
-    
+
     # finish progress bar
     close(pb)
-    
+
     # re-stack mosaiced layers
     mos_layers <- Filter(Negate(is.null), mos_layers)
-    if (length(mos_layers) == 0L) { 
-      message("No variables mosaicked for ", y); 
-      next 
+    if (length(mos_layers) == 0L) {
+      message("No variables mosaicked for ", y);
+      next
     }
     r_mos <- if (length(mos_layers) == 1L) mos_layers[[1]] else terra::rast(mos_layers)
-    
-    
-    # CAfire: add time-since-disturbance layer for this year ---
-    caf_path <- file.path(ia_dir, "CAfire", paste0("CAfire_", y, "_masked.tif"))
-   
-     if (file.exists(caf_path)) {
-       
-      caf <- terra::rast(caf_path)
-      
-      if (is.na(terra::crs(caf)) || terra::crs(caf) == "") terra::crs(caf) <- target_crs
-      
-      caf_aligned <- terra::project(
-        caf, r_mos, method = "bilinear",
-        filename = tempfile(fileext = ".tif"), overwrite = TRUE)
-      
-      names(caf_aligned) <- "CAfire"
-      
-      if ("CAfire" %in% names(r_mos)) r_mos <- r_mos[[setdiff(names(r_mos), "CAfire")]]
-      r_mos <- c(r_mos, caf_aligned)
-      
-    } else {
-      
-      message("Year ", y, ": CAfire not found at ", caf_path, " (skipping)")
-      
-    }
-    
-  
+
+
+    # CAfire: add time-since-disturbance layer for this year (built by 02) ---
+    caf_path <- file.path(input_dir, "CAfire", paste0("CAfire_", y, "_masked.tif"))
+    if (!file.exists(caf_path)) stop("year ", y, ": no CAfire layer at ", caf_path, " (built by 02)")
+
+    caf <- terra::rast(caf_path)
+
+    if (is.na(terra::crs(caf)) || terra::crs(caf) == "") terra::crs(caf) <- target_crs
+
+    caf_aligned <- terra::project(
+      caf, r_mos, method = "bilinear",
+      filename = tempfile(fileext = ".tif"), overwrite = TRUE)
+
+    names(caf_aligned) <- "CAfire"
+
+    if ("CAfire" %in% names(r_mos)) r_mos <- r_mos[[setdiff(names(r_mos), "CAfire")]]
+    r_mos <- c(r_mos, caf_aligned)
+
+
     # import soils stack and add to covariate stack
-    soil_src  <- terra::rast(file.path(ia_dir,"isric_soil", "isric_soil_covariates_masked.tif"))
-    
+    soil_src  <- terra::rast(file.path(input_dir, "isric_soil", "isric_soil_covariates_masked.tif"))
+
     # identify the geometry of the current year’s covariate stack
     geom_key <- paste(nrow(r_mos), ncol(r_mos), as.character(terra::ext(r_mos)), crs(r_mos), sep="|")
-    
+
     # on the first loop (year) we import and align the soil stack
     # on subsequent iterations (years) we save time by using `get()`
     if (exists(geom_key, envir = soil_cache)) {
       soil_aligned <- get(geom_key, envir = soil_cache)
     } else {
-    
+
     soil_aligned <- terra::project(
       soil_src, r_mos, method = "bilinear",
       filename = tempfile(fileext = ".tif"), overwrite = TRUE) |>
       terra::crop(x= _, y = r_mos) |>
       terra::mask(x= _, mask = r_mos[[1]])
     assign(geom_key, soil_aligned, envir = soil_cache)
-    } 
-    
-    r_mos <- c(r_mos, soil_aligned)          
-    message("successfully added soil stack to covariate stack for year ", y)                        
-    
-    
+    }
+
+    r_mos <- c(r_mos, soil_aligned)
+    message("successfully added soil stack to covariate stack for year ", y)
+
+
     # crop and mask to subbasin extent
-    r_out <- 
-      terra::crop(x = r_mos, y = all_subbasins_subset) |> 
+    r_out <-
+      terra::crop(x = r_mos, y = all_subbasins_subset) |>
       terra::mask(x = _, mask = all_subbasins_subset)
-    
+
+    # same layers, order and grid as the 2020 mosaic, or stop before writing
+    if (file.exists(ref_path)) {
+      ref <- terra::rast(ref_path)
+      if (!identical(names(r_out), names(ref)))
+        stop("year ", y, ": layers differ from ", ref_path, ". Only here: ",
+             paste(setdiff(names(r_out), names(ref)), collapse = ", "), "; only there: ",
+             paste(setdiff(names(ref), names(r_out)), collapse = ", "),
+             if (setequal(names(r_out), names(ref))) " (same set, different order)")
+      terra::compareGeom(r_out, ref, stopOnError = TRUE)
+      message("year ", y, ": ", terra::nlyr(r_out), " layers and grid match ", ref_path)
+    } else {
+      message("year ", y, ": no ", ref_path, " to check layers against")
+    }
+
     # write out
     out_path <- file.path(outdir, paste0("covariates_mosaiced_", y, ".tif"))
     terra::writeRaster(r_out, out_path, overwrite = TRUE,
@@ -217,13 +252,14 @@ build_mosaics_by_year <- function(
     message("writing ", out_path)
     out_files[[as.character(y)]] <- out_path
   }
-  
+
   # returns without printing
   invisible(out_files)
 }
 
-build_mosaics_by_year(root, 
+build_mosaics_by_year(root,
                       years = years,
-                      bcrs_needed = bcrs_needed, 
-                      all_subbasins_subset = all_subbasins_subset)
+                      bcrs_needed = bcrs_needed,
+                      all_subbasins_subset = all_subbasins_subset,
+                      outdir = outdir)
 

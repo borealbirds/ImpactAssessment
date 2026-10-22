@@ -22,7 +22,7 @@ BHVI
 BLBW
 BLJA
 BLPW
-BOBO
+# BOBO (done on the C2d backfill, 2026-10-13)
 BOCH
 BOWA
 BRBL
@@ -32,7 +32,7 @@ BTBW
 BTNW
 BWWA
 CAJA
-CAWA
+# CAWA (done on the C2d backfill, 2026-10-13)
 CCSP
 CEDW
 CHSP
@@ -57,7 +57,7 @@ GCKI
 GCSP
 GCTH
 GRCA
-GRSP
+# GRSP (done on the C2d backfill, 2026-10-13)
 GRYE
 GWWA
 HAFL
@@ -71,7 +71,7 @@ KILL
 LALO
 LCSP
 LEFL
-LEYE
+# LEYE (done on the C2d backfill, 2026-10-13)
 LISP
 MAWA
 MAWR
@@ -85,8 +85,8 @@ NOFL
 NOPA
 NOWA
 OCWA
-OSFL
-OVEN
+# OSFL (done on the C2d backfill, 2026-10-13)
+# OVEN (done on the C2d backfill, 2026-10-13)
 PAWA
 PHVI
 PIGR

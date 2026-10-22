@@ -1,16 +1,11 @@
 # ---
-# title: Impact Assessment: map the population change due to industrial footprint per subbasin
+# title: Impact Assessment: map the population change due to industrial footprint
 # author: Mannfred Boehm
 # ---
-# Reads 14B's subbasin output and maps, per subbasin, what industry did to each species:
-# change = observed (2020) - counterfactual (no industry) = -total_HF_impact, so red is a
-# decline due to industry and blue an increase. Subbasins that straddle BCRs are summed
-# across them by HYBAS_ID. Grey: no subbasin with footprint, outside the species' modelled
-# BCRs, or withheld by BAM (14B drops them, e.g. CAWA can40).
-#   (1) absolute change, birds per km2 of subbasin, one figure per species on its own scale
-#   (2) percent change relative to the no-industry population, CAWA and OVEN side by side
-#       (drawn only when both are mapped)
-#   (3) the pixel-level change on a 10 km grid, one figure per species
+# Maps what industry did to each species, one figure per species (change_grid_{species}.png):
+# the pixel-level change = observed (2020) - counterfactual (no industry) = -total_HF_impact,
+# summed into 10 km cells, so red is a decline due to industry and blue an increase. Grey:
+# outside the species' modelled BCRs, or withheld by BAM (14B drops them, e.g. CAWA can40).
 # Display CRS is EPSG:3978 (display only).
 #
 # Species: every species in 14B's tables, or the ones named in SPECIES (comma-separated):
@@ -26,7 +21,7 @@
 # A sensitivity run is mapped by setting its switch, as for 14B (12E sensitivity_run()):
 #   DENS_MIN=0.005 Rscript Rscripts/18_map_population_change.R
 # reads sector_effects_dmin0.005/ and writes the same figures with a _dmin0.005 suffix. The
-# absolute maps keep the production run's colour scale, so the two can be compared directly.
+# maps keep the production run's colour scale, so the two can be compared directly.
 # ---
 
 suppressPackageStartupMessages({
@@ -49,28 +44,18 @@ source(file.path(ia_dir, "Rscripts", "12E_shapley_utils.R"))
 sens <- sensitivity_run()
 
 shap_path  <- file.path(ia_dir, "data", "derived_data", paste0("sector_effects", sens$suffix), "shapley_subbasin.csv")
-prod_path  <- file.path(ia_dir, "data", "derived_data", "sector_effects", "shapley_subbasin.csv")
-basin_path <- file.path(ia_dir, "data", "raw_data", "hydrobasins_masked_merged_subset.gpkg")
 bcr_path   <- file.path(ia_dir, "data", "raw_data", "Regions", "BAM_BCR_NationalModel_Unbuffered.shp")
 names_path <- file.path(ia_dir, "data", "raw_data", "species_names.csv")
 fig_dir    <- file.path(ia_dir, "output_figures")
 dir.create(fig_dir, showWarnings = FALSE)
 
 
-# subbasin change ------------------------------------------------
+# subbasin totals (for the titles) -------------------------------
 
-# one row per species x bcr x subbasin (total_HF_impact repeats across the 8 sector rows),
-# then sum straddling subbasins across BCRs
-subbasin_change <- function(path) {
-  read.csv(path) |>
-    distinct(species, bcr, HYBAS_ID, obs_population, total_HF_impact) |>
-    group_by(species, HYBAS_ID) |>
-    summarise(obs = sum(obs_population), impact = sum(total_HF_impact), .groups = "drop") |>
-    mutate(cf     = obs + impact,
-           change = -impact,                                 # obs - cf: what industry did
-           pct    = ifelse(cf > 0, 100 * change / cf, NA_real_))
-}
-sub <- subbasin_change(shap_path)
+# one row per species x bcr x subbasin (total_HF_impact repeats across the 8 sector rows)
+sub <- read.csv(shap_path) |>
+  distinct(species, bcr, HYBAS_ID, obs_population, total_HF_impact) |>
+  mutate(obs = obs_population, cf = obs_population + total_HF_impact)
 
 
 # species --------------------------------------------------------
@@ -117,25 +102,8 @@ bcr_can <- bcr_can[bcr_can$country == "can", ]
 bcr     <- terra::project(bcr_can, "EPSG:3978")
 bcr_xy  <- vertices(bcr)
 
-# Keep only the Canadian part of each subbasin: the birds are counted inside the Canadian BCRs
-# only (12C's in-BCR weight), so the area that turns them into birds/km2 must be Canadian too.
-# Planar area (transform = FALSE) in the equal-area EPSG:5072.
-canada <- bcr_can |> terra::project("EPSG:5072") |> terra::makeValid() |> terra::aggregate()
-basins <- terra::vect(basin_path)[, "first_HYBAS_ID"]
-names(basins) <- "HYBAS_ID"
-basins <- terra::crop(terra::makeValid(basins), canada)
-basins$area_km2 <- terra::expanse(basins, unit = "km", transform = FALSE)
-basin_area <- as.data.frame(basins)
-basin_xy   <- vertices(terra::project(basins, "EPSG:3978"))
-
-# the map's vertices for species s, with each subbasin's change per km2
-basin_map <- function(s) {
-  basin_xy |>
-    inner_join(filter(sub, species %in% s), by = "HYBAS_ID", relationship = "many-to-many") |>
-    mutate(dens = change / area_km2, group = in_order(paste(species, group)))
-}
-
 # everything outside Canada, painted white over the 10 km cells
+canada   <- bcr_can |> terra::project("EPSG:5072") |> terra::makeValid() |> terra::aggregate()
 bb       <- as.vector(terra::ext(bcr))
 can_3978 <- terra::project(canada, "EPSG:3978")
 outside  <- terra::as.polygons(terra::ext(bcr), crs = terra::crs(bcr)) |>
@@ -167,61 +135,12 @@ map_theme <- function() {
           legend.key.height = unit(0.35, "cm"), legend.title.position = "top",
           legend.title = element_text(hjust = 0.5),
           plot.title = element_text(size = 11, hjust = 0.5, margin = margin(b = 4)),
-          strip.text = element_text(size = 11, margin = margin(b = 4)),
           plot.background = element_rect(fill = "white", colour = NA),
           plot.margin = margin(12, 12, 12, 12))
 }
 
-change_map <- function(data, fill_var, lim, legend, labels_fun) {
-  ggplot(mapping = aes(x, y, group = group, subgroup = hole)) +
-    geom_polygon(data = bcr_xy, fill = land, colour = "white", linewidth = 0.3) +
-    geom_polygon(data = data, aes(fill = pmax(pmin({{ fill_var }}, lim), -lim)), colour = NA) +
-    geom_polygon(data = bcr_xy, fill = NA, colour = "white", linewidth = 0.3) +
-    scale_fill_gradient2(low = red, mid = mid, high = blue, midpoint = 0,
-                         limits = c(-lim, lim), breaks = c(-1, -0.5, 0, 0.5, 1) * lim,
-                         labels = labels_fun,
-                         na.value = land, name = legend) +
-    coord_equal() +
-    map_theme()
-}
 
-
-# (1) absolute change, one figure per species ---------------------
-
-# cap each species at the 98th percentile of |change| in the PRODUCTION run, so a few small,
-# dense subbasins don't wash out the rest and a sensitivity run shares production's scale
-lims <- subbasin_change(prod_path) |>
-  filter(species %in% spp) |>
-  inner_join(basin_area, by = "HYBAS_ID") |>
-  group_by(species) |>
-  summarise(lim = nice_ceiling(quantile(abs(change / area_km2), 0.98, na.rm = TRUE)))
-lims <- setNames(lims$lim, lims$species)
-
-abs_map <- function(sp) {
-  d   <- basin_map(sp)
-  lim <- lims[[sp]]
-  fmt <- if (lim <= 1) "%+.2f" else if (lim <= 10) "%+.1f" else "%+.0f"
-  cat(sprintf("%s: change density range %.2f to %.2f birds/km2, scale capped at +-%g\n",
-              sp, min(d$dens), max(d$dens), lim))
-  p <- change_map(d, dens, lim, "Population change (birds per km\u00b2)", capped_labels(lim, fmt)) +
-    labs(title = headline[[sp]])
-  ggsave(file.path(fig_dir, sprintf("change_map_abs_%s%s.png", sp, sens$suffix)), p,
-         width = 7.5, height = 6.6, dpi = 200)
-}
-
-
-# (2) percent change, both species --------------------------------
-
-pct_map <- function() {
-  p <- change_map(basin_map(c("CAWA", "OVEN")), pct, 50, "Percent population change",
-                  capped_labels(50, "%+.0f%%")) +
-    facet_wrap(~species, ncol = 2, labeller = as_labeller(headline))
-  ggsave(file.path(fig_dir, paste0("change_map_pct_CAWA_OVEN", sens$suffix, ".png")), p,
-         width = 12, height = 6.2, dpi = 200)
-}
-
-
-# (3) pixel-level change on a 10 km grid --------------------------
+# pixel-level change on a 10 km grid -----------------------------
 # 12F writes, per species x BCR, the mean observed and no-industry density at every footprint
 # pixel the tables sum (birds/km2, weighted; density_tables{suffix}/pixel_change/). Off the
 # footprint nothing changes. Each 1 km pixel's change (obs - cf, in birds) goes to the 10 km cell
@@ -324,15 +243,10 @@ change_grid <- function(sp) {
 failed <- character(0)
 for (sp in spp) {
   t0 <- Sys.time()
-  ok <- tryCatch({ abs_map(sp); change_grid(sp); TRUE },
+  ok <- tryCatch({ change_grid(sp); TRUE },
                  error = function(e) { message(sp, ": FAILED: ", conditionMessage(e)); FALSE })
   if (!ok) failed <- c(failed, sp)
   message(sprintf("%s: %.0f s", sp, as.numeric(difftime(Sys.time(), t0, units = "secs"))))
-}
-if (all(c("CAWA", "OVEN") %in% spp)) {
-  ok <- tryCatch({ pct_map(); TRUE },
-                 error = function(e) { message("CAWA/OVEN % map: FAILED: ", conditionMessage(e)); FALSE })
-  if (!ok) failed <- c(failed, "CAWA/OVEN % map")
 }
 
 message("figures in ", fig_dir)

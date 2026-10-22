@@ -99,3 +99,6 @@ data/raw_data/deviation_from_expected/
 
 # Manuscript drafts and links (private; never pushed to the public repo)
 writing/
+
+# Anna Drake's data
+data/raw_data/anna_data/
