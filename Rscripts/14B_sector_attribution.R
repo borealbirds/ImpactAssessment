@@ -27,6 +27,9 @@
 #   shapley_subbasin.csv  — per-sector Shapley values at each subbasin
 #   shapley_bcr.csv       — aggregated to BCR
 #   shapley_national.csv  — aggregated to national
+# for ONE year, YEARS (default 2020), as 12D and 12H run one: the .sh submits one 14B + 14C and
+# one 18 per year. 2020's tables keep these names; another year's carry _{year}
+# (shapley_bcr_1995.csv), as a sensitivity run's directories carry its suffix.
 #
 # Release filter: BCRs whose models BAM withheld (the "remove" tab of BAM's
 # ModelReleaseDecisions.xlsx) are dropped here, not upstream — see `withheld_models` below.
@@ -68,6 +71,11 @@ basin_path <- file.path(ia_dir, "data/raw_data/hydrobasins_masked_merged_subset.
 flag_path  <- file.path(ia_dir, "data/derived_data/rds_files/extrapolation_flags.csv")
 out_dir    <- file.path(ia_dir, "data/derived_data", paste0("sector_effects", sens$suffix))
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+year <- suppressWarnings(as.integer(trimws(Sys.getenv("YEARS", "2020"))))
+if (is.na(year))
+  stop("YEARS must name one year per 14B job (the .sh submits one per year); got '", Sys.getenv("YEARS"), "'")
+ysfx <- if (year == 2020L) "" else paste0("_", year)
 
 # ---- Load hydrobasins --------------------------------------------------------
 
@@ -120,10 +128,10 @@ if (file.exists(flag_path)) {
   names(extrap_flags)[names(extrap_flags) == "flag"] <- "extrapolation_flag"
 }
 
-# ---- Discover available species x year combinations --------------------------
+# ---- Discover this year's species --------------------------------------------
 
-dt_files <- list.files(dt_dir, pattern = "^.*_coalition_[0-9]+\\.rds$", full.names = TRUE)
-if (length(dt_files) == 0) stop("No coalition density tables found in ", dt_dir)
+dt_files <- list.files(dt_dir, pattern = paste0("^.*_", year, "_coalition_[0-9]+\\.rds$"), full.names = TRUE)
+if (length(dt_files) == 0) stop("No coalition density tables for ", year, " in ", dt_dir)
 
 # parse filenames: {species}_{year}_coalition_{id}.rds
 parsed <- regmatches(basename(dt_files),
@@ -433,11 +441,12 @@ shapley_sub_all  <- bind_rows(shapley_sub_rows)
 shapley_bcr_all  <- bind_rows(shapley_bcr_rows)
 shapley_national <- bind_rows(shapley_nat_rows)
 
-write.csv(shapley_sub_all, file.path(out_dir, "shapley_subbasin.csv"), row.names = FALSE)
-write.csv(shapley_bcr_all, file.path(out_dir, "shapley_bcr.csv"),      row.names = FALSE)
-write.csv(shapley_national, file.path(out_dir, "shapley_national.csv"), row.names = FALSE)
+out_csv <- function(name) file.path(out_dir, paste0(name, ysfx, ".csv"))
+write.csv(shapley_sub_all, out_csv("shapley_subbasin"), row.names = FALSE)
+write.csv(shapley_bcr_all, out_csv("shapley_bcr"),      row.names = FALSE)
+write.csv(shapley_national, out_csv("shapley_national"), row.names = FALSE)
 
-message("\nWrote 3 tables to ", out_dir)
-message("  shapley_subbasin.csv : ", nrow(shapley_sub_all), " rows")
-message("  shapley_bcr.csv      : ", nrow(shapley_bcr_all), " rows")
-message("  shapley_national.csv : ", nrow(shapley_national), " rows")
+message("\nWrote 3 tables for ", year, " to ", out_dir)
+message("  ", basename(out_csv("shapley_subbasin")), " : ", nrow(shapley_sub_all), " rows")
+message("  ", basename(out_csv("shapley_bcr")), " : ", nrow(shapley_bcr_all), " rows")
+message("  ", basename(out_csv("shapley_national")), " : ", nrow(shapley_national), " rows")

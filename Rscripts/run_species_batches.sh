@@ -1,5 +1,6 @@
 #!/bin/bash
 # usage: bash run_species_batches.sh prep | smoke | plan | wave N   (species: species_todo.txt; MAX=400 tasks per wave)
+# years: YEARS=1995,2000 bash run_species_batches.sh ...   (12A/12C/12D/12H read YEARS; default 2020; MAX counts one year)
 set -euo pipefail
 cd "$(dirname "$0")"
 BOOT=${BOOT:-/home/mannfred/projects/def-ecknight/NationalModels/output/06_bootstraps}

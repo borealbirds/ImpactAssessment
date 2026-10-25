@@ -3,7 +3,7 @@
 # author: Mannfred Boehm
 # ---
 # Maps what industry did to each species, one figure per species (change_grid_{species}.png):
-# the pixel-level change = observed (2020) - counterfactual (no industry) = -total_HF_impact,
+# the pixel-level change = observed - counterfactual (no industry) = -total_HF_impact,
 # summed into 10 km cells, so red is a decline due to industry and blue an increase. Grey:
 # outside the species' modelled BCRs, or withheld by BAM (14B drops them, e.g. CAWA can40).
 # Display CRS is EPSG:3978 (display only).
@@ -22,6 +22,10 @@
 #   DENS_MIN=0.005 Rscript Rscripts/18_map_population_change.R
 # reads sector_effects_dmin0.005/ and writes the same figures with a _dmin0.005 suffix. The
 # maps keep the production run's colour scale, so the two can be compared directly.
+#
+# One year, YEARS (default 2020), as in 14B: YEARS=1995 Rscript Rscripts/18_map_population_change.R
+# reads 14B's shapley_*_1995.csv and writes change_grid_{species}_1995.png, on the species' 2020
+# colour scale, so its years can be compared directly too.
 # ---
 
 suppressPackageStartupMessages({
@@ -43,7 +47,13 @@ if (!cc && !local) { ia_dir <- file.path("G:/Shared drives/BAM_NationalModels5",
 source(file.path(ia_dir, "Rscripts", "12E_shapley_utils.R"))
 sens <- sensitivity_run()
 
-shap_path  <- file.path(ia_dir, "data", "derived_data", paste0("sector_effects", sens$suffix), "shapley_subbasin.csv")
+year <- suppressWarnings(as.integer(trimws(Sys.getenv("YEARS", "2020"))))
+if (is.na(year))
+  stop("YEARS must name one year per 18 job (14B's .sh submits one per year); got '", Sys.getenv("YEARS"), "'")
+ysfx <- if (year == 2020L) "" else paste0("_", year)
+
+shap_path  <- file.path(ia_dir, "data", "derived_data", paste0("sector_effects", sens$suffix),
+                        paste0("shapley_subbasin", ysfx, ".csv"))
 bcr_path   <- file.path(ia_dir, "data", "raw_data", "Regions", "BAM_BCR_NationalModel_Unbuffered.shp")
 names_path <- file.path(ia_dir, "data", "raw_data", "species_names.csv")
 fig_dir    <- file.path(ia_dir, "output_figures")
@@ -77,8 +87,8 @@ lab <- c(lab, setNames(nolab, nolab))
 
 tot <- sub |> group_by(species) |> summarise(o = sum(obs), c = sum(cf))
 # the % is 14C's change_pct: what industry did (obs - cf) as % of the no-industry population
-headline <- setNames(sprintf("%s\n%.2fM birds in 2020 vs %.2fM without industry (%+.1f%%)",
-                             lab[tot$species], tot$o / 1e6, tot$c / 1e6,
+headline <- setNames(sprintf("%s\n%.2fM birds in %d vs %.2fM without industry (%+.1f%%)",
+                             lab[tot$species], tot$o / 1e6, year, tot$c / 1e6,
                              100 * (tot$o - tot$c) / tot$c), tot$species)
 
 
@@ -153,11 +163,12 @@ cell_m  <- 10000
 px_dir  <- function(suffix) file.path(ia_dir, "data", "derived_data", paste0("density_tables", suffix), "pixel_change")
 bcr_tab <- read.csv(sub("shapley_subbasin", "shapley_bcr", shap_path)) |> distinct(species, bcr)  # after the release filter
 
-grid_change <- function(sp, suffix) {
+# the BCRs are the same in every year (one bird model per species x BCR, one release filter)
+grid_change <- function(sp, suffix, yr) {
   bcrs  <- bcr_tab$bcr[bcr_tab$species == sp]
-  files <- file.path(px_dir(suffix), paste0(sp, "_2020_", bcrs, ".tif"))
+  files <- file.path(px_dir(suffix), paste0(sp, "_", yr, "_", bcrs, ".tif"))
   # a BCR whose all-sector coalition has no footprint pixel writes no raster: it has no change
-  cat(sprintf("%s%s: pixel rasters for %d of %d modelled BCRs\n", sp, suffix, sum(file.exists(files)), length(files)))
+  cat(sprintf("%s%s %d: pixel rasters for %d of %d modelled BCRs\n", sp, suffix, yr, sum(file.exists(files)), length(files)))
   parts <- lapply(files[file.exists(files)], function(f) {
     r  <- terra::rast(f)
     v  <- terra::values(r, mat = TRUE)
@@ -219,21 +230,22 @@ grid_map <- function(sp, g, lim, legend, labels_fun) {
 nat_tab <- read.csv(sub("shapley_subbasin", "shapley_national", shap_path)) |> distinct(species, total_HF_impact)
 
 change_grid <- function(sp) {
-  g <- grid_density(sp, grid_change(sp, sens$suffix))
+  g <- grid_density(sp, grid_change(sp, sens$suffix, year))
   # the cells must hold the whole national change in 14B. Not `tot`: 14B rounds every subbasin
   # to a whole bird (LEYE's ~740 rows drift 4 birds); the national row is rounded once (+-0.5),
   # and the float32 rasters add far less than that
   nat <- -nat_tab$total_HF_impact[nat_tab$species == sp]
   cat(sprintf("%s: grid change %.1f birds vs 14B national %.0f\n", sp, g$total, nat))
   if (abs(g$total - nat) > 1) stop(sp, ": the pixel rasters do not add up to 14B's national change")
-  # scale capped at the 98th percentile of |change| over cells that changed, in the PRODUCTION run
-  gp  <- if (nchar(sens$suffix) == 0L) g else grid_density(sp, grid_change(sp, ""))
+  # scale capped at the 98th percentile of |change| over cells that changed, in the PRODUCTION
+  # run's 2020
+  gp  <- if (nchar(sens$suffix) == 0L && year == 2020L) g else grid_density(sp, grid_change(sp, "", 2020L))
   dv  <- terra::values(gp$dens, mat = FALSE)
   lim <- nice_ceiling(quantile(abs(dv[!is.na(dv) & dv != 0]), 0.98))
   fmt <- if (lim <= 1) "%+.2f" else if (lim <= 10) "%+.1f" else "%+.0f"
   p <- grid_map(sp, g, lim, "Population change (birds per km\u00b2, 10 km cells)", capped_labels(lim, fmt)) +
     labs(title = headline[[sp]])
-  ggsave(file.path(fig_dir, sprintf("change_grid_%s%s.png", sp, sens$suffix)), p, width = 7.5, height = 6.6, dpi = 600)
+  ggsave(file.path(fig_dir, sprintf("change_grid_%s%s%s.png", sp, sens$suffix, ysfx)), p, width = 7.5, height = 6.6, dpi = 600)
 }
 
 

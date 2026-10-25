@@ -9,12 +9,16 @@
 #SBATCH --mail-user=mannfred@ualberta.ca
 # submit:      bash 14B_sector_attribution.sh [12H job id]   (14B + 14C, then 18 chained; SPECIES=CAWA,OVEN limits 18's maps)
 # sensitivity: DENS_MIN=0.005 bash 14B_sector_attribution.sh   (or DROP_Q99=1)
+# years:       YEARS=1995,2000 bash 14B_sector_attribution.sh   (one 14B + 14C and one 18 per year; default 2020)
 
 if [ -z "${SLURM_JOB_ID:-}" ]; then
   set -euo pipefail
-  J=$(sbatch --parsable --export=ALL ${1:+--dependency=afterok:$1} "$0")
-  M=$(sbatch --parsable --export=ALL --dependency=afterok:$J 18_map_population_change.sh)
-  echo "REPORT${SPECIES:+ SPECIES=$SPECIES}${DROP_Q99:+ DROP_Q99=$DROP_Q99}${DENS_MIN:+ DENS_MIN=$DENS_MIN} 14B=$J${1:+ (after $1)} 18=$M"
+  for y in $(echo "${YEARS:-2020}" | tr ',' ' '); do
+    export YEARS=$y
+    J=$(sbatch --parsable --export=ALL ${1:+--dependency=afterok:$1} "$0")
+    M=$(sbatch --parsable --export=ALL --dependency=afterok:$J 18_map_population_change.sh)
+    echo "REPORT year=$y${SPECIES:+ SPECIES=$SPECIES}${DROP_Q99:+ DROP_Q99=$DROP_Q99}${DENS_MIN:+ DENS_MIN=$DENS_MIN} 14B=$J${1:+ (after $1)} 18=$M"
+  done
   exit 0
 fi
 

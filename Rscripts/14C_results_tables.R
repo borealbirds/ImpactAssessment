@@ -20,7 +20,8 @@
 #
 # Run after 14B. It keeps only the BCRs in 14B's shapley_bcr.csv (14B's release filter) and
 # stops unless its means equal 14B's national and BCR values. Sensitivity runs (DROP_Q99, DENS_MIN)
-# read and write their own directories, as in 14B.
+# read and write their own directories, as in 14B. One year, YEARS (default 2020), as in 14B:
+# another year's tables carry _{year} (results_summary_1995.csv).
 # ---
 
 # inside a Slurm job this is the cluster; anywhere else, the local RProject
@@ -37,15 +38,18 @@ source(file.path(ia_dir, "Rscripts", "12E_shapley_utils.R"))
 sens   <- sensitivity_run()
 dt_dir <- file.path(ia_dir, "data/derived_data", paste0("density_tables", sens$suffix))
 se_dir <- file.path(ia_dir, "data/derived_data", paste0("sector_effects", sens$suffix))
-year   <- 2020
+year   <- suppressWarnings(as.integer(trimws(Sys.getenv("YEARS", "2020"))))
+if (is.na(year))
+  stop("YEARS must name one year, as for 14B; got '", Sys.getenv("YEARS"), "'")
+se_csv <- function(name) file.path(se_dir, paste0(name, if (year == 2020L) "" else paste0("_", year), ".csv"))
 
 # grouped for reading: agriculture, settlement, transport, energy and extraction
 sectors <- c("crop", "pasture", "built", "roads", "rail", "oil_gas", "mines",
              "dam_and_associated_reservoir")
 stopifnot(setequal(sectors, canonical_sectors()))
 
-nat <- read.csv(file.path(se_dir, "shapley_national.csv"))
-bcr <- read.csv(file.path(se_dir, "shapley_bcr.csv"))
+nat <- read.csv(se_csv("shapley_national"))
+bcr <- read.csv(se_csv("shapley_bcr"))
 nat <- nat[nat$year == year, ]
 bcr <- bcr[bcr$year == year, ]
 
@@ -127,7 +131,8 @@ results_summary <- do.call(rbind, summary_rows[ord])
 results_sectors <- do.call(rbind, sector_rows[ord])
 results_bcr     <- do.call(rbind, bcr_rows)
 results_bcr     <- results_bcr[order(match(results_bcr$species, names(summary_rows)[ord])), ]
-write.csv(results_summary, file.path(se_dir, "results_summary.csv"), row.names = FALSE)
-write.csv(results_sectors, file.path(se_dir, "results_sectors.csv"), row.names = FALSE)
-write.csv(results_bcr,     file.path(se_dir, "results_bcr.csv"),     row.names = FALSE)
-message("wrote results_summary.csv, results_sectors.csv and results_bcr.csv to ", se_dir)
+write.csv(results_summary, se_csv("results_summary"), row.names = FALSE)
+write.csv(results_sectors, se_csv("results_sectors"), row.names = FALSE)
+write.csv(results_bcr,     se_csv("results_bcr"),     row.names = FALSE)
+message("wrote ", basename(se_csv("results_summary")), ", ", basename(se_csv("results_sectors")),
+        " and ", basename(se_csv("results_bcr")), " to ", se_dir)

@@ -8,6 +8,7 @@
 #SBATCH --job-name=change_maps
 #SBATCH --mail-user=mannfred@ualberta.ca
 # submit: sbatch 18_map_population_change.sh   (every species in 14B's tables; SPECIES=CAWA,OVEN sbatch ... for a subset)
+# year:   YEARS=1995 sbatch 18_map_population_change.sh   (one year; default 2020)
 
 module load StdEnv/2023
 module load gcc/12.3

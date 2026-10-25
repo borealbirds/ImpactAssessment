@@ -36,7 +36,10 @@ source(file.path(ia_dir, "Rscripts", "12F_predict_species_all_coalitions.R"))
 species_vec <- strsplit(Sys.getenv("SPECIES"), "[, ]+")[[1]]
 if (length(species_vec) == 0L)
   stop("set SPECIES to the species 12D ran (12D_repredict_all_coalitions.sh chains this job with it)")
-year <- 2020
+# YEARS names the ONE year its 12D ran (default 2020); the .sh chains one 12H per year
+year <- suppressWarnings(as.integer(trimws(Sys.getenv("YEARS", "2020"))))
+if (is.na(year))
+  stop("YEARS must name the one year 12D ran; got '", Sys.getenv("YEARS"), "'")
 
 # A sensitivity run (DROP_Q99=1, TODO C3; DENS_MIN=<birds/ha>, TODO C4; see 12F) is merged
 # in its own directory, density_tables{suffix}/
@@ -47,7 +50,7 @@ dir.create(arr_dir, recursive = TRUE, showWarnings = FALSE)
 
 tasks <- coalition_task_table(species_vec, nm_root)
 tasks$file <- file.path(dt_dir, "by_bcr", paste0(tasks$species, "_", year, "_", tasks$bcr, ".rds"))
-message(Sys.time(), " | expecting ", nrow(tasks), " per-BCR result(s)")
+message(Sys.time(), " | expecting ", nrow(tasks), " per-BCR result(s) for ", year)
 
 # completeness: every expected species x BCR must have a result (or a "skipped" record) ----
 # The resubmit hint must carry the smoke settings: task indices are positions in the
@@ -64,7 +67,7 @@ missing <- tasks[!file.exists(tasks$file), ]
 if (nrow(missing) > 0L)
   stop(nrow(missing), " per-BCR result(s) missing: ",
        paste0(missing$species, " ", missing$bcr, collapse = ", "),
-       " - resubmit with: SPECIES=", paste(species_vec, collapse = ","),
+       " - resubmit with: YEARS=", year, " SPECIES=", paste(species_vec, collapse = ","),
        " sbatch --array=", paste(missing$task, collapse = ","), test_export,
        " 12D_repredict_all_coalitions.sh (add --mem=64G if its log shows oom_kill or dead workers)")
 

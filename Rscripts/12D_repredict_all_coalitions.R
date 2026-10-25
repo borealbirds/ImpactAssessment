@@ -86,7 +86,10 @@ Rcpp::sourceCpp(file.path(ia_dir, "Rscripts", "12G_gbm_tree_walk.cpp"))
 species_vec <- strsplit(Sys.getenv("SPECIES"), "[, ]+")[[1]]
 if (length(species_vec) == 0L)
   stop("set SPECIES: bash 12D_repredict_all_coalitions.sh OSFL GRSP")
-year <- 2020
+# YEARS (default 2020) names ONE year here: the .sh submits one array per year, as 07's does
+year <- suppressWarnings(as.integer(trimws(Sys.getenv("YEARS", "2020"))))
+if (is.na(year))
+  stop("YEARS must name one year per 12D job (the .sh submits one per year); got '", Sys.getenv("YEARS"), "'")
 
 tasks   <- coalition_task_table(species_vec, nm_root)
 task_id <- as.integer(Sys.getenv("SLURM_ARRAY_TASK_ID"))
@@ -98,7 +101,7 @@ if (is.na(task_id) || task_id < 1L || task_id > nrow(tasks)) {
 task    <- tasks[task_id, ]
 species <- task$species
 bcr     <- task$bcr
-message(Sys.time(), " | running ALL coalitions for species=", species, " BCR=", bcr)
+message(Sys.time(), " | running ALL coalitions for species=", species, " BCR=", bcr, " year=", year)
 
 hirsh_dir  <- file.path(ia_dir, "data", "raw_data", "hirshpearson")
 

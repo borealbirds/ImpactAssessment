@@ -140,14 +140,20 @@ if (is.na(task_id) || task_id < 1L || task_id > length(species_vec))
   stop("array task ", Sys.getenv("SLURM_ARRAY_TASK_ID"), " has no species in SPECIES=",
        Sys.getenv("SPECIES"), " (a local run takes one species)")
 species <- species_vec[task_id]
-year    <- 2020
+
+# years: YEARS, comma-separated (default 2020), from the submitting shell's environment, as
+# for 07: YEARS=1995,2000 bash 12A_observed.sh OSFL. One task runs every year of its
+# species, because they all write that species' one truncation_params.rds.
+years <- suppressWarnings(as.integer(strsplit(trimws(Sys.getenv("YEARS", "2020")), "[, ]+")[[1]]))
+if (length(years) == 0L || anyNA(years))
+  stop("YEARS must be comma-separated years, e.g. YEARS=2015,2020; got '", Sys.getenv("YEARS"), "'")
 
 densmax <- q.out[q.out$spp == species, ]$densmax
 if (length(densmax) != 1 || !is.finite(densmax))
   stop("no usable densmax for species=", species)
 
 message(Sys.time(), " | observed predictions for species=", species,
-        " | densmax=", signif(densmax, 6))
+        " | years=", paste(years, collapse = ","), " | densmax=", signif(densmax, 6))
 
 # find models for relevant BCRs ------------------------------------------
 # NOTE: this discovers every can* model, which for CAWA includes can40 — a model
@@ -173,7 +179,7 @@ params <- if (file.exists(params_path)) readRDS(params_path) else list()
 
 # make bird density predictions for applicable BCRs ----------------------
 
-for (rdata_path in rdata_files) {
+for (rdata_path in rdata_files) for (year in years) {
 
   # BCR from the filename ({species}_{bcr}.Rdata), not from attr(b.list[[1]], "bcr"):
   # loading b.list read up to 654 MB per file just to get this one string. 12F loads
@@ -190,24 +196,24 @@ for (rdata_path in rdata_files) {
   # without a recorded q99 is unusable by 12F and must be rebuilt.
   key <- paste(bcr_code, year, sep = "_")
   if (file.exists(obs_boot_path) && !is.null(params[[key]])) {
-    message(Sys.time(), " | ", bcr_code, " | already exists — skipping")
+    message(Sys.time(), " | ", key, " | already exists — skipping")
     next
   }
 
   raw_pred_path <- file.path(nm_root, "output/07_predictions", species,
                              paste0(species, "_", bcr_code, "_", year, ".tif"))
   if (!file.exists(raw_pred_path)) {
-    message(Sys.time(), " | ", bcr_code, " | no raw predictions found — skipping")
+    message(Sys.time(), " | ", key, " | no raw predictions found — skipping")
     next
   }
-  message(Sys.time(), " | ", bcr_code, " | reading pre-computed bootstraps")
+  message(Sys.time(), " | ", key, " | reading pre-computed bootstraps")
 
   # V5 10.Truncate.R steps 5-6, in native 5072, unweighted (see header).
   out <- v5_truncate(terra::rast(raw_pred_path),
                      spp = species, bcr = bcr_code, densmax = densmax,
                      q99 = NULL, project_to = NULL, apply_masks = FALSE)
   if (is.null(out)) {
-    message(Sys.time(), " | ", bcr_code, " | all-NA mean, no q99 derivable — skipping")
+    message(Sys.time(), " | ", key, " | all-NA mean, no q99 derivable — skipping")
     next
   }
   obs_stack <- out$stack
@@ -233,10 +239,10 @@ for (rdata_path in rdata_files) {
                         source = raw_pred_path, written = Sys.time())
   saveRDS(params, params_path)
 
-  message(Sys.time(), " | ", bcr_code, " | done | q99=", signif(out$q99, 6),
+  message(Sys.time(), " | ", key, " | done | q99=", signif(out$q99, 6),
           " | densmax/q99=", round(densmax / out$q99, 1), "x")
   rm(out, obs_stack); gc()
 }
 
 message(Sys.time(), " | species=", species, " complete | ", length(params),
-        " BCR(s) in ", params_path)
+        " BCR x year(s) in ", params_path)

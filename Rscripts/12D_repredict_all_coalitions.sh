@@ -9,6 +9,7 @@
 #SBATCH --mail-user=mannfred@ualberta.ca
 # submit: bash 12D_repredict_all_coalitions.sh SPECIES [SPECIES ...]   (e.g. OSFL GRSP)
 # smoke:  TEST_BCR=can60 TEST_N_BOOT=2 bash 12D_repredict_all_coalitions.sh SPECIES [SPECIES ...]
+# years:  YEARS=1995,2000 bash 12D_repredict_all_coalitions.sh SPECIES [SPECIES ...]   (one 12D + 12H per year; default 2020)
 
 if [ -z "${SLURM_JOB_ID:-}" ]; then
   set -euo pipefail
@@ -39,12 +40,15 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
   if [ -n "$BIG" ]; then SMALL=$(complement $N "$(printf '%s\n' $BIG)"); else SMALL="1-$N"; fi
   BIG=$(echo $BIG | tr ' ' ',')
 
-  JS=""
-  JB=""
-  if [ -n "$SMALL" ]; then JS=$(sbatch --parsable --export=ALL --array=$SMALL "$0"); fi
-  if [ -n "$BIG" ]; then JB=$(sbatch --parsable --export=ALL --mem=$MEM_BIG --array=$BIG "$0"); fi
-  H=$(sbatch --parsable --export=ALL --dependency=afterany${JS:+:$JS}${JB:+:$JB} 12H_merge_bcr_tables.sh)
-  echo "COAL species=$SPECIES${TEST_BCR:+ TEST_BCR=$TEST_BCR}${TEST_N_BOOT:+ TEST_N_BOOT=$TEST_N_BOOT}${DROP_Q99:+ DROP_Q99=$DROP_Q99}${DENS_MIN:+ DENS_MIN=$DENS_MIN} 12D=${JS:-none} (48G: ${SMALL:-none}) + ${JB:-none} ($MEM_BIG: ${BIG:-none}) 12H=$H"
+  for y in $(echo "${YEARS:-2020}" | tr ',' ' '); do
+    export YEARS=$y
+    JS=""
+    JB=""
+    if [ -n "$SMALL" ]; then JS=$(sbatch --parsable --export=ALL --array=$SMALL "$0"); fi
+    if [ -n "$BIG" ]; then JB=$(sbatch --parsable --export=ALL --mem=$MEM_BIG --array=$BIG "$0"); fi
+    H=$(sbatch --parsable --export=ALL --dependency=afterany${JS:+:$JS}${JB:+:$JB} 12H_merge_bcr_tables.sh)
+    echo "COAL year=$y species=$SPECIES${TEST_BCR:+ TEST_BCR=$TEST_BCR}${TEST_N_BOOT:+ TEST_N_BOOT=$TEST_N_BOOT}${DROP_Q99:+ DROP_Q99=$DROP_Q99}${DENS_MIN:+ DENS_MIN=$DENS_MIN} 12D=${JS:-none} (48G: ${SMALL:-none}) + ${JB:-none} ($MEM_BIG: ${BIG:-none}) 12H=$H"
+  done
   exit 0
 fi
 
