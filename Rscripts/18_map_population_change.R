@@ -2,7 +2,8 @@
 # title: Impact Assessment: map the population change due to industrial footprint
 # author: Mannfred Boehm
 # ---
-# Maps what industry did to each species, one figure per species (change_grid_{species}.png):
+# Maps what industry did to each species, one figure per species and year
+# (output_figures/change_maps/change_grid_{species}_{year}.png, 2020 included):
 # the pixel-level change = observed - counterfactual (no industry) = -total_HF_impact,
 # summed into 10 km cells, so red is a decline due to industry and blue an increase. Grey:
 # outside the species' modelled BCRs, or withheld by BAM (14B drops them, e.g. CAWA can40).
@@ -56,8 +57,8 @@ shap_path  <- file.path(ia_dir, "data", "derived_data", paste0("sector_effects",
                         paste0("shapley_subbasin", ysfx, ".csv"))
 bcr_path   <- file.path(ia_dir, "data", "raw_data", "Regions", "BAM_BCR_NationalModel_Unbuffered.shp")
 names_path <- file.path(ia_dir, "data", "raw_data", "species_names.csv")
-fig_dir    <- file.path(ia_dir, "output_figures")
-dir.create(fig_dir, showWarnings = FALSE)
+fig_dir    <- file.path(ia_dir, "output_figures", "change_maps")
+dir.create(fig_dir, showWarnings = FALSE, recursive = TRUE)
 
 
 # subbasin totals (for the titles) -------------------------------
@@ -245,7 +246,7 @@ change_grid <- function(sp) {
   fmt <- if (lim <= 1) "%+.2f" else if (lim <= 10) "%+.1f" else "%+.0f"
   p <- grid_map(sp, g, lim, "Population change (birds per km\u00b2, 10 km cells)", capped_labels(lim, fmt)) +
     labs(title = headline[[sp]])
-  ggsave(file.path(fig_dir, sprintf("change_grid_%s%s%s.png", sp, sens$suffix, ysfx)), p, width = 7.5, height = 6.6, dpi = 600)
+  ggsave(file.path(fig_dir, sprintf("change_grid_%s%s_%d.png", sp, sens$suffix, year)), p, width = 7.5, height = 6.6, dpi = 600)
 }
 
 

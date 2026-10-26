@@ -56,6 +56,42 @@
 >      year. CAWA −15.7% (1995) to −13.3% (2020), OVEN −10.5% to −8.8%, OSFL −4.9% to −3.4%.
 >      Outliers, not examined: EVGR's 1995 observed population is 5.2× 2020's (irruptive; see
 >      the q99 note above); WITU (41–66k birds) is +1 to +21% before 2020, +93% in 2020.
+> 3. **Rosenberg et al. (2019) Fig. 1 style figures, one file per panel** (2026-10-26). Their
+>    panels A–C sum ALL species of a group (increasing and declining); D is the share declining.
+>    `19A` (Fir) writes `sector_effects/population_samples.rds` (per-sample observed and
+>    no-industry population, species × year), since 14C's percentiles cannot be summed or
+>    differenced; tested locally on the six 2020 species (means and every 5/95 percentile equal
+>    14C's). `19B` (local) plots panel A, net change since 1995, observed and without industry,
+>    each from its own 1995 total. Done: 19A job `603212` (7 min, every check passed; log in
+>    `cluster_logs/rosenberg_19A/`), rds pulled, 19B → `output_figures/net_change_1995_2020.png`.
+>    2020 vs 1995: observed +58 M (5–95% +12 to +99 M), no industry +66 M (+12 to +113 M). Per
+>    sample, no industry − observed is −20 M (1995) to −12 M (2020), every interval below 0;
+>    the trends differ by +8 M by 2020 (+0.1 to +15 M), within 0 in every earlier year.
+>    Done: panel B, `19C` → `net_change_by_habitat_1995_2020.png` (Rosenberg's B is one
+>    trajectory per biome; S1 in the manuscript PDF shows the layout). Birds industry costs
+>    (no industry − observed), 1995 → 2020: conifer +54 → +45 M, deciduous +28 → +27 M,
+>    mixedwood +6 → +7 M, forest no type −2 M, non-forest −106 → −90 M; so the near-zero total is
+>    forest losses cancelled by non-forest gains. Trend differences by 2020: conifer −9 M (−14 to
+>    −6), non-forest +17 M (+12 to +21), the rest within 0.
+>    Done: panel C, `19D` → `percent_change_by_habitat_1995_2020.png`. 1995→2020 observed / no
+>    industry: conifer −4.7 / −5.1%, mixedwood +14.7 / +14.7%, deciduous +8.1 / +7.0%, forest no
+>    type −7.4 / −7.1%, non-forest +9.0 / +12.0%. Per sample (no industry − observed): conifer
+>    −0.4 points (−0.8 to −0.2), deciduous −1.1 (−1.6 to −0.7), non-forest +3.0 (+2.2 to +3.7),
+>    mixedwood and forest no type within 0.
+>    Done: panel D, `19E` → `species_declining_by_habitat_1995_2020.png` (declining = mean change
+>    < 0; solid = whole interval < 0). Observed / no industry: conifer 12 / 13 of 27 (8 / 7 sure),
+>    mixedwood 2 / 2 of 10 (none sure), deciduous 4 / 4 of 22, forest no type 2 / 2 of 6,
+>    non-forest 18 / 15 of 48 (12 / 10 sure). Decline only as observed: AMRO, EAKI, EAPH, ROPI,
+>    TRES; only without industry: ATTW, HOWR, WEWP. All four panels done.
+>    From 14C's means: the 113-species total is 3.02 bn (1995) to 3.08 bn (2020) observed, and
+>    the no-industry total is LOWER every year (by 20 M in 1995, 12 M in 2020: AMRO, BHCO, AMGO,
+>    SOSP, COGR, BARS, HOSP gain 120 M on the footprint, the rest lose 108 M), so the two lines
+>    nearly overlap. The +104 M observed jump 2015→2020 is 45 M PISI (irruptive; Anna and Diana
+>    drop the irruptives, Loose ends).
+> 4. **Maps moved to `output_figures/change_maps/`** (2026-10-26): all 703 local maps, the 138
+>    2020 maps renamed `change_grid_{species}_2020.png`. 18 now writes there with the year on
+>    every map, and `writing/` reads the new 2020 names. Not staged to Fir yet: stage 18 before
+>    its next run. Fir's `output_figures/` still holds the 2020 maps under their old names.
 >
 > The user wants the project finished: log small new problems under Loose ends and do not
 > reopen finished stages for them. Keep `writing/` off the internet: never commit or push it.
@@ -159,6 +195,7 @@ have been stale or missing on Fir four times.
   12A = `12A` `.R`+`.sh`, `12B`. 12C = `12C` `.R`+`.sh`.
   14B = `14B` `.R`+`.sh`, `14C`, `18` `.R`+`.sh`, `12E`, `data/raw_data/species_names.csv`,
   `data/raw_data/ModelReleaseDecisions.xlsx`, `data/derived_data/rds_files/extrapolation_flags.csv`.
+  19A = `19A` `.R`+`.sh` (reads 14B's and 14C's CSVs and 12H's Shapley samples, already on Fir).
 
 ---
 
