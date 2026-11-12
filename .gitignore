@@ -35,6 +35,9 @@ vignettes/*.pdf
 # OAuth2 token, see https://github.com/hadley/httr/releases/tag/v0.3
 .httr-oauth
 
+# Google OAuth client secrets (Earth Engine)
+client_secret*.json
+
 # knitr and R markdown default cache directories
 *_cache/
 /cache/
@@ -76,6 +79,9 @@ data/raw_data/v5_gis/
 # BAM's model release decisions (copied from G: review/; BAM's, not ours to publish)
 data/raw_data/ModelReleaseDecisions.xlsx
 
+# V5's training data (copied from G: data/ for the PR1 offset refit; BAM's, large)
+data/raw_data/04_NM5.0_data_stratify.Rdata
+
 # Slurm job output pulled to the local tree for inspection
 slurm-*.out
 
@@ -102,3 +108,7 @@ writing/
 
 # Anna Drake's data
 data/raw_data/anna_data/
+
+# Attribution results and metrics CSVs (kept local, never versioned)
+data/derived_data/sector_effects*/
+data/derived_data/rds_files/

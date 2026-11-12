@@ -1,10 +1,10 @@
 #!/bin/bash
-# usage: bash run_species_batches.sh prep | smoke | plan | wave N   (species: species_todo.txt; MAX=400 tasks per wave)
+# usage: bash run_species_batches.sh prep | smoke | plan | wave N   (species: species_113.txt, the reported ones; MAX=400 tasks per wave)
 # years: YEARS=1995,2000 bash run_species_batches.sh ...   (12A/12C/12D/12H read YEARS; default 2020; MAX counts one year)
 set -euo pipefail
 cd "$(dirname "$0")"
 BOOT=${BOOT:-/home/mannfred/projects/def-ecknight/NationalModels/output/06_bootstraps}
-LIST=${LIST:-species_todo.txt}
+LIST=${LIST:-species_113.txt}
 MAX=${MAX:-400}
 SPP=$(tr -d '\r' < "$LIST" | grep -v '^#' | awk 'NF')
 

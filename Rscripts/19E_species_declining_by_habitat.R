@@ -5,19 +5,21 @@
 # ---
 # Our version of Rosenberg et al. (2019, Science 366:120) Fig. 1D: the share of each of 14D's
 # habitat groups' species that declined from the first year to the last, observed and without
-# industry, as paired bars (Rosenberg's pies, one per biome, cannot pair two scenarios). Groups
-# in 19C's order.
+# industry, as Rosenberg's pies. One row per group in 19C's colours, on 19D's rows (same order,
+# same height) so that the two panels' rows line up side by side, and no row labels: 19D's name
+# them. The observed pie left of the no-industry one (outlines solid and dashed, as 19C's line
+# types; 19B's legend serves).
 #
 # A species declines when its mean change is negative, as Rosenberg counts negative trend
-# trajectories. The solid part of a bar is the species whose whole 5th-95th percentile interval of
-# change is below 0, the pale rest those declining on the mean only. A species' change is taken
-# per sample (bootstrap i is one bird model in every year): 32 observed samples, 3200 without
-# industry. Colours as 19B.
+# trajectories. The solid wedge is the species whose whole 5th-95th percentile interval of change
+# is below 0, the pale one those declining on the mean only; each pie is labelled with its count,
+# since the scenarios differ by a few species at most. A species' change is taken per sample
+# (bootstrap i is one bird model in every year): 32 observed samples, 3200 without industry.
 #
 # Run locally after 14D, with 19A's population_samples.rds pulled:
 #   Rscript Rscripts/19E_species_declining_by_habitat.R
-# Writes output_figures/species_declining_by_habitat_1995_2020.png and its values to
-# sector_effects/species_declining_by_habitat_1995_2020.csv.
+# Writes output_figures/figure1/fig1D_species_declining_by_habitat_1995_2020.png and its values
+# to sector_effects/species_declining_by_habitat_1995_2020.csv.
 # ---
 
 suppressPackageStartupMessages(library(ggplot2))
@@ -27,11 +29,13 @@ se_dir <- file.path(ia_dir, "data", "derived_data", "sector_effects")
 ps     <- readRDS(file.path(se_dir, "population_samples.rds"))
 master <- read.csv(file.path(ia_dir, "data", "raw_data", "anna_data", "master_species_list.csv"))
 
-scen_cols <- c("Observed" = "#2a78d6", "Without industry" = "#eb6834")   # as 19B
+scen_lines <- c("Observed" = "solid", "Without industry" = "dashed")   # as 19C
 
 # as 19C
-groups <- c("conifer" = "Conifer", "mixedwood" = "Mixedwood", "deciduous" = "Deciduous",
-            "forest no type" = "Forest, no type", "non-forest" = "Non-forest")
+groups   <- c("conifer" = "Conifer", "mixedwood" = "Mixedwood", "deciduous" = "Deciduous",
+              "forest no type" = "Forest, no type", "non-forest" = "Non-forest")
+grp_cols <- c("conifer" = "#009E73", "mixedwood" = "#CC79A7", "deciduous" = "#E69F00",
+              "forest no type" = "#56B4E9", "non-forest" = "#000000")
 master <- master[master$include, ]
 if (length(odd <- setdiff(master$group, names(groups))))
   stop("14D group(s) not in this script: ", paste(odd, collapse = ", "))
@@ -54,6 +58,9 @@ dec <- rbind(cbind(scenario = "Observed",         declining(chg_obs)),
              cbind(scenario = "Without industry", declining(chg_cf)))
 dec$group <- master$group[match(dec$species, master$species)]
 
+# groups top to bottom as 19D (19C's observed lines' end, largest gain first)
+groups <- groups[names(sort(tapply(rowMeans(chg_obs), master$group, sum), decreasing = TRUE))]
+
 d <- aggregate(cbind(n_declining = mean_down, n_interval_below_0 = all_down) ~ group + scenario, dec, sum)
 d$n_species <- as.vector(table(master$group)[d$group])
 d$pct_declining        <- round(100 * d$n_declining / d$n_species, 1)
@@ -71,41 +78,51 @@ if (nrow(flip))
           paste0(flip$species, " (", flip$group, ", ",
                  ifelse(flip$mean_down_obs, "observed", "without industry"), ")", collapse = ", "))
 
-# first group on top, and within a group the observed bar above the no-industry one
-lab        <- paste0(groups[d$group], " (", d$n_species, ")")
-d$label    <- factor(lab, levels = rev(unique(paste0(groups, " (", table(master$group)[names(groups)], ")"))))
-d$scenario <- factor(d$scenario, levels = rev(names(scen_cols)))
-dodge      <- position_dodge(width = 0.8)
-certainty  <- c("Mean change below 0" = 0.35, "Whole interval below 0" = 1)
+# pies of radius r at (column, row), first group on top as in 19D; wedges clockwise from
+# 12 o'clock: whole interval below 0, then mean only, then the rest left blank
+r         <- 0.38
+d$x       <- ifelse(d$scenario == "Observed", 1, 2.4)
+d$y       <- match(d$group, rev(names(groups)))
+certainty <- c("Whole interval below 0" = 1, "Mean change below 0" = 0.35)
+arc       <- function(from, to) 2 * pi * seq(from, to, length.out = 2 + ceiling(100 * (to - from)))
 
-p <- ggplot(d, aes(y = label, fill = scenario)) +
-  geom_vline(xintercept = 50, colour = "grey75", linewidth = 0.3, linetype = "dashed") +
-  geom_col(aes(x = pct_declining, alpha = names(certainty)[1]), position = dodge, width = 0.72) +
-  geom_col(aes(x = pct_interval_below_0, alpha = names(certainty)[2]), position = dodge, width = 0.72) +
-  scale_fill_manual(values = scen_cols, breaks = names(scen_cols)) +
-  scale_alpha_manual(values = certainty, breaks = names(certainty)) +
-  scale_x_continuous(limits = c(0, 100), breaks = seq(0, 100, 25), expand = c(0, 0)) +
-  guides(fill = guide_legend(order = 1),
-         alpha = guide_legend(order = 2, override.aes = list(fill = "grey35"))) +
-  labs(x = paste0("Species declining, ", years[y0], " to ", years[y1], " (%)"), y = NULL,
-       fill = NULL, alpha = NULL,
-       caption = paste0(nrow(master), " species; number per group in brackets. ",
-                        "Interval: 5th to 95th percentiles of the change.")) +
-  theme_classic(base_size = 10) +
-  theme(legend.position      = "top",
-        legend.justification = "left",
-        legend.box           = "vertical",
-        legend.box.just      = "left",
-        legend.spacing.y     = unit(0, "pt"),
-        axis.text            = element_text(colour = "grey25"),
-        axis.text.y          = element_text(size = 10),
-        axis.line            = element_line(colour = "grey60", linewidth = 0.3),
-        axis.ticks           = element_line(colour = "grey60", linewidth = 0.3),
-        axis.line.y          = element_blank(),
-        axis.ticks.y         = element_blank(),
-        plot.margin          = margin(5.5, 12, 5.5, 5.5),
-        plot.caption         = element_text(colour = "grey40", size = 8, hjust = 0))
+wedges <- do.call(rbind, lapply(seq_len(nrow(d)), function(i) {
+  cut <- c(0, d$n_interval_below_0[i], d$n_declining[i]) / d$n_species[i]
+  do.call(rbind, lapply(which(diff(cut) > 0), function(k) {
+    a <- arc(cut[k], cut[k + 1])
+    data.frame(id = paste(i, k), group = d$group[i], tier = names(certainty)[k],
+               x = d$x[i] + c(0, r * sin(a)), y = d$y[i] + c(0, r * cos(a)))
+  }))
+}))
+rims <- do.call(rbind, lapply(seq_len(nrow(d)), function(i) {
+  a <- arc(0, 1)
+  data.frame(id = i, group = d$group[i], scenario = d$scenario[i],
+             x = d$x[i] + r * sin(a), y = d$y[i] + r * cos(a))
+}))
 
-out <- file.path(ia_dir, "output_figures", paste0(stub, ".png"))
-ggsave(out, p, width = 6, height = 4.3, dpi = 300)
+# 19D's theme, y range and bottom axis (its text and ticks kept but invisible, for their height),
+# so its rows and this panel's fall at the same heights; no legend: the caption explains the shading
+p <- ggplot() +
+  geom_polygon(data = wedges, aes(x, y, group = id, fill = group, alpha = tier)) +
+  geom_path(data = rims, aes(x, y, group = id, colour = group, linetype = scenario), linewidth = 0.5) +
+  geom_text(data = d, aes(x + r + 0.08, y, label = paste0(n_declining, "/", n_species)),
+            hjust = 0, size = 3, colour = "grey25") +
+  scale_fill_manual(values = grp_cols, guide = "none") +
+  scale_colour_manual(values = grp_cols, guide = "none") +
+  scale_linetype_manual(values = scen_lines, guide = "none") +
+  scale_alpha_manual(values = certainty, guide = "none") +
+  scale_x_continuous(breaks = 1, labels = "0") +
+  scale_y_continuous(breaks = NULL) +
+  coord_fixed(xlim = c(1 - r - 0.1, 2.4 + r + 0.6), ylim = c(0.45, length(groups) + 0.55),
+              expand = FALSE) +
+  labs(x = "Species declining", y = NULL) +
+  theme_classic(base_size = 11) +
+  theme(axis.text    = element_text(colour = "grey25"),
+        axis.text.x  = element_text(colour = NA),
+        axis.ticks.x = element_line(colour = NA),
+        axis.line    = element_blank(),
+        axis.ticks.y = element_blank())
+
+out <- file.path(ia_dir, "output_figures", "figure1", paste0("fig1D_", stub, ".png"))
+ggsave(out, p, width = 2.15, height = 4, dpi = 300, bg = "white")
 message("wrote ", out)

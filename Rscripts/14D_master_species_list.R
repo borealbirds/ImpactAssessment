@@ -5,13 +5,16 @@
 # ---
 # One row per species in species_todo.txt: the habitat group its results are reported under,
 # and whether it is reported at all (`include`). Groups, in order of precedence:
-#   withheld                BAM's release filter keeps none of its BCRs (absent from 14C)
 #   wetland, grassland      Birds Canada's lists (UPSA, on both, is grassland)
 #   open                    Anna's tundra / above-treeline list
+#   withheld                BAM's release filter keeps none of its BCRs (absent from 14C)
 #   non-forest, conifer, mixedwood, deciduous, forest no type   from Anna's classes (below)
-# Only the last five are included (113 species on 2026-10-22). The first four lists, and Birds
-# Canada's a-priori non-forest list, came in Anna's email of 2026-10-19 and are kept in
-# anna_data/species_lists.csv, gitignored like her three class tables.
+# Only the last five are included (113 species on 2026-10-22, listed in species_113.txt). The
+# lists come before "withheld" because only those 113 are run since 2026-10-31, so the 25 on the
+# lists are absent from 14C too; DUNL and NESP, withheld and on the wetland list, are "wetland".
+# The wetland, grassland and open lists, and Birds Canada's a-priori non-forest list, came in
+# Anna's email of 2026-10-19 and are kept in anna_data/species_lists.csv, gitignored like her
+# three class tables.
 #
 # Anna's classes are per species x BCR x scale (Loc* = local, Land* = landscape). A label counts
 # when it comes from one preference window and S > ln(1.5), as in her group analysis. ONE label
@@ -108,10 +111,10 @@ out <- tibble(species = species) |>
     type          = if_else(forest == "forest", type_label, NA_character_),
     across(starts_with("type_"), ~ if_else(forest == "forest", .x, NA)),
     group = case_when(
-      !species %in% reported            ~ "withheld",
       species %in% on_list("grassland") ~ "grassland",
       species %in% on_list("wetland")   ~ "wetland",
       species %in% on_list("open")      ~ "open",
+      !species %in% reported            ~ "withheld",
       forest == "nonforest"             ~ "non-forest",
       is.na(type)                       ~ "forest no type",
       TRUE                              ~ type),

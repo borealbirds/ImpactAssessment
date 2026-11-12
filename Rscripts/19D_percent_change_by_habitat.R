@@ -5,16 +5,18 @@
 # ---
 # Our version of Rosenberg et al. (2019, Science 366:120) Fig. 1C: each of 14D's habitat groups'
 # change in abundance from the first year to the last, as % of its first-year total, observed and
-# without industry (each relative to its OWN first-year total, as in 19B and 19C). Groups in
-# 19C's order.
+# without industry (each relative to its OWN first-year total, as in 19B and 19C). Groups top to
+# bottom in the order 19C's observed lines end, as points with intervals (colour = group as 19C;
+# observed solid and filled, without industry dashed and open, as 19C's line types; 19B's legend
+# serves).
 #
-# As in 14C: the bar is the mean change over the mean first-year total; the whiskers are the
+# As in 14C: the point is the mean change over the mean first-year total; the interval is the
 # 5th/95th percentiles of each sample's change over THAT sample's first-year total (bootstrap i
-# is one bird model in every year). Colours as 19B.
+# is one bird model in every year).
 #
 # Run locally after 14D, with 19A's population_samples.rds pulled:
 #   Rscript Rscripts/19D_percent_change_by_habitat.R
-# Writes output_figures/percent_change_by_habitat_1995_2020.png and its values to
+# Writes output_figures/figure1/fig1C_percent_change_by_habitat_1995_2020.png and its values to
 # sector_effects/percent_change_by_habitat_1995_2020.csv.
 # ---
 
@@ -25,11 +27,14 @@ se_dir <- file.path(ia_dir, "data", "derived_data", "sector_effects")
 ps     <- readRDS(file.path(se_dir, "population_samples.rds"))
 master <- read.csv(file.path(ia_dir, "data", "raw_data", "anna_data", "master_species_list.csv"))
 
-scen_cols <- c("Observed" = "#2a78d6", "Without industry" = "#eb6834")   # as 19B
+scen_lines  <- c("Observed" = "solid", "Without industry" = "dashed")   # as 19C
+scen_shapes <- c("Observed" = 16,      "Without industry" = 21)
 
 # as 19C
-groups <- c("conifer" = "Conifer", "mixedwood" = "Mixedwood", "deciduous" = "Deciduous",
-            "forest no type" = "Forest, no type", "non-forest" = "Non-forest")
+groups   <- c("conifer" = "Conifer", "mixedwood" = "Mixedwood", "deciduous" = "Deciduous",
+              "forest no type" = "Forest, no type", "non-forest" = "Non-forest")
+grp_cols <- c("conifer" = "#009E73", "mixedwood" = "#CC79A7", "deciduous" = "#E69F00",
+              "forest no type" = "#56B4E9", "non-forest" = "#000000")
 master <- master[master$include, ]
 if (length(odd <- setdiff(master$group, names(groups))))
   stop("14D group(s) not in this script: ", paste(odd, collapse = ", "))
@@ -64,33 +69,32 @@ d <- do.call(rbind, rows)
 write.csv(d, file.path(se_dir, paste0(stub, ".csv")), row.names = FALSE)
 print(d, row.names = FALSE)
 
-# first group on top, and within a group the observed bar above the no-industry one
-lab        <- paste0(groups[d$group], " (", d$n_species, ")")
-d$label    <- factor(lab, levels = rev(unique(lab)))
-d$scenario <- factor(d$scenario, levels = rev(names(scen_cols)))
-dodge      <- position_dodge(width = 0.8)
+# groups top to bottom as 19C's observed lines end (largest gain first), and within a group
+# observed above without industry
+obs     <- d[d$scenario == "Observed", ]
+groups  <- groups[obs$group[order(obs$first_total - obs$last_total)]]
+n_sp    <- table(master$group)[names(groups)]
+d$row   <- match(d$group, rev(names(groups))) + ifelse(d$scenario == "Observed", 0.15, -0.15)
+d$group <- factor(d$group, levels = names(groups))
 
-p <- ggplot(d, aes(x = pct, y = label, fill = scenario)) +
-  geom_vline(xintercept = 0, colour = "grey60", linewidth = 0.3) +
-  geom_col(position = dodge, width = 0.72) +
-  geom_errorbar(aes(xmin = q05, xmax = q95), position = dodge, width = 0.25,
-                colour = "grey25", linewidth = 0.35) +
-  scale_fill_manual(values = scen_cols, breaks = names(scen_cols)) +
-  labs(x = paste0("Change in abundance, ", years[y0], " to ", years[y1], " (%)"), y = NULL,
-       fill = NULL,
-       caption = paste0(nrow(master), " species; number per group in brackets. ",
-                        "Whiskers: 5th to 95th percentiles.")) +
-  theme_classic(base_size = 10) +
-  theme(legend.position = "top",
-        legend.justification = "left",
-        axis.text            = element_text(colour = "grey25"),
-        axis.text.y          = element_text(size = 10),
-        axis.line            = element_line(colour = "grey60", linewidth = 0.3),
-        axis.ticks           = element_line(colour = "grey60", linewidth = 0.3),
-        axis.line.y          = element_blank(),
-        axis.ticks.y         = element_blank(),
-        plot.caption         = element_text(colour = "grey40", size = 8, hjust = 0))
+p <- ggplot(d, aes(x = pct, y = row, colour = group, linetype = scenario, shape = scenario)) +
+  geom_vline(xintercept = 0, colour = "grey70", linewidth = 0.3) +
+  geom_linerange(aes(xmin = q05, xmax = q95), linewidth = 0.6) +
+  geom_point(size = 2.2, fill = "white", stroke = 0.8) +
+  scale_colour_manual(values = grp_cols, guide = "none") +
+  scale_linetype_manual(values = scen_lines, guide = "none") +
+  scale_shape_manual(values = scen_shapes, guide = "none") +
+  scale_y_continuous(breaks = rev(seq_along(groups)), labels = paste0(groups, " (", n_sp, " species)"),
+                     expand = expansion(add = 0.4)) +
+  labs(x = "Change in abundance (%)", y = NULL) +
+  theme_classic(base_size = 11) +
+  theme(axis.text    = element_text(colour = "grey25"),
+        axis.text.y  = element_text(size = 11),   # the group names, which 19E's rows rely on
+        axis.line    = element_line(colour = "grey60", linewidth = 0.3),
+        axis.ticks   = element_line(colour = "grey60", linewidth = 0.3),
+        axis.line.y  = element_blank(),
+        axis.ticks.y = element_blank())
 
-out <- file.path(ia_dir, "output_figures", paste0(stub, ".png"))
-ggsave(out, p, width = 6, height = 4, dpi = 300)
+out <- file.path(ia_dir, "output_figures", "figure1", paste0("fig1C_", stub, ".png"))
+ggsave(out, p, width = 9.85, height = 4, dpi = 300)   # with 19E's 2.15 in, as wide as 19B + 19C above it
 message("wrote ", out)
