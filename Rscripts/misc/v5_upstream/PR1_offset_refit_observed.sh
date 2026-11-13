@@ -7,7 +7,7 @@
 #SBATCH --time=03:00:00
 #SBATCH --job-name=pr1_offsets
 #SBATCH --mail-user=mannfred@ualberta.ca
-# submit (from Rscripts/misc): bash PR1_offset_refit_observed.sh   (defaults SPECIES=OVEN,SWTH,REVI BCR=can81 N_BOOT=8)
+# submit (from Rscripts/misc/v5_upstream): bash PR1_offset_refit_observed.sh   (defaults SPECIES=OVEN,SWTH,REVI BCR=can81 N_BOOT=8)
 
 if [ -z "${SLURM_JOB_ID:-}" ]; then
   set -euo pipefail

@@ -8,7 +8,7 @@
 # the same fits. Rows are kept sweeps: 1-700 is 08B's window, the last 700 the late window.
 # Effective draws are between chains, as in bart_production_settings_summary.R.
 #
-# Run from the project root: BPS_WORK=<dir> MIX_WORK=<dir> Rscript Rscripts/misc/bart_mixing_fixes_summary.R
+# Run from the project root: BPS_WORK=<dir> MIX_WORK=<dir> Rscript Rscripts/misc/bart_mixing/bart_mixing_fixes_summary.R
 
 suppressPackageStartupMessages({
   library(dplyr)

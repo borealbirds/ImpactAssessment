@@ -21,7 +21,7 @@
 #   dbarts_dec200  dbarts_long200 on the decorrelated predictors
 #
 # Run from the project root, one job at a time. BPS_WORK holds bart_production_settings.R's files:
-#   BPS_WORK=<dir> MIX_WORK=<dir> MINUTES=60 Rscript Rscripts/misc/bart_mixing_fixes.R
+#   BPS_WORK=<dir> MIX_WORK=<dir> MINUTES=60 Rscript Rscripts/misc/bart_mixing/bart_mixing_fixes.R
 # Optional: VARIANTS=a,b  PAIRS=3,7  N_CHAINS=4
 
 lines <- readLines(file.path("Rscripts", "misc", "bart_production_settings.R"))

@@ -81,7 +81,7 @@
 # backfilled side, which is what keeps w*bf - w*obs = w*(bf - obs) exact.
 # Baking it in here would double-weight the observed side.
 #
-# Gate G1 (Rscripts/misc/verify_v5_truncate_port.R) confirms the shared transform
+# Gate G1 (Rscripts/misc/harnesses/verify_v5_truncate_port.R) confirms the shared transform
 # in 12B_v5_truncate.R reproduces V5's released output/10_truncated product.
 # ---
 

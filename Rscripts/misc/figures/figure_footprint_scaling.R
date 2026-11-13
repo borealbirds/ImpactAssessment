@@ -7,8 +7,7 @@
 # footprint covariates at observed vegetation: obs - d0, where d0 has every footprint
 # ("Disturbance") covariate at 0. This figure draws that response as a curve: every footprint
 # covariate scaled together, s x its observed value for s = 0 (d0), 0.1, ..., 1 (obs). One figure
-# per BCR, one panel per species. Follows VATH's industry-positive result (TODO.md, 2026-11-03;
-# figure_vath_footprint_pdp.R).
+# per BCR, one panel per species. Follows VATH's industry-positive result (TODO.md).
 #
 # Each BCR uses one random sample of n_px footprint pixels (12F's superset: any of the 8 sectors
 # > 0 and CanHF >= 1, inside the BCR) for every species, so the y axis is birds per footprint

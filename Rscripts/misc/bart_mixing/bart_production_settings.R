@@ -28,7 +28,7 @@
 # Summarised by bart_production_settings_summary.R.
 #
 # Run from the project root, one job at a time:
-#   BPS_WORK=<dir> DEADLINE="2026-11-04 15:20:00" Rscript Rscripts/misc/bart_production_settings.R
+#   BPS_WORK=<dir> DEADLINE="2026-11-04 15:20:00" Rscript Rscripts/misc/bart_mixing/bart_production_settings.R
 
 suppressPackageStartupMessages({
   library(BART)

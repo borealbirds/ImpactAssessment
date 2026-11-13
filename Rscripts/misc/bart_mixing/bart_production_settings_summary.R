@@ -12,7 +12,7 @@
 # stored draws fail to pin down, so ESS = posterior variance / (half the mean squared difference
 # of chain means). Within-chain estimates cannot see a chain that has not yet left its mode.
 #
-# Run from the project root: BPS_WORK=<dir> Rscript Rscripts/misc/bart_production_settings_summary.R
+# Run from the project root: BPS_WORK=<dir> Rscript Rscripts/misc/bart_mixing/bart_production_settings_summary.R
 
 suppressPackageStartupMessages({
   library(dplyr)

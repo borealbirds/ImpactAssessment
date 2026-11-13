@@ -4,7 +4,7 @@
 # created: September 11, 2026
 # ---
 #
-# Runs LOCALLY (needs G: for V5's own mask vectors). Rebuilds 12A2's weight on this
+# Runs LOCALLY (needs G: for V5's own mask vectors). Rebuilds 12C's weight on this
 # machine and compares, per species x BCR:
 #
 #   A  our production path : sum(observed_bootstraps.tif * weight.tif * 100)
@@ -12,7 +12,7 @@
 #   C  V5's own masking    : same, after V5's legacy projection to EPSG:3978
 #
 # A vs B isolates raster-weight-vs-vector masking; B vs C isolates the 5072-vs-3978
-# projection we deliberately skip (see 12A0_v5_truncate.R). C is the number that should
+# projection we deliberately skip (see 12B_v5_truncate.R). C is the number that should
 # match output/13_summary/BAMV5-results.xlsx.
 #
 # NOTE on B vs C: that gap is an AREA-UNITS artifact, not a resampling loss -- 3978 is
@@ -26,7 +26,7 @@
 #   C    = 19,389 / 161,922 / 54,062     -- matches published 0.019 / 0.162 / 0.054 M
 #
 # Two defects were found and fixed by this harness; both are guarded by the
-# WEIGHT_VERSION stamp in 12A2, so re-running it after a change is the way to re-gate:
+# WEIGHT_VERSION stamp in 12C, so re-running it after a change is the way to re-gate:
 #   1. the missing crop to the BCR's own polygon (V5 grids are buffered far past the
 #      subunit) -- CLAUDE.md Open Limitation #7;
 #   2. rasterize(touches = FALSE), terra's default, vs the touches = TRUE behaviour of
@@ -52,7 +52,7 @@ pop <- function(x) sapply(seq_len(nlyr(x)), function(i)
 fmt <- function(v) sprintf("%.0f [%.0f, %.0f]", median(v),
                            quantile(v, 0.05), quantile(v, 0.95))
 
-# 12A2's weight, rebuilt here so the gate tests the definition rather than a stale file
+# 12C's weight, rebuilt here so the gate tests the definition rather than a stale file
 build_weight <- function(spp, tmpl) {
   tc  <- crs(tmpl)
   ctg <- function(v) {
@@ -87,7 +87,7 @@ for (p in pairs) {
   b  <- build_weight(spp, tmpl)
   tc <- crs(tmpl)
   # touches = TRUE on every vector term -- this is the V5 mask()/crop() behaviour and
-  # NOT terra::rasterize()'s default. See 12A2 for why it matters so much on water.
+  # NOT terra::rasterize()'s default. See 12C for why it matters so much on water.
   w <- b$range *
     (1 - rasterize(b$ctg(water_v), tmpl, field = 1, background = 0, touches = TRUE)) *
     rasterize(b$ctg(limit_v), tmpl, field = 1, background = 0, touches = TRUE) *

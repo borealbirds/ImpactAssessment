@@ -1,12 +1,12 @@
 # ---
-# B1 / Gate G1: verify that 12A0_v5_truncate.R reproduces V5's released product.
+# B1 / Gate G1: verify that 12B_v5_truncate.R reproduces V5's released product.
 #
 # Runs the port over 07_predictions in 3978 (V5's own configuration) and compares
 # the result cell-by-cell against output/10_truncated/{spp}/{bcr}/{spp}_{bcr}_{yr}.tif.
 # Passing this proves the port is faithful, independently of the CRS we later
 # choose to run production in.
 #
-# Usage: Rscript Rscripts/misc/verify_v5_truncate_port.R CAWA:can10 OVEN:can10
+# Usage: Rscript Rscripts/misc/harnesses/verify_v5_truncate_port.R CAWA:can10 OVEN:can10
 # ---
 
 suppressPackageStartupMessages({ library(terra); library(sf) })
@@ -27,7 +27,7 @@ year   <- 2020
 tmpd <- Sys.getenv("V5PORT_OUT", unset = file.path(tempdir(), "v5port"))
 dir.create(tmpd, recursive = TRUE, showWarnings = FALSE)
 
-source(file.path(ia_dir, "Rscripts", "12A0_v5_truncate.R"))
+source(file.path(ia_dir, "Rscripts", "12B_v5_truncate.R"))
 
 args  <- commandArgs(trailingOnly = TRUE)
 if (!length(args)) args <- c("CAWA:can10")

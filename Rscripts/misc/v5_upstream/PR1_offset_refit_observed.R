@@ -40,7 +40,7 @@ suppressPackageStartupMessages({
 })
 
 if (!nzchar(Sys.getenv("SLURM_JOB_ID")))
-  stop("runs on Fir only: cd Rscripts/misc && bash PR1_offset_refit_observed.sh")
+  stop("runs on Fir only: cd Rscripts/misc/v5_upstream && bash PR1_offset_refit_observed.sh")
 
 nm_root  <- "/home/mannfred/projects/def-ecknight/NationalModels"
 prod_dir <- "/home/mannfred/scratch/impact_assessment"

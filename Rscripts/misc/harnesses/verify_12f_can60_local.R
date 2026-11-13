@@ -9,7 +9,7 @@
 #       by design);
 #   (2) the direct part (phi_direct) summed over sectors and subbasins equals d0 - obs
 #       recomputed independently per bootstrap.
-# Run from the repo root: Rscript Rscripts/misc/verify_12f_can60_local.R   (~4 min, one core)
+# Run from the repo root: Rscript Rscripts/misc/harnesses/verify_12f_can60_local.R   (~4 min, one core)
 # Merged from the 2026-09-25 session harnesses (harness_setup.R + harness6.R).
 suppressPackageStartupMessages({ library(BAMexploreR); library(gbm); library(terra); library(tidyverse) })
 
