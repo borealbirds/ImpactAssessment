@@ -281,6 +281,15 @@ have been stale or missing on Fir four times.
       or less. Maps: cor 0.987–0.999, but OVEN's median cell falls 8% (41.5% of cells down
       > 10%) while the total rises: the low-density cells drop. Each arm's own q99 is 4–8%
       higher when matched. Not tested: the effect on the obs − cf contrast.
+      **can5 (jobs 3651813/4, VATH v5 rerun 3655832/3, 2026-11-12), VATH, RCKI, TOWA, same
+      design:** 99.9% of rows carry another survey's offset in every bootstrap; cor(V5 offset,
+      own) 0.14–0.24, mean |error| 0.28–0.32 ≈ the own offsets' SD (0.29–0.40), i.e. near
+      noise. V5-pairing trees identical to V5's stored in 24/24, raw predictions to 6e-8.
+      Matched − V5: VATH +141k (+4.9%, 5/8 up, paired 5–95% −226k to +473k), RCKI −27.6k
+      (−5.7%, 3/8 up, −99k to +23k), TOWA +730k (+11.0%, 8/8 up, min +163k). Maps cor
+      0.975/0.961/0.983; 69–74% of weighted cells move > 10% either way; q99 +4% (VATH), +11%
+      (RCKI), +2% (TOWA). VATH's v5 arm hit CVMFS I/O errors twice (nodes fc30564, fc30613)
+      before a clean rerun on another node.
 - [ ] **Ten V5 training covariates are attached to the wrong surveys (UPSTREAM, found 2026-11-05;
       not yet reported to BAM; email drafted 2026-11-05).** The eight ERA layers, CCNL_1km and
       MODISLCC_1km: every temporally matched GEE layer with `Extraction == "point"`.

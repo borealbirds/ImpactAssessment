@@ -1,40 +1,31 @@
 # ---
-# title: PR1 test: what V5's offset mismatch does to observed bird densities in one BCR
-# author: Mannfred Boehm
+# title: testing the effects of an offset mismatch on density estimates
+# author: Mannfred Boehm + claude opus5.5 
 # created: November 11, 2026
 # ---
-# V5 pairs each training survey with its offset by row position (06.Bootstrap.R brt_boot():
-# `off.i <- offsets[offsets$id %in% visit.i$id, spp.i]`), but `offsets` is not in `visit`'s
-# order (03 moved the non-Canadian surveys to the end of `visit` only), so from the first
-# non-Canadian survey on, each row carries another survey's offset: 98.6% of can81's training
-# rows (bootstrap 1). A BCR whose training table has no non-Canadian survey (can11, 41, 42, 60,
-# 61, 80) is untouched.
 #
-# This script refits V5's first N_BOOT (8) bootstraps of each species twice, identical in
-# everything but the offsets:
+# for a given `species_vec` and `bcr` this script refits V5's first `N_BOOT` bootstraps of in two treatments:
+# with and without the offset misalignment. 
 #   v5      - offsets paired by position, as V5 did (should reproduce V5's stored models)
-#   matched - offsets matched by survey id (the one-line fix at V5 04:364)
-# Both keep V5's surveys per bootstrap (bootlist), gbm seed (set.seed(i)), number of trees,
-# learning rate and covariate set. Those last three came from V5's tuning, which ran with the
-# same mismatch, so the matched arm isolates the bootstrap fit, not a full rerun of V5. The
-# covariate bug (PR2) is left in both arms.
+#   matched - offsets matched by survey id 
 #
-# Each arm is then predicted as V5 published it, and as 12A builds our observed side: on the
-# cells V5's own prediction covers (07_predictions), with 12F's predict path (NaN -> NA, each
-# model's own factor levels, the bit-identical tree walk), then V5's truncation (12B: densmax,
-# then q99 from the arm's own 8-bootstrap mean), then the range x water x data-limit x BCR
-# weight (12C's weight.tif), summed as density x 100 per 1 km2 cell. Observed only: nothing is
-# backfilled. The arms share each bootstrap's surveys and seed, so bootstrap i of one arm pairs
-# with bootstrap i of the other.
+# both treatments keep V5's surveys per bootstrap (bootlist), gbm seed (set.seed(i)), number of trees,
+# learning rate and covariate set. note that the hyperparameters come from V5's tuning, which ran with the
+# same mismatch, so the matched treatment isolates the bootstrap fit, not a full rerun of V5. 
 #
-# Fir only. PR1_offset_refit_observed.sh submits two chained steps:
-#   STEP=run      one task per species x arm, 8 cores: refit N_BOOT bootstraps (one per core),
-#                 then predict them over the BCR
-#   STEP=summary  one task: the comparison tables
-# Everything is written under {ia_dir}/offset_test/; production is only read.
+# for each treatment we run several scripts from the IA pipeline: 
+# density estimatation, truncation, weighting, range + water masking, conversion to 1km2 cells
+# 
+# this script runs on the Fir cluster. 
+# everything is written under "/home/mannfred/scratch/impact_assessment/offset_test/"
+# PR1_offset_refit_observed.sh submits two chained steps:
+# (1) STEP=run performs one task per species x treatment, 
+# 8 cores (one per bootstrap, where I decided that N_BOOT = 8)
+# (2) STEP=summary generates summary tables
+# 
 #
-# Outputs (offset_test/summary/):
-#   PR1_{bcr}_population.csv  one row per species x arm: BCR population (mean, 5th/95th
+# outputs (offset_test/summary/):
+#   PR1_{bcr}_population.csv  one row per species x treatment: BCR population (mean, 5th/95th
 #                             percentiles over bootstraps), q99, plus production's 32-bootstrap row
 #   PR1_{bcr}_effect.csv      matched - v5 per species: population, paired by bootstrap, and how
 #                             the mean density map moved (cells weighted by weight.tif)
@@ -42,7 +33,7 @@
 #                             v5 arm reproduced V5's stored trees
 #   PR1_{bcr}_raw_check.csv   per species x arm x bootstrap: raw prediction vs V5's own
 #                             (v5 arm: should be 0 difference; matched arm: what the bug moved)
-# ---
+
 
 suppressPackageStartupMessages({
   library(dplyr); library(terra); library(gbm)
@@ -55,11 +46,13 @@ nm_root  <- "/home/mannfred/projects/def-ecknight/NationalModels"
 prod_dir <- "/home/mannfred/scratch/impact_assessment"
 test_dir <- file.path(prod_dir, "offset_test")
 year     <- 2020L
-arms     <- c("v5", "matched")
+arms     <- c("v5", "matched") #arms is claude's word for "treatment"
 categorical_responses <- c("ABoVE_1km", "NLCD_1km", "MODISLCC_1km", "MODISLCC_5x5", "SCANFI_1km", "VLCE_1km")
 
 step        <- Sys.getenv("STEP")
-species_vec <- strsplit(Sys.getenv("SPECIES", "OVEN,SWTH,REVI"), "[, ]+")[[1]]
+
+# also ran VATH, RCKI, TOWA for can5
+species_vec <- strsplit(Sys.getenv("SPECIES", "OVEN,SWTH,REVI"), "[, ]+")[[1]] 
 bcr         <- Sys.getenv("BCR", "can81")
 n_boot      <- as.integer(Sys.getenv("N_BOOT", "8"))
 n_cores     <- max(1L, as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", "1")))
@@ -83,19 +76,25 @@ stack_path  <- function(sp, a) file.path(test_dir, "predictions", a, paste0(sp, 
 res_path    <- function(sp, a) file.path(test_dir, "results", paste0(sp, "_", a, "_", bcr, "_", year, ".rds"))
 stored_path <- function(sp) file.path(nm_root, "output/06_bootstraps", sp, paste0(sp, "_", bcr, ".Rdata"))
 weight_path <- function(sp) file.path(prod_dir, "data/derived_data/predictions", sp, bcr, year, "weight.tif")
-load_blist  <- function(f) { e <- new.env(parent = emptyenv()); load(f, envir = e); e$b.list }
+load_blist  <- function(f) { e <- new.env(parent = emptyenv()); load(f, envir = e); e$b.list } # load a boostrap file (.Rdata) into a new empty environment and returns only `b.list``
+
+# if a job is killed partway through a write, it leaves only a _tmp file behind
 save_atomic <- function(write_fun, f) {
   dir.create(dirname(f), recursive = TRUE, showWarnings = FALSE)
   tmp <- sub("(\\.[A-Za-z]+)$", "_tmp\\1", f)
   write_fun(tmp)
   if (!file.rename(tmp, f)) stop("could not move ", tmp, " into place")
 }
+
+# run on the results of a parallel mclapply over bootstraps
+# looks for NULL or try-error
 check_workers <- function(res, what) {
   died <- vapply(res, is.null, logical(1L))
   if (any(died)) stop(what, ": ", sum(died), " worker(s) died without a result (out of memory? check the log for oom_kill)")
   bad <- vapply(res, inherits, logical(1L), "try-error")
   if (any(bad)) stop(what, ": ", sum(bad), " worker(s) failed: ", as.character(res[[which(bad)[1L]]]))
 }
+
 # 12C's weight on this grid (range x not-water x inside data limit x inside the BCR), as 12F reads it
 read_weight <- function(sp, grid) {
   w <- terra::rast(weight_path(sp))
@@ -104,23 +103,36 @@ read_weight <- function(sp, grid) {
   if (!isTRUE(terra::compareGeom(w, grid, stopOnError = FALSE))) w <- terra::resample(w, grid, method = "near")
   w
 }
-# birds over the BCR, per layer: density (birds/ha) x 100 per 1 km2 cell, weighted
+
+# birds over the BCR, per layer: density (birds/ha) x 100 per 1 km2 cell, weighted by w
 birds <- function(stack, w) unname(terra::global(stack * w, "sum", na.rm = TRUE)[, 1]) * 100
 
-# =================================================================================================
-# STEP run, part 1: refit bootstraps 1..N_BOOT with V5's brt_boot(), offsets paired as the arm says
-# =================================================================================================
+# ------------------------------------------------------------------
+# STEP run, part 1: refit bootstraps 1-8 with V5's brt_boot() from 06.Bootstrap.R
+# brt_boot() finds surveys with ids in a bootstrap's sample,
+# pulls bird counts, covariates, and offsets, then fits a model with gbm()
+
 if (step == "run" && !file.exists(fit_path(species, arm))) {
   suppressPackageStartupMessages(library(Matrix))            # V5's `bird` is a sparse Matrix
 
   # V5's stored models: their settings, and the reference the v5 arm should reproduce
   stored <- load_blist(stored_path(species))
+  
+  # check number of bootstraps for current species
   if (length(stored) < n_boot || any(vapply(stored[seq_len(n_boot)], is.null, logical(1L))))
     stop(species, " ", bcr, ": V5's b.list has fewer than ", n_boot, " fitted bootstraps")
+  
+  # keeps only the first 8 bootstraps and drops the other 24
   stored <- stored[seq_len(n_boot)]; invisible(gc())
+
+  # use this list of vars to choose covariate columns
   vars  <- stored[[1]]$var.names
+
+  # extract hyperparameters from each of the 8 models
   trees <- unique(vapply(stored, function(m) as.numeric(m$n.trees), numeric(1L)))
   lr    <- unique(vapply(stored, function(m) m$shrinkage, numeric(1L)))
+
+  # check settings for every `stored` model
   same  <- vapply(stored, function(m) identical(m$var.names, vars) && m$interaction.depth == 3 &&
                     identical(m$distribution$name, "poisson") && m$bag.fraction == 0.5 &&
                     m$n.minobsinnode == 10, logical(1L))
@@ -129,32 +141,50 @@ if (step == "run" && !file.exists(fit_path(species, arm))) {
          ", shrinkage ", paste(lr, collapse = "/"), ") or differ from brt_boot()'s gbm call")
   message(Sys.time(), " | V5 settings: ", trees, " trees, shrinkage ", lr, ", ", length(vars), " variables")
 
+  # get survey, bird count, covariate and offset tables used to rebuild each bootstrap
   data_f <- file.path(prod_dir, "data", "raw_data", "04_NM5.0_data_stratify.Rdata")
   if (!file.exists(data_f))
     stop("V5's training data is missing: Globus G:/Shared drives/BAM_NationalModels5/data/",
          "04_NM5.0_data_stratify.Rdata to ", data_f)
   d <- new.env(); load(data_f, envir = d)
   message(Sys.time(), " | loaded ", data_f)
-  bcrlist <- d$bcrlist; bootlist <- d$bootlist; bird <- d$bird; cov <- d$cov
-  visit <- d$visit; offsets <- d$offsets
+  bcrlist <- d$bcrlist 
+  bootlist <- d$bootlist 
+  bird <- d$bird
+  cov <- d$cov
+  visit <- d$visit
+  offsets <- d$offsets
   rm(d); invisible(gc())
+  
+  # stage data to match V5's conventions
+  bcr.i <- bcr
+  spp.i <- species
+  covsnew.i <- data.frame(var = vars) # one-column data frame of covariate names
 
-  bcr.i <- bcr; spp.i <- species
-  covsnew.i <- data.frame(var = vars)
+  # `inputs` is a list with 8 elements (one per bootstrap)
+  # each element is a list with three sub-elements: 
+  # $dat is a df of survey data with bird counts, year, and var.names as columns
+  # $off is the aligned or misaligned offset for a corresponding survey in $dat
+  # $log stores diagnostic info
   inputs <- lapply(seq_len(n_boot), function(i) {
-    # --- V5 06.Bootstrap.R brt_boot() steps 6-11, verbatim ---
-    visit.i <- bcrlist[bcrlist[,bcr.i]>0, c("id", bcr.i)] |>
+
+    # much of the following is verbatim from brt_boot() steps 6-11 (06.Bootstrap.R )
+    visit.i <- bcrlist[bcrlist[,bcr.i] > 0, c("id", bcr.i)] |>
       dplyr::filter(id %in% bootlist[[i + 2]])
+
     bird.i <- bird[as.character(visit.i$id), spp.i]
     cov.i <- cov[cov$id %in% visit.i$id, colnames(cov) %in% covsnew.i$var]
     year.i <- visit[visit$id %in% visit.i$id, "year"]
     dat.i <- cbind(bird.i, year.i, cov.i) |>
       dplyr::rename(count = bird.i)
-    off.i <- offsets[offsets$id %in% visit.i$id, spp.i]
-    # ---
-    # the fix: each survey's own offset, by id
+
+    # returns offsets in offsets' own row order, not in visit.i's order (wrong)
+    off.i <- offsets[offsets$id %in% visit.i$id, spp.i] 
+      
+    # fix alignment: give each survey's its `own` offset by matching `id`s
     off_id <- offsets$id[offsets$id %in% visit.i$id]
-    own    <- offsets[[spp.i]][match(visit.i$id, offsets$id)]
+    own    <- offsets[[spp.i]][match(visit.i$id, offsets$id)] # looks up each offset up by survey id instead
+    
     if (!identical(cov$id[cov$id %in% visit.i$id], visit.i$id) ||
         !identical(visit$id[visit$id %in% visit.i$id], visit.i$id))
       stop("bootstrap ", i, ": cov or visit is not in bcrlist's order, so V5's cbind() is wrong too")
@@ -163,8 +193,10 @@ if (step == "run" && !file.exists(fit_path(species, arm))) {
     if (!setequal(off_id, visit.i$id) || anyNA(own) || length(own) != nrow(dat.i))
       stop("bootstrap ", i, ": offsets do not cover the bootstrap's surveys")
     other <- off_id != visit.i$id
+    
+    # both arms run in parallel because the job array has one task per species × arm
     list(dat = dat.i,
-         off = if (arm == "v5") off.i else own,
+         off = if (arm == "v5") off.i else own, #
          log = data.frame(species = spp.i, bcr = bcr.i, boot = i, n_rows = nrow(dat.i),
                           n_detected = sum(dat.i$count > 0),
                           rows_with_other_surveys_offset = sum(other),
@@ -175,8 +207,9 @@ if (step == "run" && !file.exists(fit_path(species, arm))) {
   })
   rm(bcrlist, bootlist, bird, cov, visit, offsets); invisible(gc())
   print(do.call(rbind, lapply(inputs, `[[`, "log")))
-
-  # --- V5 06.Bootstrap.R brt_boot() steps 13-14 (fit call and attributes) ---
+  
+  # fit models using `gbm`
+  # brt_boot() steps 13-14 (verbatim fit call and attributes from 06.Bootstrap.R)
   fit_one <- function(dat.i, off.i, i) {
     t0 <- proc.time()
     set.seed(i)
@@ -207,21 +240,27 @@ if (step == "run" && !file.exists(fit_path(species, arm))) {
       identical(b.list[[i]]$c.split, stored[[i]]$c.split),
     initF = b.list[[i]]$initF, initF_v5_stored = stored[[i]]$initF,
     fit_minutes = round(unname(attr(b.list[[i]], "time")) / 60, 1))))
+  
   print(fitlog[, c("arm", "boot", "trees_identical_to_v5_stored", "initF", "initF_v5_stored", "fit_minutes")])
+  
   if (arm == "v5" && !all(fitlog$trees_identical_to_v5_stored))
     message(Sys.time(), " | NOTE: the v5 arm did not reproduce V5's stored trees for bootstrap(s) ",
             paste(fitlog$boot[!fitlog$trees_identical_to_v5_stored], collapse = ", "),
             "; raw_check reports how far its predictions are from V5's")
-
+  
+  # save_atomic writes to a temporary filename and 
+  # renames it to the final one only when the write has finished
   save_atomic(function(f) save(b.list, file = f), fit_path(species, arm))
   save_atomic(function(f) saveRDS(fitlog, f), log_path(species, arm))
   message(Sys.time(), " | wrote ", fit_path(species, arm))
   rm(b.list, stored, inputs); invisible(gc())
 }
 
-# =================================================================================================
-# STEP run, part 2: observed predictions over the BCR, truncated and weighted as V5 publishes them
-# =================================================================================================
+
+# ------------------------------------------------------------------
+# STEP run, part 2: density predictions over the BCR, 
+# truncated and weighted as V5 publishes them
+
 if (step == "run" && !file.exists(res_path(species, arm))) {
   b.list <- load_blist(fit_path(species, arm))
   if (length(b.list) != n_boot || !identical(attr(b.list[[1]], "bcr"), bcr) ||
@@ -235,18 +274,26 @@ if (step == "run" && !file.exists(res_path(species, arm))) {
 
   categorical_responses <- c("ABoVE_1km", "NLCD_1km", "MODISLCC_1km", "MODISLCC_5x5", "SCANFI_1km", "VLCE_1km")  # as 12D
   load(file.path(prod_dir, "data", "raw_data", "SpeciesPredictionTruncationValues.Rdata"))   # q.out
-  source(file.path(prod_dir, "Rscripts", "12B_v5_truncate.R"))                 # v5_truncate()
+  source(file.path(prod_dir, "Rscripts", "12B_v5_truncate.R"))  # v5_truncate()
   source(file.path(prod_dir, "Rscripts", "12F_predict_species_all_coalitions.R"))  # as_model_factors()
   source(file.path(prod_dir, "Rscripts", "12G_gbm_tree_walk.R"))
+  
+  # custom C++ version of gbm::predict that is much faster
   Rcpp::sourceCpp(file.path(prod_dir, "Rscripts", "12G_gbm_tree_walk.cpp"))
   densmax <- q.out$densmax[q.out$spp == species]
   if (length(densmax) != 1L || !is.finite(densmax)) stop("no usable densmax for ", species)
 
   stack_obs <- terra::rast(file.path(nm_root, "gis/stacks", paste0(bcr, "_", year, ".tif")))
+  
+  # import V5's predictions to validate our training/prediction scheme 
   v5_raw    <- terra::rast(file.path(nm_root, "output/07_predictions", species,
                                      paste0(species, "_", bcr, "_", year, ".tif")))
+ 
+  # ensure the two rasters have the same extent, nrows, ncols, and CRS
   if (!isTRUE(terra::compareGeom(v5_raw, stack_obs, stopOnError = FALSE)) || terra::nlyr(v5_raw) < n_boot)
     stop("V5's raw prediction is not on the ", bcr, " stack grid or has fewer than ", n_boot, " layers")
+  
+  # V5's original predictions, cells, and covariate rows
   E     <- terra::values(v5_raw[[seq_len(n_boot)]], mat = TRUE)
   cells <- which(rowSums(!is.na(E)) > 0L)
   E     <- E[cells, , drop = FALSE]
@@ -256,9 +303,12 @@ if (step == "run" && !file.exists(res_path(species, arm))) {
   X <- terra::values(stack_obs[[vars]], mat = TRUE)[cells, , drop = FALSE]
   X[is.nan(X)] <- NA_real_                       # gbm sends only NA_real_ down its missing branch
   X <- as.data.frame(X, check.names = FALSE)
-  cat_vars <- intersect(b.list[[1]]$var.names, categorical_responses)
+  cat_vars <- intersect(b.list[[1]]$var.names, categorical_responses)  
+
+  #  chunking keeps each worker's peak at roughly 250,000 rows
   chunks   <- split(seq_along(cells), ceiling(seq_along(cells) / 250000L))
   message(Sys.time(), " | predicting ", length(cells), " cells x ", n_boot, " bootstraps")
+  
   raw <- parallel::mclapply(seq_len(n_boot), function(i) {
     m <- b.list[[i]]
     p <- rep(NA_real_, length(cells))
@@ -266,8 +316,13 @@ if (step == "run" && !file.exists(res_path(species, arm))) {
       r <- chunks[[j]][!is.na(E[chunks[[j]], i])]
       if (length(r) == 0L) next
       Xf <- as_model_factors(X[r, , drop = FALSE], m, cat_vars)
+      
+      # gbm_* functions are custom made and meant to mirror gbm::predict
+      # gbm_design builds the design matrix that predict.gbm would build from the data frame Xf for model m
       D  <- gbm_design(m, Xf)
       if (j == 1L) gbm_check_fast(m, Xf, D, label = paste(species, bcr, arm, "bootstrap", i))
+      
+      # replaces gbm::predict with a C++ version that gives bit-identical results and runs 4x faster
       p[r] <- gbm_predict_design(m, D)
       rm(Xf, D); invisible(gc(full = FALSE))
     }
@@ -276,6 +331,8 @@ if (step == "run" && !file.exists(res_path(species, arm))) {
   check_workers(raw, paste(species, arm, "observed prediction"))
   P <- do.call(cbind, raw); rm(raw, X, b.list); invisible(gc())
 
+  # raw_check is a table that checks this arm's re-predictions against V5's own original predictions,
+  # with one row per bootstrap. its job is to confirm that our prediction path reproduces V5 faithfully
   raw_check <- do.call(rbind, lapply(seq_len(n_boot), function(i) {
     ok <- !is.na(E[, i])
     rd <- abs(P[ok, i] - E[ok, i]) / pmax(abs(E[ok, i]), 1e-30)
@@ -287,7 +344,7 @@ if (step == "run" && !file.exists(res_path(species, arm))) {
   }))
   print(raw_check)
 
-  # V5 10.Truncate.R steps 5-6, as 12A applies them: densmax, then q99 from this arm's own mean
+  # V5's 10.Truncate.R steps 5-6, as 12A (IA pipeline) applies them: densmax, then q99 from this arm's own mean
   r_raw <- terra::rast(v5_raw, nlyrs = n_boot)
   vals  <- matrix(NA_real_, terra::ncell(r_raw), n_boot)
   vals[cells, ] <- P
@@ -322,9 +379,8 @@ if (step == "run" && !file.exists(res_path(species, arm))) {
   message(Sys.time(), " | wrote ", res_path(species, arm))
 }
 
-# =================================================================================================
+# ------------------------------------------------------------------
 # STEP summary: population per arm, and matched - v5 paired by bootstrap
-# =================================================================================================
 if (step == "summary") {
   q05 <- function(x) unname(quantile(x, 0.05, na.rm = TRUE))
   q95 <- function(x) unname(quantile(x, 0.95, na.rm = TRUE))
