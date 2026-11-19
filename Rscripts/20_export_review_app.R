@@ -1,15 +1,16 @@
-# Data bundle for impactexploreR, the co-authors' results-review Shiny app (its own private repo,
-# a sibling of this one): 14C's three species tables for every year, 18's change maps as 1600 px
-# WebP, and the Canadian BCR polygons as SVG paths for the app's region picker. The 113 reported
-# species only (species_113.txt). Run after 14C and 18 for every year. From the repo root:
-#   Rscript Rscripts/20_export_review_app.R
-# APP_DIR redirects the output (default ../impactexploreR). Every map gets the same crop box (the
-# union of all maps' non-white extents), so the app can swap a map's year in place.
+# ---
+# title: Data bundle for the impactexploreR review app
+# author: Mannfred Boehm
+# ---
 
-suppressPackageStartupMessages({
-  library(magick)
-  library(sf)
-})
+# for impactexploreR, the co-authors' Shiny app (a private sibling repo; APP_DIR redirects,
+# default ../impactexploreR): 14C's three tables for every year, 18's change maps as ~1600 px
+# WebP, and the Canadian BCRs as SVG paths for the region picker, for the 113 reported species.
+# every map gets the same crop box (the union of the maps' non-white extents), so the app can
+# swap a map's year in place. runs locally after 14C and 18 for every year
+
+library(magick)
+library(sf)
 
 app_dir <- Sys.getenv("APP_DIR", file.path("..", "impactexploreR"))
 se_dir  <- "data/derived_data/sector_effects"
@@ -19,7 +20,8 @@ stopifnot(dir.exists(app_dir))
 dir.create(file.path(app_dir, "data"), showWarnings = FALSE)
 dir.create(file.path(app_dir, "www", "maps"), recursive = TRUE, showWarnings = FALSE)
 
-# ---- tables --------------------------------------------------------------------------------------
+# -----------------------
+# tables
 spp <- trimws(readLines(file.path("Rscripts", "species_113.txt")))
 spp <- spp[nzchar(spp) & !startsWith(spp, "#")]
 nm  <- read.csv("data/raw_data/species_names.csv")
@@ -53,7 +55,8 @@ stopifnot(!anyDuplicated(summ[c("year", "species")]), !anyDuplicated(secs[c("yea
 s20   <- summ[summ$year == 2020, ]
 order <- s20$species[order(s20$change_pct)]
 
-# ---- BCR polygons -> SVG paths ---------------------------------------------------------------------
+# -----------------------
+# BCR polygons -> SVG paths
 bcr_names <- c(`3` = "Arctic Plains and Mountains", `4` = "Northwestern Interior Forest",
                `5` = "Northern Pacific Rainforest", `6` = "Boreal Taiga Plains",
                `7` = "Taiga Shield and Hudson Plains", `8` = "Boreal Softwood Shield",
@@ -91,7 +94,8 @@ svg <- list(paths = data.frame(bcr = info$bcr, d = unname(paths)),
                               ceiling((bb[["ymax"]] - bb[["ymin"]]) / 1000)))
 saveRDS(svg, file.path(app_dir, "data", "bcr_svg.rds"))
 
-# ---- maps ----------------------------------------------------------------------------------------
+# -----------------------
+# maps
 maps <- expand.grid(species = spp, year = years, stringsAsFactors = FALSE)
 maps$src <- file.path(map_dir, sprintf("change_grid_%s_%d.png", maps$species, maps$year))
 if (any(!file.exists(maps$src))) stop("missing maps: ", paste(maps$src[!file.exists(maps$src)],
@@ -129,7 +133,8 @@ for (k in seq_len(nrow(maps))) {
 stale <- setdiff(list.files(file.path(app_dir, "www", "maps"), full.names = TRUE), maps$out)
 if (length(stale)) file.remove(stale)
 
-# ---- bundle --------------------------------------------------------------------------------------
+# -----------------------
+# bundle
 res <- list(summary = summ, sectors = secs, bcr = bcr,
             names   = setNames(nm$common_name[match(spp, nm$species)], spp),
             habitat = habitat, habitat_groups = unname(groups),

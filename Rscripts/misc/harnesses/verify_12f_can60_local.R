@@ -40,8 +40,7 @@ abiotic_vars <- predictor_metadata |>
 biotic_continuous_vars <- predictor_metadata |> dplyr::filter(!(predictor_class %in% abiotic_vars$predictor_class)) |>
   dplyr::bind_rows(tibble::tibble(predictor = actually_biotic_what, predictor_class = "Wetland")) |>
   dplyr::filter(!predictor %in% categorical_responses) |> dplyr::pull(predictor)
-disturbance_vars <- dplyr::tibble(BAMexploreR::predictor_metadata) |> dplyr::filter(version == "v5") |>
-  dplyr::select(predictor, definition, predictor_class) |> dplyr::filter(predictor_class == "Disturbance")
+footprint_vars <- predictor_metadata$predictor[predictor_metadata$predictor_class == "Disturbance"]
 source(file.path(REPO, "Rscripts", "12E_shapley_utils.R"))
 source(file.path(REPO, "Rscripts", "12G_gbm_tree_walk.R"))
 Rcpp::sourceCpp(file.path(REPO, "Rscripts", "12G_gbm_tree_walk.cpp"))
@@ -53,12 +52,11 @@ target_ids <- c(sectors_to_coalition_id(sectors, sectors),
 
 Sys.setenv(TEST_N_BOOT = "2")
 source(file.path(REPO, "Rscripts", "12F_predict_species_all_coalitions.R"))
-t <- system.time(res <- suppressWarnings(predict_species_all_coalitions(
-  species, year = year, all_subbasins_subset = all_subbasins_subset, hirsh_dir = hirsh_dir,
-  save_arrays_ids = coalition_array_ids(),
-  rdata_files = file.path(nm_root, "output/06_bootstraps/CAWA/CAWA_can60.Rdata"),
-  return_per_bcr = TRUE)))[["elapsed"]]
-new <- res[[1]]; saveRDS(new, file.path(REPO, "cluster_logs/localtest/can60_2_12f.rds"))
+t <- system.time(new <- suppressWarnings(predict_species_all_coalitions(
+  species, year = year, rdata_path = file.path(nm_root, "output/06_bootstraps/CAWA/CAWA_can60.Rdata"),
+  all_subbasins_subset = all_subbasins_subset, hirsh_dir = hirsh_dir,
+  save_arrays_ids = coalition_array_ids())))[["elapsed"]]
+saveRDS(new, file.path(REPO, "cluster_logs/localtest/can60_2_12f.rds"))
 ref <- readRDS(file.path(REPO, "cluster_logs/smoke7/CAWA_2020_can60.rds"))$result
 cat(sprintf("== 12F 2 boots: %.0f s | tables identical: %d/255 | arrays identical: %d/9\n", t,
     sum(mapply(identical, ref$coalition_tables, new$coalition_tables)),
@@ -81,7 +79,7 @@ w   <- terra::values(terra::rast(file.path(ia_dir, "data/derived_data/prediction
 cells <- which(rowSums(S) > 0 & !is.na(hi) & hi >= 1 & !is.na(z))
 X <- terra::values(st[[unique(unlist(lapply(bl, `[[`, "var.names")))]])[cells, , drop = FALSE]
 X[is.nan(X)] <- NA_real_; X <- as.data.frame(X, check.names = FALSE)
-cv <- intersect(bl[[1]]$var.names, categorical_responses); dv <- intersect(disturbance_vars$predictor, bl[[1]]$var.names)
+cv <- intersect(bl[[1]]$var.names, categorical_responses); dv <- intersect(footprint_vars, bl[[1]]$var.names)
 ob <- terra::rast(file.path(ia_dir, "data/derived_data/predictions/CAWA/can60/2020/observed_bootstraps.tif"))
 ind <- sapply(1:2, function(i) {
   Xd <- X; for (v in dv) Xd[[v]] <- 0; Xd <- as_model_factors(Xd, bl[[i]], cv)

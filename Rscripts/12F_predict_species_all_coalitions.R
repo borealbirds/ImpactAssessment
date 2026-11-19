@@ -1,33 +1,22 @@
 # ---
-# title: Impact Assessment: predict bird density for one species across ALL 255 coalitions
+# title: Impact Assessment: predict bird density for one species x BCR across all 255 coalitions
 # author: Mannfred Boehm
 # ---
-# Restructured replacement for predict_species_bcr() (12C_predict_species_bcr.R).
-# See "12F restructure invariants" in CLAUDE.md for the full rationale.
-#
-# KEY INSIGHT: the per-pixel backfilled prediction is coalition-INDEPENDENT. The
-# joint-sampling seed (set.seed below) keys only on species+bcr+bootstrap(i)+
-# scenario(k); the predicted design-matrix row at a pixel keys only on that pixel.
-# The coalition merely selects WHICH pixels are summed. So we compute the bf field
-# ONCE per species x BCR over the SUPERSET (all-8-sectors mask = any sector
-# footprint AND CanHF>=1), then reduce each of the 255 coalitions as a masked
-# grouped sum (rowsum) — no extra raster I/O, no extra gbm predicts.
-#
-# This was verified BIT-IDENTICAL to looping the old per-coalition predict_species_bcr()
-# over all 255 coalitions (verify_restructure.R, on CAWA can14 and can10, 2026-06-10);
-# both that oracle and the verifier have since been retired.
-#
-# Sourced by 12D_repredict_all_coalitions.R. Relies on the same globals that
-# 12D sets up: nm_root, ia_dir, year, bcr_subbasins_ref, categorical_responses,
-# disturbance_vars, biotic_continuous_vars, q.out, l.out, and the 12E helpers
-# canonical_sectors() / coalition_id_to_sectors() / sectors_to_coalition_id().
 
-# Categorical columns as factors in THIS model's own level set. Each bootstrap is fitted
-# to a different resample, so their var.levels differ (CAWA can14: 28 of 32 bootstraps
-# know VLCE_1km classes 32/40 that bootstrap 1 never saw). predict.gbm matches labels
-# against the model's own levels, and V5's observed layers were made that way; converting
-# with bootstrap 1's levels sent those classes down the missing branch in every other
-# bootstrap (can14, bootstrap 32: 155 cells off V5, caught by the identity gate).
+# sourced by 12D (and 12H, for combine_bcr_results() and coalition_task_table()). uses 12D's
+# globals: nm_root, ia_dir, q.out, bcr_subbasins_ref, categorical_responses, footprint_vars,
+# biotic_continuous_vars, and 12E and 12G's functions.
+#
+# a pixel's backfilled prediction doesn't depend on the coalition: its joint-sampling seed
+# keys on species, BCR, bootstrap i and scenario k only, and its design row on the pixel only.
+# so the backfilled field is predicted once, over the all-sector footprint (any sector > 0 and
+# CanHF >= 1, = coalition 256), and each coalition is a masked sum of it (CLAUDE.md, "12F
+# invariants").
+
+
+# categorical columns as factors in THIS model's levels. bootstraps are fitted to different
+# resamples, so their var.levels differ (CAWA can14: 28 of 32 know VLCE classes bootstrap 1
+# never saw); bootstrap 1's levels sent those classes down the missing branch in the others
 as_model_factors <- function(X, model, vars) {
   for (v in vars) if (v %in% names(X)) {
     lvls <- model$var.levels[[match(v, model$var.names)]]
@@ -37,957 +26,601 @@ as_model_factors <- function(X, model, vars) {
   X
 }
 
-# rdata_files: the bootstrap .Rdata files to run (default: every BCR of the species, in
-#   list.files() order). 12D passes one file per array task.
-# return_per_bcr: TRUE returns the per-BCR results (NULL-free list) for 12D to save, and
-#   12H binds them later with combine_bcr_results(); FALSE binds them here.
-predict_species_all_coalitions <- function(species, year, all_subbasins_subset,
-                                            hirsh_dir, save_arrays_ids = integer(0),
-                                            rdata_files = NULL, return_per_bcr = FALSE) {
 
-  sectors    <- canonical_sectors()                 # 8 sectors, canonical order
-  n_sectors  <- length(sectors)
-  all_cids   <- 2:(2L^n_sectors)                    # 2..256 (cid 1 = empty, skipped)
+# one species x BCR (rdata_path: its 06_bootstraps file). returns the coalition tables, the
+# national-array pieces, the per-sample subbasin Shapley values and the BCR code; NULL when the
+# BCR has nothing to predict (no subbasins, no footprint, or no backfill mosaic)
+predict_species_all_coalitions <- function(species, year, rdata_path, all_subbasins_subset,
+                                           hirsh_dir, save_arrays_ids = integer(0)) {
 
-  message(Sys.time(), " | preparing ALL coalitions for species=", species, " year=", year)
+  sectors   <- canonical_sectors()
+  n_sectors <- length(sectors)
+  all_cids  <- 2:(2L^n_sectors)            # coalition 1 (no sector) has v = 0
+  n_draws   <- 100L                        # BART draws per backfilled covariate (08B)
+  n_scen    <- 100L                        # scenarios per bootstrap
+  bcr_code  <- sub(paste0("^", species, "_(.*)\\.Rdata$"), "\\1", basename(rdata_path))
+  test_n_boot <- as.integer(Sys.getenv("TEST_N_BOOT", "0"))
+  message(Sys.time(), " | ", species, " ", bcr_code, " ", year)
 
-  # ---- V5 truncation caps (two upper stages; see 12B_v5_truncate.R) ----------
-  # densmax: species constant. NOTE the schema change in V5 commit 4e7fc83
-  # (2026-06-04) -- q.out lost its $q column and gained $densmax. Reading the old
-  # $q here returned NULL, and pmin(x, NULL) is numeric(0) *silently*, so this
-  # clamp was a no-op on the cluster path.
-  #
-  # q99: the 99.9th percentile of the densmax-clamped bootstrap mean. It is the
-  # DOMINANT cap -- across our 25 species x BCR pairs it binds 1.2x to 35.4x lower
-  # than densmax (median 6.9x CAWA / 2.1x OVEN) -- and it was never applied at all.
-  #
-  # q99 is FROZEN from the observed landscape by 12A rather than derived here.
-  # It is the only data-dependent parameter in the transform: removing industry
-  # raises density, so a counterfactual's own 99.9th percentile sits higher and
-  # would be clamped less than the observed landscape it is differenced against,
-  # putting a component of the cap itself into the obs/bf contrast.
-  #
-  # The old l.out$denshthresh low-density zeroing was deleted from V5's pipeline
-  # (it has no counterpart in 10.Truncate.R) and is not applied. l.out still ships
-  # in the .Rdata; it is simply unused. DENS_MIN (below) is our own low-density floor,
-  # a sensitivity run only.
+  # ---- V5's two caps (12B), and the prediction weight (12C) ----
+  # densmax: a species constant. q99: the 99.9th percentile of the observed landscape, frozen by
+  # 12A: a counterfactual's own q99 would sit higher (no industry, more birds) and put part of
+  # the cap into the obs - cf contrast. q.out has had no $q column since V5's 4e7fc83, and
+  # pmin(x, NULL) is numeric(0) without a warning, hence the schema check
   if (!"densmax" %in% names(q.out))
-    stop("q.out has no `densmax` column - SpeciesPredictionTruncationValues.Rdata ",
-         "is the pre-2026-06-04 version. Restage it from G:/Shared drives/",
-         "BAM_NationalModels5/data/ and re-run 12A.")
+    stop("q.out has no densmax column: restage SpeciesPredictionTruncationValues.Rdata (2026-06-04 or later)")
   qsp <- q.out[q.out$spp == species, ]$densmax
-  if (length(qsp) != 1L || !is.finite(qsp))
-    stop("no usable densmax for species=", species)
+  if (length(qsp) != 1L || !is.finite(qsp)) stop("no usable densmax for ", species)
 
-  params_path <- file.path(ia_dir, "data", "derived_data", "predictions", species,
-                           "truncation_params.rds")
-  if (!file.exists(params_path))
-    stop("missing ", params_path, " - run 12A_observed.R locally and Globus it to ",
-         "the cluster before 12D. The frozen q99 cannot be recovered here.")
-  trunc_params <- readRDS(params_path)
+  params_path <- file.path(ia_dir, "data", "derived_data", "predictions", species, "truncation_params.rds")
+  tp <- if (file.exists(params_path)) readRDS(params_path)[[paste(bcr_code, year, sep = "_")]]
+  if (is.null(tp) || !is.finite(tp$q99)) stop(species, " ", bcr_code, ": no frozen q99 in ", params_path, " - run 12A")
+  if (!isTRUE(all.equal(tp$densmax, qsp)))
+    stop(species, " ", bcr_code, ": densmax is ", tp$densmax, " in ", params_path, " but ", qsp, " in q.out")
+  q99 <- tp$q99
+  message(Sys.time(), " | caps: densmax=", signif(qsp, 6), " q99=", signif(q99, 6))
 
-  # DROP_Q99=1 is the sensitivity run without the frozen q99 cap (TODO C3; Open Limitation
-  # #6): only densmax caps the observed, d0 and bf sides. The observed side cannot come from
-  # observed_bootstraps.tif, which 12A clamped at q99, so the workers re-predict it from the
-  # observed covariates, and the parent checks that re-capping it at q99 gives the tif back.
-  #
-  # DENS_MIN=<birds/ha> is the sensitivity run with a low-density floor (TODO C4): every
-  # capped density below it is set to 0, per pixel and per sample, BEFORE the weight, on the
-  # observed, d0 and bf sides alike (as V5's deleted denshthresh zeroed the capped density).
-  # It removes the thin density the BRT predicts over unsuitable habitat, which a large
-  # footprint turns into many birds (CAWA can11: ~0.002 birds/ha over 440k km2).
-  sens     <- sensitivity_run()
-  drop_q99 <- sens$drop_q99
-  dens_min <- sens$dens_min
-  floor_dens <- function(x) {
-    if (dens_min > 0) x[which(x < dens_min)] <- 0
-    x
+  # the weight (range x not water x data limit x in BCR) is the ONLY masking: since 08A imputes
+  # partial-NA predictors, water and out-of-range pixels no longer drop out by themselves, and
+  # an unweighted run over-counted CAWA can10 7.8x. its band name is 12C's version stamp
+  pred_dir    <- file.path(ia_dir, "data", "derived_data", "predictions", species, bcr_code, year)
+  weight_path <- file.path(pred_dir, "weight.tif")
+  if (!file.exists(weight_path)) stop(species, " ", bcr_code, ": no ", weight_path, " - run 12C")
+  weight_r <- terra::rast(weight_path)
+  if (!isTRUE(names(weight_r)[1] == "weight_v3_touches"))
+    stop(species, " ", bcr_code, ": weight.tif is version '", names(weight_r)[1], "', not weight_v3_touches - rerun 12C")
+  if (!isTRUE(terra::global(weight_r, "max", na.rm = TRUE)[[1]] > 0))
+    stop(species, " ", bcr_code, ": weight.tif is 0 or NA over the whole BCR - rebuild it with 12C")
+
+  obs_boot_path <- file.path(pred_dir, "observed_bootstraps.tif")
+  if (!file.exists(obs_boot_path)) stop(species, " ", bcr_code, ": no ", obs_boot_path, " - run 12A")
+
+  # ---- the bird models ----
+  e <- new.env(parent = emptyenv())
+  load(rdata_path, envir = e)
+  b.list <- e$b.list
+  rm(e)
+  if (test_n_boot > 0L) b.list <- b.list[seq_len(min(test_n_boot, length(b.list)))]
+  # 12A labels its outputs by the file name, so the two must agree
+  if (!identical(attr(b.list[[1]], "bcr"), bcr_code))
+    stop(basename(rdata_path), " holds a model for ", attr(b.list[[1]], "bcr"), ", not ", bcr_code)
+
+  sub_ids <- unique(bcr_subbasins_ref$sub_index[bcr_subbasins_ref$bcr_code == bcr_code])
+  n_sub   <- length(sub_ids)
+  message(Sys.time(), " | subbasins=", n_sub)
+  if (n_sub == 0) return(NULL)
+
+  stack_obs <- terra::rast(file.path(nm_root, "gis/stacks", paste0(bcr_code, "_", year, ".tif")))
+  if (!isTRUE(terra::compareGeom(weight_r, stack_obs[[1]], stopOnError = FALSE)))
+    weight_r <- terra::resample(weight_r, stack_obs[[1]], method = "near")
+
+  # ---- the all-sector footprint (the superset), and each sector's footprint and direct part ----
+  on_grid <- function(f) terra::project(terra::rast(file.path(hirsh_dir, f)), stack_obs, method = "near")
+  canHF_r    <- on_grid("CanHF_1km_morethan1.tif")
+  sec_r      <- setNames(lapply(sectors, function(s) on_grid(paste0(s, ".tif"))), sectors)
+  sec_dir_r  <- setNames(lapply(sectors, function(s) on_grid(paste0(s, "_direct.tif"))), sectors)
+  union_mask <- terra::rast(stack_obs[[1]])
+  terra::values(union_mask) <- 0L
+  for (s in sectors) union_mask <- terra::ifel(sec_r[[s]] > 0, 1L, union_mask)
+  super_mask <- terra::ifel((union_mask == 1L) & (canHF_r >= 1), 1, NA)
+  super_idx  <- which(!is.na(terra::values(super_mask, mat = FALSE)))
+  message(Sys.time(), " | superset: ", length(super_idx), " pixels")
+  if (length(super_idx) == 0) return(NULL)
+
+  bf_mosaic_path <- file.path(ia_dir, "data", "derived_data", "bart_models_mosaics", year, paste0(bcr_code, "_backfilled.tif"))
+  if (!file.exists(bf_mosaic_path)) {
+    message(Sys.time(), " | no backfill mosaic for ", bcr_code, " - skipping the BCR")
+    return(NULL)
+  }
+  stack_bf <- terra::rast(bf_mosaic_path)
+
+  # each superset pixel's subbasin, and whether each sector's footprint (> 0) and direct part (== 1) hold it
+  subbasin_zone_r <- terra::rasterize(all_subbasins_subset[sub_ids, ], stack_obs[[1]], field = "first_HYBAS_ID")
+  hybas_ids   <- all_subbasins_subset$first_HYBAS_ID[sub_ids]
+  if (anyDuplicated(hybas_ids)) stop(species, " ", bcr_code, ": duplicate first_HYBAS_ID")
+  super_zones <- terra::values(subbasin_zone_r, mat = FALSE)[super_idx]
+  sec_member  <- lapply(sec_r, function(r) {
+    v <- terra::values(r, mat = FALSE)[super_idx] > 0
+    !is.na(v) & v
+  })
+  sec_direct  <- setNames(lapply(sectors, function(s) {
+    v <- terra::values(sec_dir_r[[s]], mat = FALSE)[super_idx] == 1
+    !is.na(v) & v & sec_member[[s]]
+  }), sectors)
+  rm(union_mask, super_mask, canHF_r, sec_r, sec_dir_r)
+  gc()
+  message(Sys.time(), " | direct footprint of any sector: ", sum(Reduce(`|`, sec_direct)), " pixels")
+
+  # a weight 0 over the whole footprint is a range that misses it (BAWW, BBWA can41): impact 0
+  weight_super <- terra::values(weight_r, mat = FALSE)[super_idx]
+  if (sum(weight_super, na.rm = TRUE) == 0) message(Sys.time(), " | weight is 0 on the whole footprint: impact 0")
+
+  # ---- covariates the bootstraps share ----
+  model_vars <- b.list[[1]]$var.names
+  if (!all(vapply(b.list, function(m) identical(m$var.names, model_vars), logical(1L))))
+    stop(species, " ", bcr_code, ": the bootstraps differ in var.names")
+  cat_vars    <- intersect(model_vars, categorical_responses)
+  dist_vars   <- intersect(footprint_vars, model_vars)
+  biotic_cont <- intersect(setdiff(model_vars, categorical_responses), biotic_continuous_vars)
+
+  # ---- observed covariates at the superset pixels ----
+  miss_vars <- setdiff(model_vars, names(stack_obs))
+  if (length(miss_vars) > 0L) stop(species, " ", bcr_code, ": not in the observed stack: ", paste(miss_vars, collapse = ", "))
+  obs_all_vals <- terra::values(stack_obs[[model_vars]])[super_idx, , drop = FALSE]
+  # terra returns missing cells as NaN, but gbm sends only NA_real_ down a split's missing
+  # branch (a NaN goes right). V5's observed predictions took the missing branch, so a NaN
+  # here predicted the bf side by another rule (CAWA can11: ~+10% of the footprint's birds)
+  obs_all_vals[is.nan(obs_all_vals)] <- NA_real_
+  X_obs_super <- as.data.frame(obs_all_vals, check.names = FALSE)
+  rm(obs_all_vals)
+  gc()
+
+  # ---- backfilled covariates at the superset pixels ----
+  # continuous: the BART draws (08B; log1p scale, so expm1; non-finite -> NA, never 0), only
+  # for covariates the models read. where 08A found b constant on a subbasin's training pixels
+  # it wrote <b>_mean (raw scale) instead of draws: that constant fills every draw there (CAWA
+  # can60: SCANFIBalsamFir_5x5 in 24 subbasins, 43% of weight > 0)
+  draw_covs <- intersect(unique(sub("_draw_[0-9]{3}$", "", grep("_draw_[0-9]{3}$", names(stack_bf), value = TRUE))),
+                         model_vars)
+  draw_vals_super <- setNames(lapply(draw_covs, function(v) {
+    lyr_names <- intersect(paste0(v, "_draw_", sprintf("%03d", seq_len(n_draws))), names(stack_bf))
+    m <- expm1(terra::values(stack_bf[[lyr_names]], mat = TRUE)[super_idx, , drop = FALSE])
+    m[!is.finite(m)] <- NA_real_
+    mean_lyr <- paste0(v, "_mean")
+    if (mean_lyr %in% names(stack_bf)) {
+      const <- terra::values(stack_bf[[mean_lyr]], mat = FALSE)[super_idx]
+      fill  <- rowSums(!is.na(m)) == 0L & is.finite(const)
+      if (any(fill)) {
+        m[fill, ] <- const[fill]
+        message(Sys.time(), " | ", v, ": ", sum(fill), " superset pixels filled from ", mean_lyr)
+      }
+    }
+    pmax(m, 0)
+  }), draw_covs)
+
+  # a covariate constant in EVERY subbasin of the BCR has only <v>_mean: carried as one draw
+  mean_only_covs <- setdiff(intersect(sub("_mean$", "", grep("_mean$", names(stack_bf), value = TRUE)), biotic_cont),
+                            draw_covs)
+  for (v in mean_only_covs) {
+    const <- terra::values(stack_bf[[paste0(v, "_mean")]], mat = FALSE)[super_idx]
+    const[!is.finite(const)] <- NA_real_
+    draw_vals_super[[v]] <- matrix(pmax(const, 0), ncol = 1L)
+    message(Sys.time(), " | ", v, ": no draws in the BCR, using ", v, "_mean")
+  }
+  draw_covs <- c(draw_covs, mean_only_covs)
+
+  # modelled blanks (08B_deploy_pbart.R): <v>_blank == 1 reaches gbm as NA_real_, its missing
+  # branch, as on such land in V5's observed predictions, and counts as complete below
+  blank_super <- setNames(lapply(union(draw_covs, cat_vars), function(v) {
+    bl <- paste0(v, "_blank")
+    if (!bl %in% names(stack_bf)) return(logical(length(super_idx)))
+    terra::values(stack_bf[[bl]], mat = FALSE)[super_idx] %in% 1
+  }), union(draw_covs, cat_vars))
+  for (v in draw_covs) draw_vals_super[[v]][blank_super[[v]], ] <- NA_real_
+
+  # categorical: the drawn classes <v>_class_001..100 (08B), never the modal class, which erases
+  # minority classes. a pixel with no drawn class takes the modal one, as <v>_mean fills draws
+  cat_vals_super <- setNames(lapply(cat_vars, function(v) {
+    cls      <- paste0(v, "_class_", sprintf("%03d", seq_len(n_draws)))
+    mode_lyr <- if (v %in% names(stack_bf)) v else paste0(v, "_mean")
+    has_mode <- mode_lyr %in% names(stack_bf)
+    mode_v   <- if (has_mode) terra::values(stack_bf[[mode_lyr]], mat = FALSE)[super_idx]
+    if (all(cls %in% names(stack_bf))) {
+      m <- terra::values(stack_bf[[cls]], mat = TRUE)[super_idx, , drop = FALSE]
+      if (has_mode) {
+        fill <- rowSums(!is.na(m)) == 0L & is.finite(mode_v)
+        if (any(fill)) {
+          m[fill, ] <- mode_v[fill]
+          message(Sys.time(), " | ", v, ": ", sum(fill), " superset pixels filled from the modal class")
+        }
+      }
+    } else if (has_mode) {
+      message(Sys.time(), " | ", v, ": no drawn classes in the mosaic, using the modal class for every draw")
+      m <- matrix(mode_v, ncol = 1L)
+    } else {
+      message(Sys.time(), " | WARNING: no backfilled layer for ", v, " - filling NA")
+      return(matrix(NA_real_, length(super_idx), 1L))
+    }
+    m[blank_super[[v]], ] <- NA_real_
+    m
+  }), cat_vars)
+
+  # ---- the observed side: 12A's capped V5 predictions, weighted ----
+  obs_boot_stack <- terra::rast(obs_boot_path)
+  obs_preds <- lapply(seq_len(terra::nlyr(obs_boot_stack)), function(i) obs_boot_stack[[i]] * weight_r)
+  rm(obs_boot_stack)
+  if (test_n_boot > 0L) obs_preds <- obs_preds[seq_len(min(test_n_boot, length(obs_preds)))]
+  n_boot <- length(obs_preds)
+  if (length(b.list) != n_boot) stop(species, " ", bcr_code, ": ", length(b.list), " models but ", n_boot, " observed layers")
+
+  # ---- complete-case mask: ONE mask for the obs and bf sides ----
+  # it gates only the backfilled covariates (draw 1 standing for all draws): an observed-only
+  # covariate's NA goes down gbm's missing branch, as in V5's predictions, and a categorical is
+  # tested raw (a class some bootstrap never saw takes that model's missing branch, as in V5)
+  X_rep <- X_obs_super
+  for (v in cat_vars)  X_rep[[v]] <- cat_vals_super[[v]][, 1L]
+  for (v in dist_vars) X_rep[[v]] <- 0
+  for (v in intersect(draw_covs, names(X_rep))) X_rep[[v]] <- draw_vals_super[[v]][, 1L]
+  backfilled_vars <- intersect(c(draw_covs, cat_vars), model_vars)
+  complete_mask   <- Reduce(`&`, lapply(backfilled_vars, function(v) !is.na(X_rep[[v]]) | blank_super[[v]]),
+                            rep(TRUE, nrow(X_rep)))
+
+  # coverage that matters is among weight > 0 pixels (the grid's 100 km buffer has weight 0)
+  in_w <- is.finite(weight_super) & weight_super > 0
+  message(Sys.time(), " | complete weight>0 superset pixels: ", sum(complete_mask & in_w), " / ", sum(in_w),
+          " (", round(100 * sum(complete_mask & in_w) / max(1L, sum(in_w)), 1), "%)")
+  lost <- in_w & !complete_mask
+  if (any(lost)) {
+    na_by_var <- vapply(backfilled_vars, function(v) sum(is.na(X_rep[[v]][lost])), integer(1))
+    na_by_var <- sort(na_by_var[na_by_var > 0], decreasing = TRUE)
+    message(Sys.time(), " | NA among lost weight>0 pixels, by covariate: ", paste0(names(na_by_var), "=", na_by_var, collapse = ", "))
+  }
+  rm(X_rep, in_w, lost)
+
+  # a weight-0 pixel is 0 whatever gbm predicts, so only weight != 0 pixels are predicted (a
+  # non-finite weight is still predicted, so it NAs the product and trips the audit below)
+  pred_mask <- complete_mask & !(is.finite(weight_super) & weight_super == 0)
+  pred_rows <- which(pred_mask)
+  message(Sys.time(), " | predicting ", length(pred_rows), " complete pixels")
+
+  # ---- identity gate: the workers' path must reproduce V5's own prediction ----
+  # the OBSERVED design through the workers' path, against observed_bootstraps.tif: any gap is
+  # a difference in HOW the two sides are predicted, which would land in bf - obs as a fake
+  # impact (how the NaN/NA mismatch and the per-bootstrap levels were found). pixels with a
+  # missing covariate or a class some bootstrap never saw are over-sampled, as that is where
+  # such rules part. tolerance: the tif's float32 storage
+  spread  <- function(p, k) p[unique(round(seq(1, length(p), length.out = min(k, length(p)))))]
+  na_rows <- pred_rows[!stats::complete.cases(X_obs_super[pred_rows, , drop = FALSE])]
+  odd_cls <- Reduce(`|`, lapply(cat_vars, function(v) {
+    common <- Reduce(intersect, lapply(b.list, function(m) as.character(m$var.levels[[match(v, m$var.names)]])))
+    x <- X_obs_super[[v]][pred_rows]
+    !is.na(x) & !(as.character(x) %in% common)
+  }), rep(FALSE, length(pred_rows)))
+  id_rows <- sort(unique(c(spread(pred_rows, 1500L), spread(na_rows, 1500L), spread(pred_rows[odd_cls], 1500L))))
+  if (length(id_rows) > 0L) {
+    X_id    <- X_obs_super[id_rows, , drop = FALSE]
+    obs_chk <- terra::rast(obs_boot_path)
+    for (i in seq_len(n_boot)) {
+      X_i  <- as_model_factors(X_id, b.list[[i]], cat_vars)
+      p_id <- pmin(pmin(gbm_predict_design(b.list[[i]], gbm_design(b.list[[i]], X_i)), qsp), q99)
+      o_id <- terra::values(obs_chk[[i]], mat = FALSE)[super_idx[id_rows]]
+      bad  <- is.finite(o_id) & !(abs(p_id - o_id) <= 1e-5 * abs(o_id) + 1e-30)
+      if (any(bad))
+        stop(species, " ", bcr_code, ": identity gate failed for bootstrap ", i, ": ", sum(bad), " of ",
+             length(id_rows), " pixels predicted from the observed covariates differ from observed_bootstraps.tif",
+             " (max rel diff ", signif(max(abs(p_id - o_id)[bad] / abs(o_id[bad])), 3), ")")
+    }
+    message(Sys.time(), " | identity gate: all ", n_boot, " bootstraps reproduce V5 at ", length(id_rows),
+            " pixels (", length(na_rows), " with a missing covariate, ", sum(odd_cls), " with a class some bootstrap never saw)")
+    rm(X_id, X_i, obs_chk, p_id, o_id, bad)
   }
 
-  if (is.null(rdata_files))
-    rdata_files <- list.files(file.path(nm_root, "output/06_bootstraps", species),
-                              pattern = "can.*\\.Rdata$", full.names = TRUE)
-  message(Sys.time(), " | ", species, " | running ", length(rdata_files), " BCR model file(s)")
-
-  # ---- per-BCR work: build the superset field once, reduce all coalitions ----
-  # returns a list keyed by coalition_id; each element is that coalition's
-  # per-BCR density-table tibble (n_sub rows).
-  per_bcr <- lapply(rdata_files, function(rdata_path) {
-    on.exit(gc())
-
-    message(Sys.time(), " | loading ", basename(rdata_path))
-    e <- new.env(parent = emptyenv())
-    load(rdata_path, envir = e)
-    if (!exists("b.list", envir = e)) stop("b.list not found in ", basename(rdata_path))
-    b.list <- e$b.list; rm(e)
-
-    test_n_boot <- as.integer(Sys.getenv("TEST_N_BOOT", "0"))
-    if (test_n_boot > 0L) {
-      b.list <- b.list[seq_len(min(test_n_boot, length(b.list)))]
-      message(Sys.time(), " | TEST_N_BOOT=", test_n_boot,
-              " — truncating to ", length(b.list), " bootstrap(s)")
+  # ---- coalition membership, once ----
+  # the workers carry only the complete rows (c_rows), and keep_rows[[ci]] indexes into them.
+  # two masks per coalition (OL #10): keep_rows is its whole footprint (any of its sectors > 0),
+  # where the counterfactual has no footprint covariates (d0); direct_rows, a subset, is where
+  # one of its sectors converted the land, the only place vegetation is backfilled (bf). so the
+  # counterfactual is bf on direct_rows + d0 on the rest of keep_rows, and the split is exact:
+  # direct part = d0 - obs on keep_rows, vegetation part = bf - d0 on direct_rows.
+  # coal_state: 0 = no footprint in the BCR, 1 = footprint but no complete pixel, 2 = kept pixels
+  c_rows      <- which(complete_mask)
+  pred_in_c   <- pred_mask[c_rows]
+  w_c         <- weight_super[c_rows]
+  zones_c     <- super_zones[c_rows]
+  zi_c        <- match(zones_c, hybas_ids)         # subbasin row of each complete row
+  coal_state  <- integer(length(all_cids))
+  keep_rows   <- vector("list", length(all_cids))
+  direct_rows <- vector("list", length(all_cids))
+  for (ci in seq_along(all_cids)) {
+    coal_secs <- coalition_id_to_sectors(all_cids[ci], sectors)
+    coal_mem  <- Reduce(`|`, sec_member[coal_secs])
+    if (!any(coal_mem)) next
+    kr <- which((coal_mem & !is.na(super_zones))[c_rows])
+    coal_state[ci] <- if (length(kr) > 0L) 2L else 1L
+    if (length(kr) > 0L) {
+      keep_rows[[ci]]   <- kr
+      direct_rows[[ci]] <- which((Reduce(`|`, sec_direct[coal_secs]) & !is.na(super_zones))[c_rows])
     }
+  }
 
-    bcr_code <- attr(b.list[[1]], "bcr")
-    # 12A labels observed_bootstraps.tif and truncation_params.rds by the filename's
-    # BCR without loading b.list, so the two must agree or obs and bf would be paired
-    # across BCRs.
-    file_bcr <- sub(paste0("^", species, "_(.*)\\.Rdata$"), "\\1", basename(rdata_path))
-    if (!identical(bcr_code, file_bcr))
-      stop(species, " | ", basename(rdata_path), " carries bcr attribute '", bcr_code,
-           "' but its filename says '", file_bcr, "' - 12A labels by filename.")
-    message(Sys.time(), " | working on species=", species, " BCR=", bcr_code)
+  # from here only the predicted rows are read; the BART draws dominate memory (CAWA can11:
+  # 8.9 GB, 35% of it never predicted), so keep just those rows
+  # rows are kept one matrix at a time, so the full matrices and their subsets never coexist
+  X_pred <- X_obs_super[pred_rows, , drop = FALSE]
+  rm(X_obs_super)
+  cat_vals_pred <- lapply(cat_vals_super, function(v) v[pred_rows, , drop = FALSE])
+  rm(cat_vals_super)
+  draw_vals_pred <- draw_vals_super
+  rm(draw_vals_super)
+  for (v in names(draw_vals_pred)) draw_vals_pred[[v]] <- draw_vals_pred[[v]][pred_rows, , drop = FALSE]
+  gc()
 
-    test_bcr_env <- Sys.getenv("TEST_BCR", "")
-    if (nchar(test_bcr_env) > 0 && !bcr_code %in% strsplit(test_bcr_env, ",")[[1]]) {
-      message(Sys.time(), " | TEST_BCR=", test_bcr_env, " — skipping ", bcr_code)
-      return(NULL)
+  # ---- joint BRT x BART sampling (the expensive part), one forked worker per bootstrap ----
+  # worker i predicts its bootstrap's capped, weighted birds/ha at the complete rows for each
+  # scenario, and reduces it to every coalition's [n_sub x n_scen] subbasin sums (coal_rowsum,
+  # bit-identical to rowsum over the full matrix, which is never built)
+  n_cores <- max(1L, as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", "1")))
+  message(Sys.time(), " | sampling ", n_boot, " bootstraps x ", n_scen, " scenarios on ", n_cores, " core(s)")
+  multi_draw <- any(vapply(c(draw_vals_pred[draw_covs], cat_vals_pred), ncol, integer(1L)) > 1L)
+  ci_full    <- match(2L^n_sectors, all_cids)      # the all-sector coalition (256)
+
+  boot_res <- parallel::mclapply(seq_along(b.list), function(i) {
+    model <- b.list[[i]]
+    n_c   <- length(c_rows)
+
+    # each scenario re-seeds and draws one BART draw with replacement (only ~64 of 100 are
+    # distinct), so each distinct draw is predicted once and copied to the scenarios that drew it
+    chosen_k <- vapply(seq_len(n_scen), function(k) {
+      set.seed((sum(utf8ToInt(paste0(species, bcr_code))) + i * 1000L + k) %% .Machine$integer.max)
+      sample(n_draws, 1)
+    }, integer(1L))
+    key <- if (multi_draw) chosen_k else rep(1L, n_scen)
+
+    # d0: this bootstrap with the observed vegetation and the footprint covariates at 0. d0 - obs
+    # is the bird model's direct response to the footprint; it needs no BART draw
+    d0_c <- numeric(n_c)                           # complete rows with weight 0 stay 0
+    if (length(pred_rows) > 0L) {
+      X_d <- X_pred
+      for (v in dist_vars) X_d[[v]] <- 0
+      d0_c[pred_in_c] <- gbm_predict_design(model, gbm_design(model, as_model_factors(X_d, model, cat_vars)))
+      rm(X_d)
     }
+    d0_c   <- pmin(pmin(d0_c, qsp), q99) * w_c
+    n_bad0 <- sum(is.na(d0_c))
+    d0 <- lapply(seq_along(all_cids), function(ci) {
+      if (coal_state[ci] != 2L) return(NULL)
+      coal_rowsum(matrix(d0_c, ncol = 1L), keep_rows[[ci]], zi_c, n_sub) * 100
+    })
+    # d0 on the footprint that is NOT direct, which keeps its observed vegetation
+    d0_infl <- lapply(seq_along(all_cids), function(ci) {
+      if (coal_state[ci] != 2L) return(NULL)
+      d0[[ci]] - coal_rowsum(matrix(d0_c, ncol = 1L), direct_rows[[ci]], zi_c, n_sub) * 100
+    })
+    # the all-sector coalition's per-pixel counterfactual for the maps: d0, and on its direct
+    # pixels the mean over this bootstrap's scenarios (filled in below)
+    cf_full <- d0_c
+    rm(d0_c)
+    invisible(gc(full = FALSE))
 
-    # frozen secondary cap for THIS BCR, written by 12A next to observed_bootstraps.tif
-    tp_key <- paste(bcr_code, year, sep = "_")
-    tp     <- trunc_params[[tp_key]]
-    if (is.null(tp) || !is.finite(tp$q99))
-      stop(species, " ", bcr_code, ": no frozen q99 in ", params_path,
-           " - re-run 12A_observed.R for this BCR and restage it.")
-    q99 <- tp$q99
-    if (!isTRUE(all.equal(tp$densmax, qsp)))
-      stop(species, " ", bcr_code, ": densmax mismatch - params has ", tp$densmax,
-           " but q.out has ", qsp, ". 12A and 12F are reading different ",
-           "SpeciesPredictionTruncationValues.Rdata files.")
-    message(Sys.time(), " | ", species, " ", bcr_code,
-            " | caps: densmax=", signif(qsp, 6), " q99=", signif(q99, 6),
-            " (q99 binds ", round(qsp / q99, 1), "x lower)",
-            if (drop_q99) " | DROP_Q99: q99 not applied to obs, d0 or bf" else "",
-            if (dens_min > 0) paste0(" | DENS_MIN: capped densities < ", dens_min,
-                                     " birds/ha set to 0 on obs, d0 and bf") else "")
-    # the identity gate below still caps at q99, since it checks against observed_bootstraps.tif
-    q99_cap <- if (drop_q99) Inf else q99
-
-    sub_ids <- bcr_subbasins_ref |>
-      dplyr::filter(bcr_code == !!bcr_code) |>
-      dplyr::pull(sub_index) |>
-      unique()
-    message(Sys.time(), " | ", species, " ", bcr_code, " | subbasins=", length(sub_ids))
-    if (length(sub_ids) == 0) {
-      message(Sys.time(), " | ", species, " ", bcr_code, " | NO SUBBASINS — skipping")
-      return(NULL)
-    }
-
-    stack_obs <- terra::rast(file.path(nm_root, "gis/stacks", paste0(bcr_code, "_", year, ".tif")))
-    message(Sys.time(), " | done loading observed stack")
-
-    # ---- SUPERSET mask: any of the 8 sectors > 0 AND CanHF >= 1 (= cid 256) ----
-    canHF_r <- terra::project(
-      terra::rast(file.path(hirsh_dir, "CanHF_1km_morethan1.tif")),
-      stack_obs, method = "near")
-
-    # per-sector reprojected footprint rasters, kept so coalition membership over
-    # the superset pixels can be derived cheaply (no per-coalition reprojection).
-    # {sec}_direct.tif (14A) marks the part of the footprint the sector converted; only
-    # there is the vegetation backfilled (see the coalition membership block below).
-    sec_rasters <- setNames(vector("list", n_sectors), sectors)
-    sec_direct_r <- setNames(vector("list", n_sectors), sectors)
-    union_mask  <- terra::rast(stack_obs[[1]]); terra::values(union_mask) <- 0L
-    for (sec in sectors) {
-      sec_r <- terra::project(
-        terra::rast(file.path(hirsh_dir, paste0(sec, ".tif"))),
-        stack_obs, method = "near")
-      sec_rasters[[sec]] <- sec_r
-      direct_path <- file.path(hirsh_dir, paste0(sec, "_direct.tif"))
-      if (!file.exists(direct_path))
-        stop("missing ", direct_path, " - build it with 14A_reproject_hirshpearson.R and stage it")
-      sec_direct_r[[sec]] <- terra::project(terra::rast(direct_path), stack_obs, method = "near")
-      union_mask <- terra::ifel(sec_r > 0, 1L, union_mask)
-    }
-    super_mask <- terra::ifel((union_mask == 1L) & (canHF_r >= 1), 1, NA)
-    rm(union_mask); gc()
-
-    n_super_px <- terra::global(super_mask, "notNA")[[1]]
-    message(Sys.time(), " | superset mask built (", n_super_px, " pixels)")
-    if (n_super_px == 0) {
-      message(Sys.time(), " | ", species, " ", bcr_code, " | superset empty — skipping BCR")
-      return(NULL)
-    }
-
-    bf_mosaic_path <- file.path(ia_dir, "data", "derived_data", "bart_models_mosaics",
-                                year, paste0(bcr_code, "_backfilled.tif"))
-    if (!file.exists(bf_mosaic_path)) {
-      message(Sys.time(), " | no backfilled mosaic found for ", bcr_code, " — skipping BCR")
-      return(NULL)
-    }
-    stack_bf <- terra::rast(bf_mosaic_path)
-    message(Sys.time(), " | done loading backfilled stack")
-
-    draw_layer_names <- names(stack_bf)[grep("_draw_[0-9]{3}$", names(stack_bf))]
-    draw_covs        <- unique(sub("_draw_[0-9]{3}$", "", draw_layer_names))
-    n_draws          <- 100L
-    n_scen           <- 100L
-
-    # bootstrap-invariant quantities (identical to predict_species_bcr) -------------------------
-    model_vars_shared  <- b.list[[1]]$var.names
-    if (!all(vapply(b.list, function(m) identical(m$var.names, model_vars_shared), logical(1L))))
-      stop(species, " ", bcr_code, ": bootstraps do not share one var.names - the ",
-           "*_shared quantities below assume they do")
-    cat_vars_shared    <- intersect(model_vars_shared, categorical_responses)
-    dist_shared        <- intersect(disturbance_vars$predictor, model_vars_shared)
-    biotic_cont_shared <- intersect(setdiff(model_vars_shared, categorical_responses),
-                                    biotic_continuous_vars)
-    # The mosaic carries draws for every backfilled covariate (~50), but predict.gbm only
-    # reads model$var.names (~17), so reading the rest cost ~2/3 of the draw I/O and memory.
-    draw_covs <- intersect(draw_covs, model_vars_shared)
-
-    # Levels are per bootstrap (as_model_factors); this only reports model 1's empty ones.
-    null_cat_vars <- cat_vars_shared[vapply(cat_vars_shared, function(v)
-      length(b.list[[1]]$var.levels[[match(v, model_vars_shared)]]) == 0L, logical(1L))]
-    if (length(null_cat_vars) > 0L)
-      message(Sys.time(), " | WARNING: ", species, " ", bcr_code,
-              " | var.levels empty for categorical var(s) ",
-              paste(null_cat_vars, collapse = ", "), " — skipping factor conversion")
-
-    # rasterize subbasins; zone field = first_HYBAS_ID (zone ids ARE hybas ids) --
-    subbasin_zone_r <- terra::rasterize(all_subbasins_subset[sub_ids, ], stack_obs[[1]],
-                                        field = "first_HYBAS_ID")
-    zone_ids  <- sort(unique(terra::values(subbasin_zone_r, na.rm = TRUE)))
-    hybas_ids <- all_subbasins_subset$first_HYBAS_ID[sub_ids]
-    idx       <- match(hybas_ids, zone_ids)         # sub -> zone slot; NA if absent
-
-    # superset pixel indices, their subbasin zone, and per-sector membership -----
-    super_idx   <- which(!is.na(terra::values(super_mask, mat = FALSE)))
-    super_zones <- terra::values(subbasin_zone_r, mat = FALSE)[super_idx]
-    sec_member  <- setNames(lapply(sectors, function(sec)
-      terra::values(sec_rasters[[sec]], mat = FALSE)[super_idx] > 0), sectors)
-    sec_member  <- lapply(sec_member, function(v) { v[is.na(v)] <- FALSE; v })
-    sec_direct  <- setNames(lapply(sectors, function(sec) {
-      v <- terra::values(sec_direct_r[[sec]], mat = FALSE)[super_idx] == 1
-      !is.na(v) & v & sec_member[[sec]]
-    }), sectors)
-    rm(sec_rasters, sec_direct_r, canHF_r); gc()
-    message(Sys.time(), " | ", species, " ", bcr_code,
-            " | superset pixels: ", length(super_idx),
-            " of ", terra::ncell(stack_obs[[1]]), " BCR cells; direct footprint of any sector: ",
-            sum(Reduce(`|`, sec_direct)))
-
-    # ---- Prediction weight (range x not-water x in-data-limit; built by 12A2) ---
-    # Applied multiplicatively to BOTH observed and backfilled density so obs/bf
-    # symmetry holds: w*bf - w*obs = w*(bf - obs). Replicates V5 10.Truncate
-    # range/water/extent masking. Built on the stack grid, so it aligns with
-    # stack_obs and the observed bootstraps; resample only as a grid-drift guard.
-    #
-    # HARD DEPENDENCY (changed 2026-09-11 -- this used to fall back to w == 1 and
-    # carry on with only a message). Fix B made the fallback materially more
-    # dangerous: 08A now median-imputes partial-NA covariates, so water,
-    # out-of-range and out-of-extent pixels no longer fail complete.cases() and
-    # drop out of BOTH sides on their own. weight.tif is now the ONLY thing
-    # keeping them out of the density tables, and an unmasked run produces
-    # totals that are quietly wrong rather than obviously broken -- on CAWA
-    # can10 the masking is a 7.8x reduction. Fail here rather than 20 h in.
-    weight_path <- file.path(ia_dir, "data", "derived_data", "predictions",
-                             species, bcr_code, year, "weight.tif")
-    if (!file.exists(weight_path))
-      stop(species, " ", bcr_code, ": missing ", weight_path,
-           " - run `sbatch 12C_build_prediction_weights.sh` before 12D. Since Fix B ",
-           "this is the only masking left, so an unmasked run would silently ",
-           "over-count water, out-of-range and out-of-extent pixels.")
-    weight_r <- terra::rast(weight_path)
-    # Version stamp written by 12A2. Weights built before 2026-09-11 omit V5's
-    # per-subunit crop to the BCR's own polygon (10.Truncate.R:146), which lets buffer
-    # pixels from neighbouring subunits into the density tables and double-counts
-    # every subbasin straddling a BCR seam (329 of 674 do).
-    w_name <- names(weight_r)[1]
-    if (!isTRUE(w_name == "weight_v3_touches"))
-      stop(species, " ", bcr_code, ": weight.tif band name is '", w_name,
-           "', expected 'weight_v3_touches'. This weight predates the BCR-cut ",
-           "and/or the rasterize(touches = TRUE) fix (2026-09-11). No rm is needed - ",
-           "the version stamp forces a rebuild: re-run ",
-           "`sbatch 12C_build_prediction_weights.sh`.")
-    if (!isTRUE(terra::compareGeom(weight_r, stack_obs[[1]], stopOnError = FALSE)))
-      weight_r <- terra::resample(weight_r, stack_obs[[1]], method = "near")
-    weight_super <- terra::values(weight_r, mat = FALSE)[super_idx]
-    # A weight that is 0 over the whole BCR is broken. One that is 0 only over the footprint
-    # is a species whose range misses the footprint here (BAWW, BBWA can41): its impact in
-    # this BCR is 0 and its observed birds still count (obs_total), so it runs on, and the
-    # pred_rows guards below skip every prediction.
-    if (!isTRUE(terra::global(weight_r, "max", na.rm = TRUE)[[1]] > 0))
-      stop(species, " ", bcr_code, ": weight.tif is all-zero/NA over the BCR - ",
-           "it would zero every density in this BCR. Rebuild it with 12C.")
-    if (sum(weight_super, na.rm = TRUE) == 0)
-      message(Sys.time(), " | ", species, " ", bcr_code, " | weight is 0 at every footprint ",
-              "pixel (range misses the footprint): impact here is 0")
-
-    # observed covariates at superset pixels -------------------------------------
-    # Only the layers some bootstrap model reads (predict.gbm selects var.names anyway),
-    # rather than every layer of the stack.
-    obs_vars <- unique(unlist(lapply(b.list, `[[`, "var.names")))
-    miss_vars <- setdiff(obs_vars, names(stack_obs))
-    if (length(miss_vars) > 0L)
-      stop(species, " ", bcr_code, ": model variable(s) absent from the observed stack: ",
-           paste(miss_vars, collapse = ", "))
-    obs_all_vals <- terra::values(stack_obs[[obs_vars]])[super_idx, , drop = FALSE]
-    # terra returns missing cells as NaN, never NA_real_, and gbm's tree walk sends ONLY
-    # NA_real_ down a split's missing branch: a NaN fails the `<` test and goes right. V5's
-    # observed predictions (07.Predict, which observed_bootstraps.tif carries) used the
-    # missing branch, so without this recode the bf side was predicted under a different
-    # rule wherever an observed-only covariate is missing (CAWA can11: 3.2% of weight > 0
-    # footprint pixels, missing StandardGreenup/Dormancy, ~35x V5's density there, ~+10%
-    # of the observed birds on that footprint). It also stops a raw NaN reaching
-    # SurfaceWater_1km, which gbm treats as categorical, where it is undefined behaviour.
-    # The identity gate below checks the result against V5 on every run.
-    obs_all_vals[is.nan(obs_all_vals)] <- NA_real_
-    X_obs_super <- as.data.frame(obs_all_vals, check.names = FALSE)
-    rm(obs_all_vals); gc()
-
-    # BART posterior draws at superset pixels (expm1, non-finite -> NA, pmax 0) ---
-    draw_vals_super <- setNames(
-      lapply(draw_covs, function(v) {
-        lyr_names <- paste0(v, "_draw_", sprintf("%03d", seq_len(n_draws)))
-        lyr_names <- intersect(lyr_names, names(stack_bf))
-        mat_raw   <- terra::values(stack_bf[[lyr_names]], mat = TRUE)
-        mat_sec   <- mat_raw[super_idx, , drop = FALSE]; rm(mat_raw)
-        mat_sec   <- expm1(mat_sec)
-        mat_sec[!is.finite(mat_sec)] <- NA_real_
-        # Where v was constant across a subbasin's low-HF pixels, 08A skipped BART and
-        # wrote <v>_mean (raw scale, not log1p) instead of draws, so the BCR mosaic has
-        # no draws there. That constant IS the subbasin's backfill (08A cascades it into
-        # later covariates), so use it for every draw rather than letting the gate drop
-        # the subbasin (CAWA can60: SCANFIBalsamFir_5x5, 24 subbasins, 43% of weight>0).
-        mean_lyr <- paste0(v, "_mean")
-        if (mean_lyr %in% names(stack_bf)) {
-          const <- terra::values(stack_bf[[mean_lyr]], mat = FALSE)[super_idx]
-          fill  <- rowSums(!is.na(mat_sec)) == 0L & is.finite(const)
-          if (any(fill)) {
-            mat_sec[fill, ] <- const[fill]
-            message(Sys.time(), " | ", species, " ", bcr_code, " | ", v,
-                    ": filled ", sum(fill), " draw-less superset pixels from ", mean_lyr)
-          }
-        }
-        pmax(mat_sec, 0)
-      }), draw_covs)
-
-    # A covariate constant in EVERY subbasin of the BCR has no draws anywhere, only
-    # <v>_mean, so it was never in draw_covs and kept its OBSERVED value on the bf side.
-    # Carry it as a one-draw covariate so it gets the low-HF constant like the case above.
-    mean_only_covs <- setdiff(
-      intersect(sub("_mean$", "", grep("_mean$", names(stack_bf), value = TRUE)), biotic_cont_shared),
-      draw_covs)
-    for (v in mean_only_covs) {
-      const <- terra::values(stack_bf[[paste0(v, "_mean")]], mat = FALSE)[super_idx]
-      const[!is.finite(const)] <- NA_real_
-      draw_vals_super[[v]] <- matrix(pmax(const, 0), ncol = 1L)
-      message(Sys.time(), " | ", species, " ", bcr_code, " | ", v,
-              ": no draws in BCR, using ", v, "_mean at ", sum(!is.na(const)), " superset pixels")
-    }
-    draw_covs <- c(draw_covs, mean_only_covs)
-
-    # Modelled blanks (08B_deploy_pbart.R). Where the training land leaves a covariate blank
-    # (SCANFIheightcv_* where there are no trees), 08A marks the backfilled pixels that should
-    # be blank too: <v>_blank == 1. They reach gbm as NA_real_, its missing branch, as on such
-    # land in V5's own observed predictions, and the gate below counts them as complete: a
-    # blank is part of the backfill, not missing backfill. A backfill from before 2026-10-12
-    # has no _blank layers, so nothing is blanked.
-    blank_super <- setNames(lapply(union(draw_covs, cat_vars_shared), function(v) {
-      bl <- paste0(v, "_blank")
-      if (!bl %in% names(stack_bf)) return(logical(length(super_idx)))
-      terra::values(stack_bf[[bl]], mat = FALSE)[super_idx] %in% 1
-    }), union(draw_covs, cat_vars_shared))
-    for (v in draw_covs) draw_vals_super[[v]][blank_super[[v]], ] <- NA_real_
-
-    # categorical backfill at superset pixels: the drawn classes <v>_class_001..100 (08B), one
-    # column per BART draw, so a scenario's draw index picks its classes as it picks the
-    # continuous draws. A backfill from before 2026-10-12 has only the modal class <v>, which is
-    # then used for every draw (one column). Where a pixel has no drawn class but a modal one,
-    # the modal class fills it, as <v>_mean fills the continuous draws above.
-    cat_vals_super <- setNames(
-      lapply(cat_vars_shared, function(v) {
-        lyr_name <- if (v %in% names(stack_bf)) v else paste0(v, "_mean")
-        cls      <- paste0(v, "_class_", sprintf("%03d", seq_len(n_draws)))
-        has_mode <- lyr_name %in% names(stack_bf)
-        mode_v   <- if (has_mode) terra::values(stack_bf[[lyr_name]], mat = FALSE)[super_idx]
-        if (all(cls %in% names(stack_bf))) {
-          m <- terra::values(stack_bf[[cls]], mat = TRUE)[super_idx, , drop = FALSE]
-          if (has_mode) {
-            fill <- rowSums(!is.na(m)) == 0L & is.finite(mode_v)
-            if (any(fill)) {
-              m[fill, ] <- mode_v[fill]
-              message(Sys.time(), " | ", species, " ", bcr_code, " | ", v, ": filled ", sum(fill),
-                      " superset pixels without drawn classes from the modal class")
-            }
-          }
-        } else if (has_mode) {
-          message(Sys.time(), " | ", species, " ", bcr_code, " | ", v,
-                  ": no drawn classes in the mosaic, using the modal class for every draw")
-          m <- matrix(mode_v, ncol = 1L)
-        } else {
-          message(Sys.time(), " | WARNING: no backfilled layer for categorical var ", v,
-                  " — filling NA")
-          return(matrix(NA_real_, length(super_idx), 1L))
-        }
-        m[blank_super[[v]], ] <- NA_real_
-        m
-      }), cat_vars_shared)
-
-    # canonical observed bootstraps (from 12A; always present now that the colleague's
-    # observed prediction rasters are staged on the cluster — absence is a hard error,
-    # not a bf-only fall-through).
-    obs_dir       <- file.path(ia_dir, "data", "derived_data", "predictions", species, bcr_code, year)
-    obs_boot_path <- file.path(obs_dir, "observed_bootstraps.tif")
-    if (!file.exists(obs_boot_path))
-      stop(species, " ", bcr_code, " | observed_bootstraps.tif missing at ", obs_boot_path,
-           " — run 12A_observed.R and Globus-transfer the outputs before 12D")
-    obs_boot_stack <- terra::rast(obs_boot_path)
-    n_obs <- terra::nlyr(obs_boot_stack)
-    obs_preds <- lapply(seq_len(n_obs), function(i) obs_boot_stack[[i]]); rm(obs_boot_stack)
-    if (test_n_boot > 0L) obs_preds <- obs_preds[seq_len(min(test_n_boot, length(obs_preds)))]
-    # apply prediction weight to observed density (range/water/extent masking).
-    # weights BOTH O_c (obs_on source) and obs_total_byboot (zonal) downstream,
-    # mirroring the retired predict_species_bcr where a single weighted obs_preds fed both quantities.
-    # DENS_MIN floors the capped tif before the weight, as the workers floor d0 and bf.
-    if (dens_min > 0) obs_preds <- lapply(obs_preds, function(r) terra::ifel(r < dens_min, 0, r))
-    obs_preds <- lapply(obs_preds, function(r) r * weight_r)
-    message(Sys.time(), " | ", species, " ", bcr_code, " | loaded ",
-            length(obs_preds), " canonical observed bootstraps (weighted)")
-    n_boot <- length(obs_preds)
-    if (length(b.list) != n_boot)
-      stop(species, " ", bcr_code, " | bootstrap count mismatch: b.list=",
-           length(b.list), " obs=", n_boot)
-
-    # ---- complete-case mask over the SUPERSET design matrix (coalition-free) ---
-    X_rep <- X_obs_super
-    for (v in cat_vars_shared) if (v %in% names(X_rep)) X_rep[[v]] <- cat_vals_super[[v]][, 1L]
-    for (v in dist_shared)     if (v %in% names(X_rep)) X_rep[[v]] <- 0
-    # Categoricals are gated on the RAW backfilled class, not on a factor: a class some
-    # bootstrap never saw is not missing backfill, and each model routes it as predict.gbm
-    # would (its missing branch), exactly as V5 treated such classes on the observed side.
-    for (v in draw_covs) if (v %in% names(X_rep)) X_rep[[v]] <- draw_vals_super[[v]][, 1L]
-    # Gate ONLY on the BACKFILLED covariates we inject (continuous biotic draws +
-    # backfilled categoricals). Observed-only covariates (climate, soil, terrain,
-    # phenology) may be NA — gbm sends NA_real_ down each split's missing branch, as V5's
-    # 07.Predict did, so dropping a pixel on their NA over-restricts the counterfactual
-    # (e.g. StandardGreenup/Dormancy NA on water/quality-gap pixels that V5 still
-    # predicted). That holds only for NA_real_, not terra's NaN - hence the recode where
-    # X_obs_super is built. The backfilled draws/categoricals are the counterfactual
-    # signal itself, so they MUST be complete. Range/water/extent is handled separately
-    # by weight_super (12A2), not by this gate. A single complete_mask still drives BOTH
-    # the re-predicted field and obs_on (via keep_rows), so obs/bf parity is preserved.
-    # A modelled blank (blank_super) is complete.
-    backfilled_vars <- intersect(c(draw_covs, cat_vars_shared), model_vars_shared)
-    complete_mask <- Reduce(`&`, lapply(backfilled_vars, function(v) !is.na(X_rep[[v]]) | blank_super[[v]]),
-                            rep(TRUE, nrow(X_rep)))
-    message(Sys.time(), " | ", species, " ", bcr_code, " | complete superset pixels: ",
-            sum(complete_mask), " / ", length(super_idx),
-            " (", round(100 * mean(complete_mask), 1), "%)")
-    # The line above counts the stack grid's 100 km buffer, where 11 masked the
-    # backfill to NA but weight is 0 anyway, so dropping those pixels is harmless.
-    # Coverage that matters is among weight > 0 pixels; break down any loss there.
-    in_w <- is.finite(weight_super) & weight_super > 0
-    message(Sys.time(), " | ", species, " ", bcr_code, " | complete weight>0 superset pixels: ",
-            sum(complete_mask & in_w), " / ", sum(in_w),
-            " (", round(100 * sum(complete_mask & in_w) / max(1L, sum(in_w)), 1), "%)")
-    lost <- in_w & !complete_mask
-    if (any(lost)) {
-      na_by_var <- vapply(backfilled_vars, function(v) sum(is.na(X_rep[[v]][lost])), integer(1))
-      na_by_var <- sort(na_by_var[na_by_var > 0], decreasing = TRUE)
-      message(Sys.time(), " | ", species, " ", bcr_code, " | NA among lost weight>0 pixels, by var: ",
-              paste0(names(na_by_var), "=", na_by_var, collapse = ", "))
-      zone_lbl   <- ifelse(is.na(super_zones), "none", as.character(super_zones))
-      lost_zones <- sort(table(zone_lbl[lost]), decreasing = TRUE)
-      tot_zones  <- table(zone_lbl[in_w])
-      message(Sys.time(), " | ", species, " ", bcr_code, " | lost weight>0 pixels span ",
-              length(lost_zones), " subbasin zone(s) (HYBAS_ID=lost/total): ",
-              paste0(names(lost_zones), "=", as.integer(lost_zones), "/",
-                     as.integer(tot_zones[names(lost_zones)]), collapse = ", "))
-    }
-    rm(X_rep, in_w, lost)
-
-    # Pixels with weight exactly 0 are zeroed by the weight whatever gbm predicts, so
-    # predict only where weight != 0 and write 0 elsewhere (0 * 0 == finite * 0 == 0).
-    # A non-finite weight is still predicted, so it still NA-s the product and trips the audit.
-    zero_w    <- is.finite(weight_super) & weight_super == 0
-    pred_mask <- complete_mask & !zero_w
-    pred_rows <- which(pred_mask)
-    message(Sys.time(), " | ", species, " ", bcr_code, " | predicting ", length(pred_rows),
-            " complete pixels; skipping ", sum(complete_mask & zero_w), " with weight 0")
-
-    # ---- identity gate: the workers' predict path must reproduce V5's own prediction ----
-    # Feed the OBSERVED design (nothing backfilled) through exactly the path the workers
-    # use and compare it with observed_bootstraps.tif, which is V5's prediction clamped by
-    # 12A. Any gap is a difference in HOW the two sides are predicted, and it would land in
-    # bf - obs as a fake impact: this is how the NaN/NA mismatch above was found
-    # (2026-09-24), and the per-bootstrap categorical levels (can14). Pixels with a missing
-    # covariate or a class some bootstrap never saw are over-sampled because that is where
-    # such rules diverge. Every bootstrap is tested (~0.15 s each), which also checks that
-    # b.list[[i]] pairs with observed layer i. Tolerance covers only the tif's float32 storage.
-    spread  <- function(p, k) p[unique(round(seq(1, length(p), length.out = min(k, length(p)))))]
-    na_rows <- pred_rows[!stats::complete.cases(X_obs_super[pred_rows, , drop = FALSE])]
-    odd_cls <- Reduce(`|`, lapply(cat_vars_shared, function(v) {
-      common <- Reduce(intersect, lapply(b.list, function(m)
-        as.character(m$var.levels[[match(v, m$var.names)]])))
-      x <- X_obs_super[[v]][pred_rows]
-      !is.na(x) & !(as.character(x) %in% common)
-    }), rep(FALSE, length(pred_rows)))
-    cls_rows <- pred_rows[odd_cls]
-    id_rows <- sort(unique(c(spread(pred_rows, 1500L), spread(na_rows, 1500L), spread(cls_rows, 1500L))))
-    if (length(id_rows) > 0L) {
-      X_id <- X_obs_super[id_rows, , drop = FALSE]
-      obs_chk <- terra::rast(obs_boot_path)
-      for (i in seq_len(n_boot)) {
-        X_i  <- as_model_factors(X_id, b.list[[i]], cat_vars_shared)
-        p_id <- pmin(pmin(gbm_predict_design(b.list[[i]], gbm_design(b.list[[i]], X_i)), qsp), q99)
-        o_id <- terra::values(obs_chk[[i]], mat = FALSE)[super_idx[id_rows]]
-        bad  <- is.finite(o_id) & !(abs(p_id - o_id) <= 1e-5 * abs(o_id) + 1e-30)
-        if (any(bad))
-          stop(species, " ", bcr_code, ": identity gate failed for bootstrap ", i, " - ",
-               sum(bad), " of ", length(id_rows), " pixels predicted from the OBSERVED ",
-               "covariates differ from observed_bootstraps.tif (max rel diff ",
-               signif(max(abs(p_id - o_id)[bad] / abs(o_id[bad])), 3), "). The bf side would ",
-               "be predicted by a different rule than the obs side it is differenced against.")
+    # the design matrix, built once per bootstrap; per draw only the draw columns change
+    if (length(pred_rows) > 0L) {
+      X_k <- X_pred
+      for (v in cat_vars) {
+        cv <- cat_vals_pred[[v]]
+        X_k[[v]] <- cv[, if (ncol(cv) == 1L) 1L else chosen_k[1L]]
       }
-      message(Sys.time(), " | ", species, " ", bcr_code, " | identity gate: all ", n_boot,
-              " bootstraps reproduce V5 at ", length(id_rows), "/", length(id_rows),
-              " observed-design pixels (predicted pixels with a missing covariate: ",
-              length(na_rows), "; with a class some bootstrap never saw: ", length(cls_rows), ")")
-      rm(X_id, X_i, obs_chk, p_id, o_id, bad)
-    }
-
-    # ---- coalition membership, ONCE (shared by the workers and the obs-side reduce) ----
-    # Every row the reduce can keep is complete-case, so the workers carry only the
-    # complete rows (c_rows); keep_rows[[ci]] indexes into them. coal_state: 0 = coalition
-    # has no footprint in this BCR, 1 = footprint but no kept pixel, 2 = kept pixels.
-    #
-    # Two masks per coalition (TODO C2f, decided 2026-09-28). keep_rows is the coalition's
-    # whole footprint (any of its sectors > 0, incl. influence zones); on all of it the
-    # counterfactual has no footprint covariates. direct_rows (a subset) is where one of its
-    # sectors converted the land: only there is the vegetation backfilled. So the
-    # counterfactual sum is bf over direct_rows + d0 over the rest of keep_rows, and the
-    # direct/vegetation split still holds exactly: direct = d0 - obs over keep_rows,
-    # vegetation = bf - d0 over direct_rows.
-    c_rows      <- which(complete_mask)
-    pred_in_c   <- pred_mask[c_rows]
-    w_c         <- weight_super[c_rows]
-    zones_c     <- super_zones[c_rows]
-    n_sub       <- length(sub_ids)
-    if (anyDuplicated(hybas_ids)) stop(species, " ", bcr_code, ": duplicate first_HYBAS_ID")
-    zi_c        <- match(zones_c, hybas_ids)           # subbasin row of each complete row
-    coal_state  <- integer(length(all_cids))
-    keep_rows   <- vector("list", length(all_cids))
-    direct_rows <- vector("list", length(all_cids))
-    for (ci in seq_along(all_cids)) {
-      coal_secs <- coalition_id_to_sectors(all_cids[ci], sectors)
-      coal_mem  <- Reduce(`|`, sec_member[coal_secs])
-      if (!any(coal_mem)) next
-      kr <- which((coal_mem & !is.na(super_zones))[c_rows])
-      coal_state[ci] <- if (length(kr) > 0L) 2L else 1L
-      if (length(kr) > 0L) {
-        keep_rows[[ci]]   <- kr
-        direct_rows[[ci]] <- which((Reduce(`|`, sec_direct[coal_secs]) & !is.na(super_zones))[c_rows])
+      for (v in dist_vars) X_k[[v]] <- 0
+      X_k  <- as_model_factors(X_k, model, cat_vars)
+      dcol <- match(draw_covs, model$var.names)    # NA: not read by this model
+      # drawn classes change per draw too: their 0-based codes in THIS model's levels, as
+      # as_model_factors() + gbm_design() build them (an unseen class -> NA, the missing branch)
+      ccol <- match(cat_vars, model$var.names)
+      ccol[vapply(cat_vars, function(v) ncol(cat_vals_pred[[v]]) == 1L, logical(1L))] <- NA
+      cat_code <- function(j, k) {
+        lv <- model$var.levels[[ccol[j]]]
+        x  <- cat_vals_pred[[cat_vars[j]]][, k]
+        if (is.null(lv) || length(lv) == 0L) return(as.double(x))
+        as.numeric(factor(as.character(x), levels = as.character(lv))) - 1
       }
+      for (v in intersect(draw_covs, names(X_k))) {
+        dv <- draw_vals_pred[[v]]
+        X_k[[v]] <- dv[, if (ncol(dv) == 1L) 1L else chosen_k[1L]]
+      }
+      D <- gbm_design(model, X_k)
+      gbm_check_fast(model, X_k, D, label = paste(species, bcr_code, "bootstrap", i))
+      for (j in which(!is.na(ccol)))
+        if (!identical(cat_code(j, chosen_k[1L]), D[, ccol[j]]))
+          stop(species, " ", bcr_code, " bootstrap ", i, ": drawn-class codes for ", cat_vars[j], " differ from gbm_design()'s")
+      rm(X_k)
     }
 
-    # From here on only the PREDICTED rows of the design inputs are read. The BART draws
-    # dominate memory (CAWA can11: 17 covariates x 652,655 superset rows x 100 draws x 8 B
-    # = 8.9 GB, 35% of it never predicted), so keep just those rows, one matrix at a time.
-    X_pred <- X_obs_super[pred_rows, , drop = FALSE]; rm(X_obs_super)
-    cat_vals_pred  <- lapply(cat_vals_super, function(v) v[pred_rows, , drop = FALSE]); rm(cat_vals_super)
-    draw_vals_pred <- draw_vals_super; rm(draw_vals_super)
-    for (v in names(draw_vals_pred))
-      draw_vals_pred[[v]] <- draw_vals_pred[[v]][pred_rows, , drop = FALSE]
-    gc()
-
-    # ---- Joint BRT x BART sampling over the SUPERSET (the expensive part, ONCE)
-    # Worker i predicts its bootstrap's [n_complete x n_scen] field of capped, weighted
-    # birds/ha, then reduces it straight to every coalition's [n_sub x n_scen] subbasin
-    # sums, so the full [n_super x (n_boot * n_scen)] matrix is never built. rowsum() adds
-    # each column independently in row order, so a per-bootstrap reduce is bit-identical
-    # to reducing the assembled matrix. Seed is coalition-free.
-    n_cores <- max(1L, as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", "1")))
-    message(Sys.time(), " | ", species, " ", bcr_code, " | sampling ", n_boot,
-            " bootstraps x ", n_scen, " scenarios on ", n_cores, " core(s)")
-    multi_draw <- any(vapply(c(draw_vals_pred[draw_covs], cat_vals_pred), ncol, integer(1L)) > 1L)
-    ci_full    <- match(2L^n_sectors, all_cids)        # the all-sector coalition (cid 256)
-
-    boot_res <- parallel::mclapply(seq_along(b.list), function(i) {
-      model <- b.list[[i]]
-      n_c   <- length(c_rows)
-      # Each scenario re-seeds and picks one BART draw with replacement, so only ~64 of
-      # the 100 picks are distinct. Predictions depend on the draw alone (same model,
-      # same inputs), so predict once per distinct draw and copy it to every scenario
-      # that picked it: same seeds, same picks, same numbers, ~36% fewer gbm calls.
-      chosen_k <- vapply(seq_len(n_scen), function(k) {
-        set.seed((sum(utf8ToInt(paste0(species, bcr_code))) + i * 1000L + k) %%
-                   .Machine$integer.max)
-        sample(n_draws, 1)
-      }, integer(1L))
-      key <- if (multi_draw) chosen_k else rep(1L, n_scen)
-
-      # Direct/vegetation split: this bootstrap once more with the OBSERVED biotic covariates
-      # and only the footprint covariates at 0. d0 - obs is the bird model's direct response
-      # to removing the footprint; bf - d0 is the effect of the backfilled vegetation. d0 does
-      # not depend on the BART draw, so it is one prediction per bootstrap (~1.5% of the gbm
-      # calls). Same path as the identity gate, which proves it reproduces V5 on the obs side.
-      d0_c <- numeric(n_c)                          # complete rows with weight 0 stay 0
+    # a forked worker inherits the parent's GC trigger (~10-15 GB after the draw reads on big
+    # BCRs), so it could pile up that much garbage before collecting: 8 of them OOM'd at 64G.
+    # hence only per-draw vectors here, and gc(full = FALSE), which scans only the worker's own objects
+    sc    <- matrix(NA_real_, nrow = n_c, ncol = n_scen)
+    n_bad <- 0
+    for (d in unique(key)) {
+      ks     <- which(key == d)
+      pred_c <- numeric(n_c)                       # complete rows with weight 0 stay 0
       if (length(pred_rows) > 0L) {
-        X_d <- X_pred
-        for (v in dist_shared) if (v %in% names(X_d)) X_d[[v]] <- 0
-        X_d <- as_model_factors(X_d, model, cat_vars_shared)
-        d0_c[pred_in_c] <- gbm_predict_design(model, gbm_design(model, X_d))
-        rm(X_d)
-      }
-      d0_c   <- floor_dens(pmin(pmin(d0_c, qsp), q99_cap)) * w_c
-      n_bad0 <- sum(is.na(d0_c))
-      # DROP_Q99: the observed side, densmax-capped and unweighted (the parent checks and weights it)
-      o_c <- NULL
-      if (drop_q99) {
-        o_c <- numeric(n_c)
-        if (length(pred_rows) > 0L)
-          o_c[pred_in_c] <- gbm_predict_design(model, gbm_design(model,
-                              as_model_factors(X_pred, model, cat_vars_shared)))
-        o_c <- pmin(o_c, qsp)
-      }
-      d0 <- lapply(seq_along(all_cids), function(ci) {
-        if (coal_state[ci] != 2L) return(NULL)
-        coal_rowsum(matrix(d0_c, ncol = 1L), keep_rows[[ci]], zi_c, n_sub) * 100
-      })
-      # d0 over the footprint that is NOT direct, which keeps its observed vegetation
-      d0_infl <- lapply(seq_along(all_cids), function(ci) {
-        if (coal_state[ci] != 2L) return(NULL)
-        d0[[ci]] - coal_rowsum(matrix(d0_c, ncol = 1L), direct_rows[[ci]], zi_c, n_sub) * 100
-      })
-      # per-pixel counterfactual of the all-sector coalition for the pixel maps: d0 here, and
-      # the mean over this bootstrap's scenarios on its direct pixels once sc is filled below
-      cf_full <- d0_c
-      rm(d0_c); invisible(gc(full = FALSE))
-
-      # design matrix built ONCE per bootstrap; per draw only the draw columns change
-      if (length(pred_rows) > 0L) {
-        X_k <- X_pred
-        for (v in cat_vars_shared) if (v %in% names(X_k)) {
-          cv <- cat_vals_pred[[v]]
-          X_k[[v]] <- cv[, if (ncol(cv) == 1L) 1L else chosen_k[1L]]
+        chosen <- chosen_k[ks[1L]]
+        for (j in which(!is.na(dcol))) {
+          dv <- draw_vals_pred[[draw_covs[j]]]
+          D[, dcol[j]] <- dv[, if (ncol(dv) == 1L) 1L else chosen]
         }
-        for (v in dist_shared)     if (v %in% names(X_k)) X_k[[v]] <- 0
-        X_k  <- as_model_factors(X_k, model, cat_vars_shared)
-        dcol <- match(draw_covs, model$var.names)           # NA: not read by this model
-        # drawn classes change per draw too: their 0-based codes in THIS model's levels, as
-        # as_model_factors() + gbm_design() build them (a class it never saw -> NA, the
-        # missing branch); a model without levels for the variable reads it raw, as there
-        ccol <- match(cat_vars_shared, model$var.names)
-        ccol[vapply(cat_vars_shared, function(v) ncol(cat_vals_pred[[v]]) == 1L, logical(1L))] <- NA
-        cat_code <- function(j, k) {
-          lv <- model$var.levels[[ccol[j]]]
-          x  <- cat_vals_pred[[cat_vars_shared[j]]][, k]
-          if (is.null(lv) || length(lv) == 0L) return(as.double(x))
-          as.numeric(factor(as.character(x), levels = as.character(lv))) - 1
-        }
-        for (v in draw_covs) if (v %in% names(X_k)) {
-          dv <- draw_vals_pred[[v]]
-          X_k[[v]] <- dv[, if (ncol(dv) == 1L) 1L else chosen_k[1L]]
-        }
-        D <- gbm_design(model, X_k)
-        gbm_check_fast(model, X_k, D, label = paste(species, bcr_code, "bootstrap", i))
-        # D holds the first scenario's draw, so its class columns are gbm_design's own coding
-        for (j in which(!is.na(ccol)))
-          if (!identical(cat_code(j, chosen_k[1L]), D[, ccol[j]]))
-            stop(species, " ", bcr_code, " bootstrap ", i, ": drawn-class codes for ",
-                 cat_vars_shared[j], " differ from gbm_design()'s")
-        rm(X_k)
+        for (j in which(!is.na(ccol))) D[, ccol[j]] <- cat_code(j, chosen)
+        pred_c[pred_in_c] <- gbm_predict_design(model, D)
       }
-
-      # Memory. A forked worker inherits the parent's GC trigger, which the BART-draw
-      # reads push to ~10-15 GB on the big BCRs, so each worker may pile up that much
-      # garbage before R collects; 8 workers doing so OOM-ed C1 at 64G (can12/13/80, the
-      # last 80 s into sampling on only 56k rows). So the loop allocates only per-draw
-      # vectors and collects them itself. gc(full = FALSE) scans only young objects (the
-      # worker's own), so it is cheap and does not copy the parent's heap as a full one would.
-      sc    <- matrix(NA_real_, nrow = n_c, ncol = n_scen)
-      n_bad <- 0
-      for (d in unique(key)) {
-        ks     <- which(key == d)
-        pred_c <- numeric(n_c)                      # complete rows with weight 0 stay 0
-        if (length(pred_rows) > 0L) {
-          chosen <- chosen_k[ks[1L]]
-          for (j in which(!is.na(dcol))) {                  # in place: only the draw columns
-            dv <- draw_vals_pred[[draw_covs[j]]]
-            D[, dcol[j]] <- dv[, if (ncol(dv) == 1L) 1L else chosen]
-          }
-          for (j in which(!is.na(ccol))) D[, ccol[j]] <- cat_code(j, chosen)
-          pred_c[pred_in_c] <- gbm_predict_design(model, D)
-        }
-        # both V5 upper caps, in 10.Truncate.R order (densmax then the frozen q99), then
-        # the prediction weight (V5 order: truncate, then range-multiply); symmetric with
-        # the observed side, so bf - obs stays w*(bf - obs). DENS_MIN floors before the weight.
-        sc_d <- floor_dens(pmin(pmin(pred_c, qsp), q99_cap)) * w_c
-        # NA audit. The reduce below has no na.rm, so one NA in a kept pixel NA-s that
-        # subbasin's ENTIRE bf total while the obs side zeroes its NAs -- a one-sided loss.
-        # complete_mask is built from draw 1 as a proxy for all 100 draws, so a pixel
-        # complete in draw 1 can still be NA in the draw a scenario picked.
-        n_bad <- n_bad + length(ks) * sum(is.na(sc_d))
-        sc[, ks] <- sc_d
-        rm(pred_c, sc_d); invisible(gc(full = FALSE))
-      }
-
-      # x100: birds/ha -> birds/km2. coal_rowsum = rowsum(sc[kr, ], zones_c[kr]) placed on
-      # the n_sub subbasin rows (absent subbasin -> 0), without copying sc[kr, ] 255 times.
-      # "bf" is the coalition's counterfactual on its footprint: backfilled vegetation on
-      # its direct pixels plus d0 (same for every scenario) on the rest.
-      bf <- lapply(seq_along(all_cids), function(ci) {
-        if (coal_state[ci] != 2L) return(NULL)
-        coal_rowsum(sc, direct_rows[[ci]], zi_c, n_sub) * 100 +
-          d0_infl[[ci]][, rep(1L, n_scen), drop = FALSE]
-      })
-      if (coal_state[ci_full] == 2L) {
-        dr <- direct_rows[[ci_full]]
-        cf_full[dr] <- rowMeans(sc[dr, , drop = FALSE])
-      }
-      list(bf = bf, d0 = d0, obs = o_c, cf_full = cf_full, n_bad = as.numeric(n_bad + n_bad0))
-    }, mc.cores = n_cores, mc.preschedule = FALSE)   # one fork per bootstrap, freed on exit
-
-    # A worker the kernel kills (e.g. out of memory) returns NULL, not a try-error.
-    died   <- vapply(boot_res, is.null, logical(1L))
-    if (any(died)) stop(sprintf("%s %s | %d/%d bootstrap workers died without a result (most likely killed out of memory: check the job log for oom_kill and raise --mem)",
-                                species, bcr_code, sum(died), length(boot_res)))
-    failed <- vapply(boot_res, inherits, logical(1L), "try-error")
-    if (any(failed)) stop(sprintf("%s %s | %d/%d bootstrap workers failed: %s",
-                                  species, bcr_code, sum(failed), length(boot_res),
-                                  as.character(boot_res[[which(failed)[1L]]])))
-
-    n_bad <- sum(vapply(boot_res, function(r) r$n_bad, numeric(1L)))
-    if (n_bad > 0)
-      stop(species, " ", bcr_code, ": ", n_bad, " NA cells of the bf / d0 fields at complete-case ",
-           "pixels (of ", length(c_rows) * n_boot * (n_scen + 1L), "). rowsum() has no na.rm, so ",
-           "these would silently zero out whole subbasins on the BACKFILLED side only ",
-           "while the observed side zeroes its NAs. Most likely a BART draw other than ",
-           "draw 1 has thinner coverage than complete_mask assumes -- widen the gate to ",
-           "all draws, or impute, before trusting these tables.")
-    # O_c: observed birds/ha at the complete superset pixels, [n_complete x n_boot]
-    O_c <- vapply(obs_preds, function(r) terra::values(r, mat = FALSE)[super_idx[c_rows]],
-                  numeric(length(c_rows)))
-    if (is.null(dim(O_c))) O_c <- matrix(O_c, ncol = n_boot)
-    # DROP_Q99: swap in the re-predicted observed side, but only after it reproduces the tif
-    # once re-capped at q99, at every complete pixel and bootstrap (the identity gate samples
-    # ~4,500). Where the tif is NA it stays NA, so the two runs differ by the cap alone.
-    if (drop_q99) {
-      O_u  <- do.call(cbind, lapply(boot_res, `[[`, "obs"))
-      chk  <- pmin(O_u, q99) * w_c
-      bad  <- is.finite(O_c) & !(abs(chk - O_c) <= 1e-5 * abs(O_c) + 1e-30)
-      if (any(bad))
-        stop(species, " ", bcr_code, ": DROP_Q99 observed side, re-capped at q99, differs from ",
-             "observed_bootstraps.tif at ", sum(bad), " of ", sum(is.finite(O_c)), " pixel-bootstraps")
-      message(Sys.time(), " | ", species, " ", bcr_code, " | DROP_Q99 observed side reproduces ",
-              "observed_bootstraps.tif once re-capped (", sum(is.finite(O_c)), " pixel-bootstraps); ",
-              "q99 binds at ", round(100 * mean(O_u[pred_in_c, ] > q99), 2), "% of predicted ones; ",
-              "tif NA at ", sum(is.na(O_c[pred_in_c, ])), " of them")
-      O_c <- ifelse(is.na(O_c), NA_real_, O_u * w_c)
-      rm(O_u, chk, bad)
+      # V5's order: densmax, then q99, then the weight; the same as the obs side, so bf - obs = w * (bf - obs)
+      sc_d <- pmin(pmin(pred_c, qsp), q99) * w_c
+      # coal_rowsum has no na.rm, so one NA would NA a subbasin's whole bf sum while the obs
+      # side zeroes its NAs. the complete mask used draw 1, so another draw could still be NA
+      n_bad <- n_bad + length(ks) * sum(is.na(sc_d))
+      sc[, ks] <- sc_d
+      rm(pred_c, sc_d)
+      invisible(gc(full = FALSE))
     }
 
-    # ---- coalition-INDEPENDENT obs_total (whole-subbasin), computed ONCE -------
-    # mirrors predict_species_bcr: per bootstrap, zonal sum of obs_r*100 over subbasin zones.
-    obs_total_byboot <- vapply(seq_len(n_boot), function(i) {
-      z <- terra::zonal(obs_preds[[i]] * 100, subbasin_zone_r, "sum", na.rm = TRUE)
-      z[[2]][idx]                                     # NA where sub's zone absent
-    }, numeric(length(sub_ids)))
-    if (is.null(dim(obs_total_byboot)))
-      obs_total_byboot <- matrix(obs_total_byboot, nrow = length(sub_ids))
-
-    rm(stack_obs, stack_bf, obs_preds, X_pred, draw_vals_pred, cat_vals_pred, b.list); gc()
-
-    # combine_stats: identical math to predict_species_bcr (column order is irrelevant to mean/sd)
-    combine_stats <- function(mat) {
-      list(mean = rowMeans(mat, na.rm = TRUE),
-           sd   = apply(mat, 1L, sd, na.rm = TRUE))
+    # x 100: birds/ha -> birds per km2 pixel. a coalition's "bf" is its counterfactual on its
+    # footprint: backfilled vegetation on its direct pixels, d0 (the same in every scenario) on the rest
+    bf <- lapply(seq_along(all_cids), function(ci) {
+      if (coal_state[ci] != 2L) return(NULL)
+      coal_rowsum(sc, direct_rows[[ci]], zi_c, n_sub) * 100 + d0_infl[[ci]][, rep(1L, n_scen), drop = FALSE]
+    })
+    if (coal_state[ci_full] == 2L) {
+      dr <- direct_rows[[ci_full]]
+      cf_full[dr] <- rowMeans(sc[dr, , drop = FALSE])
     }
-    n_sub <- length(sub_ids)
-    # broadcast a [n_sub x n_boot] matrix to [n_sub x (n_boot*n_scen)]
-    bcols <- rep(seq_len(n_boot), each = n_scen)
-    # obs_total is coalition-free, so its stats are computed once, not 255 times
-    obs_total_mat <- obs_total_byboot[, bcols, drop = FALSE]
-    ot_stats      <- combine_stats(obs_total_mat)
+    list(bf = bf, d0 = d0, cf_full = cf_full, n_bad = as.numeric(n_bad + n_bad0))
+  }, mc.cores = n_cores, mc.preschedule = FALSE)
 
-    # BCR total per (bootstrap, scenario) for 15A: sum over subbasins of an
-    # [n_sub x (n_boot*n_scen)] matrix whose columns run scenario-within-bootstrap.
-    bcr_draws <- function(mat) matrix(colSums(mat, na.rm = TRUE), nrow = n_boot,
-                                      ncol = n_scen, byrow = TRUE)
-    arr_cids   <- intersect(as.character(save_arrays_ids), as.character(all_cids))
-    bcr_arrays <- setNames(vector("list", length(arr_cids)), arr_cids)
+  # a worker the kernel kills (out of memory) returns NULL
+  died <- vapply(boot_res, is.null, logical(1L))
+  if (any(died))
+    stop(species, " ", bcr_code, ": ", sum(died), " of ", length(boot_res), " bootstrap workers died ",
+         "(most likely out of memory: look for oom_kill in the job log and raise --mem)")
+  failed <- vapply(boot_res, inherits, logical(1L), "try-error")
+  if (any(failed))
+    stop(species, " ", bcr_code, ": ", sum(failed), " bootstrap workers failed: ", as.character(boot_res[[which(failed)[1L]]]))
+  n_bad <- sum(vapply(boot_res, function(r) r$n_bad, numeric(1L)))
+  if (n_bad > 0)
+    stop(species, " ", bcr_code, ": ", n_bad, " NA cells in the bf/d0 fields at complete pixels: some BART draw ",
+         "other than draw 1 has thinner coverage than the complete mask assumes")
 
-    # NOTE: per-coalition inspection rasters (predictions_coalitions/.../backfilled_
-    # {mean,sd}.tif) are intentionally NOT written here — no downstream script reads
-    # them (14B/15A/15B consume only the .rds tables). If needed, emit them only for
-    # the save_arrays_ids coalitions from the workers' weighted fields, which are capped.
+  # observed birds/ha at the complete superset pixels, [n_complete x n_boot]
+  O_c <- vapply(obs_preds, function(r) terra::values(r, mat = FALSE)[super_idx[c_rows]], numeric(length(c_rows)))
+  if (is.null(dim(O_c))) O_c <- matrix(O_c, ncol = n_boot)
 
-    # ---- per-sample Shapley values per subbasin, for 14B's uncertainty ----------------
-    # Shapley values are linear in v (phi = W %*% v, 12E), so they can be taken per
-    # (bootstrap, scenario) sample and then summarised. Sums of these samples over
-    # subbasins and BCRs keep two covariances that SDs propagated from the tables lose:
-    # every subbasin of a BCR is predicted by the same 32 bird models, and v(S) and
-    # v(S + j) come from the same samples. Columns run scenario-within-bootstrap, like
-    # bf_mat. 12H stacks these across BCRs in table row order.
-    W_shap      <- shapley_weight_matrix(sectors)
-    phi_samples <- array(0, c(n_sub, n_sectors, n_boot * n_scen),
-                         dimnames = list(NULL, sectors, NULL))
-    # the direct part (d0 - obs) depends on the bootstrap only, so it is kept per bootstrap;
-    # the vegetation part of sample (i, k) is phi_samples[, , (i, k)] - phi_direct[, , i]
-    phi_direct  <- array(0, c(n_sub, n_sectors, n_boot), dimnames = list(NULL, sectors, NULL))
+  # each subbasin's whole observed population, per bootstrap (NA where its zone is absent)
+  zone_slot <- match(hybas_ids, sort(unique(terra::values(subbasin_zone_r, na.rm = TRUE))))
+  obs_total_byboot <- vapply(seq_len(n_boot), function(i) {
+    z <- terra::zonal(obs_preds[[i]] * 100, subbasin_zone_r, "sum", na.rm = TRUE)
+    z[[2]][zone_slot]
+  }, numeric(n_sub))
+  if (is.null(dim(obs_total_byboot))) obs_total_byboot <- matrix(obs_total_byboot, nrow = n_sub)
 
-    # ---- assemble every coalition (the workers already did the grouped sums) ------
-    coalition_tables <- vector("list", length(all_cids))
-    names(coalition_tables) <- as.character(all_cids)
+  rm(stack_obs, stack_bf, obs_preds, X_pred, draw_vals_pred, cat_vals_pred, b.list)
+  gc()
 
-    for (ci in seq_along(all_cids)) {
-      cid <- all_cids[ci]
+  combine_stats <- function(mat) list(mean = rowMeans(mat, na.rm = TRUE), sd = apply(mat, 1L, sd, na.rm = TRUE))
 
-      # Reproduce predict_species_bcr's n_active==0 short-circuit EXACTLY: a coalition with no
-      # footprint pixels in this BCR returns an all-zeros table (incl. obs_total=0,
-      # which is a coalition-invariant quantity predict_species_bcr nonetheless zeroes here). Match
-      # it for bit-identity; coal_state 0 == predict_species_bcr's n_active == 0 (superset already
-      # ANDs CanHF>=1, so coalition membership over super == coalition-mask notNA count).
-      if (coal_state[ci] == 0L) {
-        # no footprint pixels for this coalition in this BCR: obs placeholders are 0
-        # (bit-identical to the retired predict_species_bcr's n_active==0 short-circuit), and bf is a genuine
-        # 0 since no footprint here means no counterfactual change.
-        coalition_tables[[ci]] <- tibble::tibble(
-          species = species, subbasin = sub_ids, bcr = bcr_code, coalition_id = cid,
-          obs_total_mean = 0, obs_total_sd = 0,
-          obs_on_coalition_mean = 0, obs_on_coalition_sd = 0,
-          bf_on_coalition_mean = 0, bf_on_coalition_sd = 0)
-        # The table zeroes obs_total here for bit-identity with the retired path, but
-        # the arrays keep the real one so 15A's national observed total stays whole.
-        if (as.character(cid) %in% arr_cids)
-          bcr_arrays[[as.character(cid)]] <- list(
-            obs_total_mat   = bcr_draws(obs_total_mat),
-            obs_on_coal_mat = matrix(0, n_boot, n_scen),
-            bf_on_coal_mat  = matrix(0, n_boot, n_scen))
-        next
-      }
+  # [n_sub x n_boot] -> [n_sub x (n_boot * n_scen)], samples running scenario-within-bootstrap
+  bcols         <- rep(seq_len(n_boot), each = n_scen)
+  obs_total_mat <- obs_total_byboot[, bcols, drop = FALSE]
+  ot_stats      <- combine_stats(obs_total_mat)
 
-      # bf_on_coalition: the workers' [n_sub x n_scen] blocks, bootstrap-major -> [n_sub x 3200]
-      bf_mat <- matrix(0, nrow = n_sub, ncol = n_boot * n_scen)
-      obs_on_mat <- matrix(NA_real_, n_sub, n_boot * n_scen)
-      if (coal_state[ci] == 2L) {
-        kr     <- keep_rows[[ci]]
-        zk     <- zones_c[kr]
-        bf_mat <- do.call(cbind, lapply(boot_res, function(r) r$bf[[ci]]))
+  # BCR totals per (bootstrap, scenario) for 15A's national arrays
+  bcr_draws  <- function(mat) matrix(colSums(mat, na.rm = TRUE), nrow = n_boot, ncol = n_scen, byrow = TRUE)
+  arr_cids   <- intersect(as.character(save_arrays_ids), as.character(all_cids))
+  bcr_arrays <- setNames(vector("list", length(arr_cids)), arr_cids)
 
-        Ok <- O_c[kr, , drop = FALSE] * 100
-        Ok[is.na(Ok)] <- 0                                  # na.rm-equivalent sum
-        rs_obs <- rowsum(Ok, group = zk, reorder = TRUE)
-        # obs_on is filled ONLY for subbasins that have kept (coalition AND
-        # complete-case) pixels. Subbasins with no kept pixels — whether their
-        # zone is absent from the raster (idx NA) or present-but-footprint-free —
-        # stay NA, so combine_stats yields NaN mean / NA sd. This mirrors 12C
-        # exactly: its terra::zonal over an all-NA zone returns NaN. Do NOT
-        # pre-fill 0 here; predict_species_bcr never assigns a real 0 to an empty obs_on cell.
-        obs_on_byboot <- matrix(NA_real_, n_sub, n_boot)
-        map_o <- match(hybas_ids, rownames(rs_obs))
-        presO <- !is.na(map_o)
-        if (any(presO)) obs_on_byboot[presO, ] <- rs_obs[map_o[presO], , drop = FALSE]
-        obs_on_mat <- obs_on_byboot[, bcols, drop = FALSE]
+  # per-sample subbasin Shapley values for 14B: Shapley values are linear in v (phi = W v, 12E),
+  # so they can be taken per (bootstrap, scenario) sample. summing those samples keeps the
+  # covariances that propagated SDs lose: a BCR's subbasins share 32 bird models, and v(S) and
+  # v(S + j) share samples. the direct part depends on the bootstrap only; the vegetation part
+  # of sample (i, k) is phi_samples[, , (i, k)] - phi_direct[, , i]
+  W_shap      <- shapley_weight_matrix(sectors)
+  phi_samples <- array(0, c(n_sub, n_sectors, n_boot * n_scen), dimnames = list(NULL, sectors, NULL))
+  phi_direct  <- array(0, c(n_sub, n_sectors, n_boot), dimnames = list(NULL, sectors, NULL))
 
-        # direct part of v(S), per bootstrap: observed vegetation, footprint covariates at 0
-        d0_byboot <- do.call(cbind, lapply(boot_res, function(r) r$d0[[ci]]))   # [n_sub x n_boot]
-        imp_d     <- d0_byboot - obs_on_byboot
-        empty_d   <- is.na(obs_on_byboot)
-        if (any(d0_byboot[empty_d] != 0))
-          stop(species, " ", bcr_code, " coalition ", cid, ": non-zero d0 in a subbasin ",
-               "with no kept pixels")
-        imp_d[empty_d] <- 0
-        for (j in seq_len(n_sectors))
-          phi_direct[, j, ] <- phi_direct[, j, ] + W_shap[j, cid] * imp_d
-        rm(d0_byboot, imp_d, empty_d)
-      } else {
-        # coalition has footprint in this BCR but no complete-case pixels at all:
-        # no kept pixels anywhere -> every subbasin's obs_on is empty -> NA
-        # (NaN mean / NA sd), matching predict_species_bcr's all-NA zonal result.
-        obs_on_mat <- matrix(NA_real_, n_sub, n_boot)[, bcols, drop = FALSE]
-      }
+  # ---- assemble every coalition's table ----
+  coalition_tables <- setNames(vector("list", length(all_cids)), as.character(all_cids))
 
-      # v(S) per sample. A subbasin with no kept pixel has nothing backfilled, so its
-      # v(S) is 0 (14B's rule for the tables' NaN obs_on mean); its bf sum must be 0 too.
-      imp   <- bf_mat - obs_on_mat
-      empty <- is.na(obs_on_mat)
-      if (any(bf_mat[empty] != 0))
-        stop(species, " ", bcr_code, " coalition ", cid, ": non-zero bf_on in a subbasin ",
-             "with no kept pixels")
-      imp[empty] <- 0
-      for (j in seq_len(n_sectors))
-        phi_samples[, j, ] <- phi_samples[, j, ] + W_shap[j, cid] * imp
-      rm(imp, empty)
+  for (ci in seq_along(all_cids)) {
+    cid <- all_cids[ci]
 
-      bf_stats      <- combine_stats(bf_mat)
-      ooc_stats     <- combine_stats(obs_on_mat)
-      if (as.character(cid) %in% arr_cids)
-        bcr_arrays[[as.character(cid)]] <- list(
-          obs_total_mat   = bcr_draws(obs_total_mat),
-          obs_on_coal_mat = bcr_draws(obs_on_mat),
-          bf_on_coal_mat  = bcr_draws(bf_mat))
+    # no footprint in the BCR: all zeros, obs_total included (as the retired per-coalition code
+    # wrote it; 14B takes obs_total from the other coalitions). the arrays keep the real obs_total
+    if (coal_state[ci] == 0L) {
       coalition_tables[[ci]] <- tibble::tibble(
         species = species, subbasin = sub_ids, bcr = bcr_code, coalition_id = cid,
-        obs_total_mean = ot_stats$mean,  obs_total_sd = ot_stats$sd,
-        obs_on_coalition_mean = ooc_stats$mean, obs_on_coalition_sd = ooc_stats$sd,
-        bf_on_coalition_mean = bf_stats$mean,   bf_on_coalition_sd = bf_stats$sd)
+        obs_total_mean = 0, obs_total_sd = 0,
+        obs_on_coalition_mean = 0, obs_on_coalition_sd = 0,
+        bf_on_coalition_mean = 0, bf_on_coalition_sd = 0)
+      if (as.character(cid) %in% arr_cids)
+        bcr_arrays[[as.character(cid)]] <- list(obs_total_mat   = bcr_draws(obs_total_mat),
+                                                obs_on_coal_mat = matrix(0, n_boot, n_scen),
+                                                bf_on_coal_mat  = matrix(0, n_boot, n_scen))
+      next
     }
 
-    # ---- per-pixel change of the all-sector coalition, for the pixel maps (18) ----------
-    # Mean over all samples of the observed and the counterfactual density at each footprint
-    # pixel the tables sum (birds/km2, weighted). Summed over a subbasin's pixels they must give
-    # its cid-256 table entry, so the maps add up to the tables; stop() otherwise.
-    if (coal_state[ci_full] == 2L) {
-      kr_full <- keep_rows[[ci_full]]
-      cf_px   <- Reduce(`+`, lapply(boot_res, `[[`, "cf_full"))[kr_full] / n_boot * 100
-      O0      <- O_c[kr_full, , drop = FALSE]; O0[is.na(O0)] <- 0
-      obs_px  <- rowMeans(O0) * 100
-      zk      <- factor(zi_c[kr_full], levels = seq_len(n_sub))
-      sub_sum <- function(v) { s <- as.numeric(tapply(v, zk, sum)); s[is.na(s)] <- 0; s }
-      tb      <- coalition_tables[[ci_full]]
-      has_px  <- !is.nan(tb$obs_on_coalition_mean)
-      if (!isTRUE(all.equal(sub_sum(cf_px), tb$bf_on_coalition_mean, tolerance = 1e-8)) ||
-          !isTRUE(all.equal(sub_sum(obs_px)[has_px], tb$obs_on_coalition_mean[has_px], tolerance = 1e-8)))
-        stop(species, " ", bcr_code, ": per-pixel means do not sum to the cid-256 table")
-      px_dir <- file.path(ia_dir, "data", "derived_data", paste0("density_tables", sens$suffix), "pixel_change")
-      dir.create(px_dir, recursive = TRUE, showWarnings = FALSE)
-      px_r   <- terra::rast(subbasin_zone_r, nlyrs = 2L)
-      px_val <- matrix(NA_real_, terra::ncell(px_r), 2L)
-      px_val[super_idx[c_rows[kr_full]], ] <- cbind(obs_px, cf_px)
-      terra::values(px_r) <- px_val
-      names(px_r) <- c("obs", "cf")
-      px_f <- file.path(px_dir, paste0(species, "_", year, "_", bcr_code, ".tif"))
-      terra::writeRaster(px_r, sub("\\.tif$", "_partial.tif", px_f), overwrite = TRUE,
-                         datatype = "FLT4S", gdal = "COMPRESS=DEFLATE")
-      if (!file.rename(sub("\\.tif$", "_partial.tif", px_f), px_f)) stop("could not move ", px_f, " into place")
-      message(Sys.time(), " | ", species, " ", bcr_code, " | wrote ", px_f, " (", length(kr_full),
-              " footprint pixels; they sum to the cid-256 table)")
-      rm(px_r, px_val, O0, cf_px, obs_px)
+    # a subbasin without kept pixels has obs_on NA (NaN mean, NA sd), never a 0
+    bf_mat     <- matrix(0, nrow = n_sub, ncol = n_boot * n_scen)
+    obs_on_mat <- matrix(NA_real_, n_sub, n_boot * n_scen)
+    if (coal_state[ci] == 2L) {
+      kr     <- keep_rows[[ci]]
+      bf_mat <- do.call(cbind, lapply(boot_res, function(r) r$bf[[ci]]))   # bootstrap-major
+
+      Ok <- O_c[kr, , drop = FALSE] * 100
+      Ok[is.na(Ok)] <- 0
+      rs_obs <- rowsum(Ok, group = zones_c[kr], reorder = TRUE)
+      obs_on_byboot <- matrix(NA_real_, n_sub, n_boot)
+      map_o <- match(hybas_ids, rownames(rs_obs))
+      presO <- !is.na(map_o)
+      if (any(presO)) obs_on_byboot[presO, ] <- rs_obs[map_o[presO], , drop = FALSE]
+      obs_on_mat <- obs_on_byboot[, bcols, drop = FALSE]
+
+      # direct part of v(S), per bootstrap
+      d0_byboot <- do.call(cbind, lapply(boot_res, function(r) r$d0[[ci]]))   # [n_sub x n_boot]
+      imp_d     <- d0_byboot - obs_on_byboot
+      empty_d   <- is.na(obs_on_byboot)
+      if (any(d0_byboot[empty_d] != 0)) stop(species, " ", bcr_code, " coalition ", cid, ": d0 != 0 in a subbasin without kept pixels")
+      imp_d[empty_d] <- 0
+      for (j in seq_len(n_sectors)) phi_direct[, j, ] <- phi_direct[, j, ] + W_shap[j, cid] * imp_d
+      rm(d0_byboot, imp_d, empty_d)
     }
 
-    list(coalition_tables = coalition_tables,
-         bcr_arrays       = bcr_arrays,
-         shapley_samples  = list(phi = phi_samples,              # [n_sub x sector x sample]
-                                 phi_direct = phi_direct,        # [n_sub x sector x n_boot]
-                                 obs_total = obs_total_byboot,   # [n_sub x n_boot]
-                                 subbasin = sub_ids, n_boot = n_boot, n_scen = n_scen),
-         bcr_code         = bcr_code)
-  })
+    # v(S) per sample; a subbasin without kept pixels has nothing backfilled, so v(S) = 0 there
+    imp   <- bf_mat - obs_on_mat
+    empty <- is.na(obs_on_mat)
+    if (any(bf_mat[empty] != 0)) stop(species, " ", bcr_code, " coalition ", cid, ": bf != 0 in a subbasin without kept pixels")
+    imp[empty] <- 0
+    for (j in seq_len(n_sectors)) phi_samples[, j, ] <- phi_samples[, j, ] + W_shap[j, cid] * imp
+    rm(imp, empty)
 
-  per_bcr <- Filter(Negate(is.null), per_bcr)
-  if (return_per_bcr) return(per_bcr)
-  combine_bcr_results(per_bcr, save_arrays_ids)
+    bf_stats  <- combine_stats(bf_mat)
+    ooc_stats <- combine_stats(obs_on_mat)
+    if (as.character(cid) %in% arr_cids)
+      bcr_arrays[[as.character(cid)]] <- list(obs_total_mat   = bcr_draws(obs_total_mat),
+                                              obs_on_coal_mat = bcr_draws(obs_on_mat),
+                                              bf_on_coal_mat  = bcr_draws(bf_mat))
+    coalition_tables[[ci]] <- tibble::tibble(
+      species = species, subbasin = sub_ids, bcr = bcr_code, coalition_id = cid,
+      obs_total_mean = ot_stats$mean,  obs_total_sd = ot_stats$sd,
+      obs_on_coalition_mean = ooc_stats$mean, obs_on_coalition_sd = ooc_stats$sd,
+      bf_on_coalition_mean = bf_stats$mean,   bf_on_coalition_sd = bf_stats$sd)
+  }
+
+  # ---- per-pixel change of the all-sector coalition, for 18's maps ----
+  # the mean observed and counterfactual birds/km2 (weighted) at each pixel the tables sum; per
+  # subbasin they must add up to the coalition-256 table, so the maps add up to the tables
+  if (coal_state[ci_full] == 2L) {
+    kr_full <- keep_rows[[ci_full]]
+    cf_px   <- Reduce(`+`, lapply(boot_res, `[[`, "cf_full"))[kr_full] / n_boot * 100
+    O0      <- O_c[kr_full, , drop = FALSE]
+    O0[is.na(O0)] <- 0
+    obs_px  <- rowMeans(O0) * 100
+    zk      <- factor(zi_c[kr_full], levels = seq_len(n_sub))
+    sub_sum <- function(v) { s <- as.numeric(tapply(v, zk, sum)); s[is.na(s)] <- 0; s }
+    tb      <- coalition_tables[[ci_full]]
+    has_px  <- !is.nan(tb$obs_on_coalition_mean)
+    if (!isTRUE(all.equal(sub_sum(cf_px), tb$bf_on_coalition_mean, tolerance = 1e-8)) ||
+        !isTRUE(all.equal(sub_sum(obs_px)[has_px], tb$obs_on_coalition_mean[has_px], tolerance = 1e-8)))
+      stop(species, " ", bcr_code, ": per-pixel means do not sum to the coalition-256 table")
+    px_dir <- file.path(ia_dir, "data", "derived_data", "density_tables", "pixel_change")
+    dir.create(px_dir, recursive = TRUE, showWarnings = FALSE)
+    px_r   <- terra::rast(subbasin_zone_r, nlyrs = 2L)
+    px_val <- matrix(NA_real_, terra::ncell(px_r), 2L)
+    px_val[super_idx[c_rows[kr_full]], ] <- cbind(obs_px, cf_px)
+    terra::values(px_r) <- px_val
+    names(px_r) <- c("obs", "cf")
+    px_f <- file.path(px_dir, paste0(species, "_", year, "_", bcr_code, ".tif"))
+    terra::writeRaster(px_r, sub("\\.tif$", "_partial.tif", px_f), overwrite = TRUE, datatype = "FLT4S", gdal = "COMPRESS=DEFLATE")
+    if (!file.rename(sub("\\.tif$", "_partial.tif", px_f), px_f)) stop("could not move ", px_f, " into place")
+    message(Sys.time(), " | wrote ", px_f, " (", length(kr_full), " footprint pixels)")
+  }
+
+  list(coalition_tables = coalition_tables,
+       bcr_arrays       = bcr_arrays,
+       shapley_samples  = list(phi        = phi_samples,       # [n_sub x sector x sample]
+                               phi_direct = phi_direct,        # [n_sub x sector x n_boot]
+                               obs_total  = obs_total_byboot,  # [n_sub x n_boot]
+                               subbasin = sub_ids, n_boot = n_boot, n_scen = n_scen),
+       bcr_code         = bcr_code)
 }
 
-# Bind per-BCR results (in the order given) into the 255 coalition tables and the national
-# arrays. Used by predict_species_all_coalitions() and by 12H on 12D's per-BCR files; the BCR
-# order fixes the floating-point order of the arrays' national sums, so 12H passes BCRs in
-# list.files() order, as the single-job path does.
+
+# binds per-BCR results (in the order given) into the 255 coalition tables, the national arrays
+# and the per-sample Shapley values; 12H passes them in each species' 06_bootstraps order,
+# which fixes the floating-point order of the national sums
 combine_bcr_results <- function(per_bcr, save_arrays_ids = integer(0)) {
   per_bcr <- Filter(Negate(is.null), per_bcr)
 
-  # ---- bind each coalition's per-BCR tables across BCRs -> 255 final tables ----
   cid_keys <- as.character(2:(2L^length(canonical_sectors())))
-  tables_by_cid <- setNames(lapply(cid_keys, function(k) {
-    parts <- lapply(per_bcr, function(x) x$coalition_tables[[k]])
-    dplyr::bind_rows(Filter(Negate(is.null), parts))
-  }), cid_keys)
+  tables_by_cid <- setNames(lapply(cid_keys, function(k)
+    dplyr::bind_rows(Filter(Negate(is.null), lapply(per_bcr, function(x) x$coalition_tables[[k]])))), cid_keys)
 
-  # ---- national [n_boot x n_scen] arrays for 15A = sum of the per-BCR arrays ----
+  # national [n_boot x n_scen] arrays for 15A: sums of the per-BCR arrays
   arr_keys <- intersect(as.character(save_arrays_ids), cid_keys)
   arrays_by_cid <- setNames(lapply(arr_keys, function(k) {
     parts <- Filter(Negate(is.null), lapply(per_bcr, function(x) x$bcr_arrays[[k]]))
@@ -996,53 +629,45 @@ combine_bcr_results <- function(per_bcr, save_arrays_ids = integer(0)) {
            function(f) Reduce(`+`, lapply(parts, `[[`, f)))
   }), arr_keys)
 
-  # ---- per-sample subbasin Shapley values, stacked across BCRs in table row order ----
-  # 14B sums them over subbasins and BCRs sample by sample, which is only meaningful if
-  # every BCR has the same (bootstrap, scenario) grid.
-  if (length(per_bcr) == 0L)
-    return(list(tables_by_cid = tables_by_cid, arrays_by_cid = arrays_by_cid,
-                shapley_samples = NULL))
+  if (length(per_bcr) == 0L) return(list(tables_by_cid = tables_by_cid, arrays_by_cid = arrays_by_cid, shapley_samples = NULL))
+
+  # per-sample Shapley values stacked across BCRs in table row order. 14B sums them sample by
+  # sample, so every BCR needs the same (bootstrap, scenario) grid
   ss <- lapply(per_bcr, `[[`, "shapley_samples")
   n_samp <- vapply(ss, function(s) dim(s$phi)[3L], integer(1L))
   if (length(unique(n_samp)) > 1L)
-    stop("per-BCR Shapley samples differ in size (",
-         paste0(vapply(per_bcr, `[[`, character(1L), "bcr_code"), "=", n_samp, collapse = ", "),
-         "): BCRs with different bootstrap counts cannot be summed per sample")
+    stop("per-BCR Shapley samples differ in size (", paste0(vapply(per_bcr, `[[`, character(1L), "bcr_code"), "=", n_samp, collapse = ", "), ")")
   n_rows <- vapply(ss, function(s) dim(s$phi)[1L], integer(1L))
   stack_rows <- function(f) {
-    a <- array(0, c(sum(n_rows), dim(ss[[1L]][[f]])[2:3]),
-               dimnames = list(NULL, dimnames(ss[[1L]][[f]])[[2L]], NULL))
+    a <- array(0, c(sum(n_rows), dim(ss[[1L]][[f]])[2:3]), dimnames = list(NULL, dimnames(ss[[1L]][[f]])[[2L]], NULL))
     ends <- cumsum(n_rows)
     for (b in seq_along(ss)) a[(ends[b] - n_rows[b] + 1L):ends[b], , ] <- ss[[b]][[f]]
     a
   }
-  shapley_samples <- list(
-    bcr       = rep(vapply(per_bcr, `[[`, character(1L), "bcr_code"), n_rows),
-    subbasin  = unlist(lapply(ss, `[[`, "subbasin")),
-    phi        = stack_rows("phi"),                              # [row x sector x sample]
-    phi_direct = stack_rows("phi_direct"),                       # [row x sector x bootstrap]
-    obs_total = do.call(rbind, lapply(ss, `[[`, "obs_total")),   # [row x bootstrap]
-    n_boot    = ss[[1L]]$n_boot, n_scen = ss[[1L]]$n_scen)
-
-  list(tables_by_cid   = tables_by_cid,           # named list: "2".."256" -> tibble
-       arrays_by_cid   = arrays_by_cid,           # save_arrays_ids -> 3 national matrices
-       shapley_samples = shapley_samples)         # per-sample subbasin Shapley values (14B)
+  list(tables_by_cid   = tables_by_cid,                       # "2".."256" -> tibble
+       arrays_by_cid   = arrays_by_cid,                       # save_arrays_ids -> 3 national matrices
+       shapley_samples = list(
+         bcr        = rep(vapply(per_bcr, `[[`, character(1L), "bcr_code"), n_rows),
+         subbasin   = unlist(lapply(ss, `[[`, "subbasin")),
+         phi        = stack_rows("phi"),                      # [row x sector x sample]
+         phi_direct = stack_rows("phi_direct"),               # [row x sector x bootstrap]
+         obs_total  = do.call(rbind, lapply(ss, `[[`, "obs_total")),
+         n_boot     = ss[[1L]]$n_boot, n_scen = ss[[1L]]$n_scen))
 }
 
-# Coalitions whose national bootstrap x scenario arrays are kept for 15A: the full
-# coalition plus the 8 singletons.
+
+# coalitions whose national arrays are kept for 15A: all sectors, and each sector alone
 coalition_array_ids <- function(sectors = canonical_sectors()) {
   c(sectors_to_coalition_id(sectors, sectors),
     vapply(sectors, function(s) sectors_to_coalition_id(s, sectors), numeric(1L)))
 }
 
-# 12D's array-task table: one row per species x BCR, each species' 06_bootstraps files in
-# list.files() order (bcr_order records that order for 12H's merge). TEST_BCR filters it,
-# so a smoke run's task 1 is its first matching BCR. 12D and 12H must build it identically.
+
+# 12D's array tasks: one row per species x BCR, each species' 06_bootstraps files in
+# list.files() order (bcr_order, for 12H). TEST_BCR filters it. 12D and 12H must agree on it
 coalition_task_table <- function(species_vec, nm_root, test_bcr = Sys.getenv("TEST_BCR", "")) {
   tt <- dplyr::bind_rows(lapply(species_vec, function(sp) {
-    f <- list.files(file.path(nm_root, "output/06_bootstraps", sp),
-                    pattern = "can.*\\.Rdata$", full.names = TRUE)
+    f <- list.files(file.path(nm_root, "output/06_bootstraps", sp), pattern = "can.*\\.Rdata$", full.names = TRUE)
     if (length(f) == 0L) return(NULL)
     tibble::tibble(species = sp, rdata_path = f,
                    bcr = sub(paste0("^", sp, "_(.*)\\.Rdata$"), "\\1", basename(f)),

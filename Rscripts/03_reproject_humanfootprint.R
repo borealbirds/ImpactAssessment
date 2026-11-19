@@ -4,111 +4,46 @@
 # created: October 20, 2025
 # ---
 
+# the Hirsh-Pearson (2022) cumulative footprint score, 300 m, averaged onto the V5 1 km grid,
+# then split into training (HF < 1) and backfilled (HF >= 1) masks.
+# input: a local copy of G:/.../CovariateRasters/Disturbance/cum_threat2020.02.18.tif
+
 library(terra)
-library(tidyverse)
-terraOptions(memfrac = 0.6)   # project() values can depend on memory (see memory notes)
+terraOptions(memfrac = 0.6)   # project() returns different values under memory pressure
 
+root    <- "G:/Shared drives/BAM_NationalModels5"
+hp_dir  <- file.path("data", "raw_data", "hirshpearson")
 
-root <- "G:/Shared drives/BAM_NationalModels5"
-ia_dir <- file.path(getwd(), "data", "raw_data")   # masks go to data/raw_data/hirshpearson/
-
-# first, create a template raster from the BAM boundary in EPSG:5072 (avoids GDAL errors)
-bam_boundary <- terra::vect(file.path(root, "Regions", "BAM_BCR_NationalModel_UnBuffered.shp"))
 bam_template <- terra::rast(file.path(root, "PredictionRasters", "Biomass", "SCANFI", "1km", "SCANFIBalsamFir_1km_2020.tif"))
 
-# import the Hirsh-Pearson cumulative footprint (300 m; a local copy of
-# G:/.../CovariateRasters/Disturbance/cum_threat2020.02.18.tif) and take each 1 km cell's
-# AREA MEAN. Until 2026-09-28 this used project()'s default bilinear, which at a coarser
-# grid spreads every 300 m cell over 2x2 1 km cells and so put a ring of cells with no
-# footprint into the high-HF mask.
+# each 1 km cell's AREA MEAN. never bilinear: from 300 m it spreads every cell over 2 x 2 km
+# cells, which put a ring of footprint-free cells into the high-HF mask (until 2026-09-28)
 CanHF_1km <-
-  terra::rast(file.path(ia_dir, "hirshpearson", "raw_300m", "cum_threat2020.02.18.tif")) |>
-  terra::project(x = _, y = bam_template, method = "average") |>
-  terra::mask(x = _, mask = bam_template)
-
-# convert NaNs to NA (terra::buffer needs this)
-vals <- values(CanHF_1km)
-vals[is.nan(vals)] <- NA
-values(CanHF_1km) <- vals
+  terra::rast(file.path(hp_dir, "raw_300m", "cum_threat2020.02.18.tif")) |>
+  terra::project(bam_template, method = "average") |>
+  terra::mask(bam_template)
 
 names(CanHF_1km) <- "CanHF_1km"
-terra::writeRaster(CanHF_1km, filename = file.path(ia_dir, "hirshpearson", "CanHF_1km_masked.tif"), overwrite = TRUE)
+terra::writeRaster(CanHF_1km, file.path(hp_dir, "CanHF_1km_masked.tif"), overwrite = TRUE)
 
 
 
 # ----------------------------------------------
 # create low and high human footprint layers
 
-CanHF_1km <- terra::rast(file.path(ia_dir, "hirshpearson", "CanHF_1km_masked.tif"))
+# re-read, so this section runs on its own without raw_300m/
+CanHF_1km <- terra::rast(file.path(hp_dir, "CanHF_1km_masked.tif"))
 
-# set low HF to <1 
-# from Hirsh-Pearson: "we found that 82% of Canada’s land areas had a 
+# low HF is < 1. Hirsh-Pearson: "we found that 82% of Canada's land areas had a
 # HF < 1 and therefore were considered intact"
-lowhf_mask <- 
-  terra::lapp(CanHF_1km, \(x) ifelse(!is.finite(x), NA, ifelse(x < 1, 1, NA))) |> 
+lowhf_mask <-
+  terra::lapp(CanHF_1km, \(x) ifelse(!is.finite(x), NA, ifelse(x < 1, 1, NA))) |>
   as.factor()
 
-terra::writeRaster(lowhf_mask, file.path(ia_dir, "hirshpearson", "CanHF_1km_lessthan1.tif"), overwrite = TRUE)
+terra::writeRaster(lowhf_mask, file.path(hp_dir, "CanHF_1km_lessthan1.tif"), overwrite = TRUE)
 
-highhf_mask <- 
-  terra::lapp(CanHF_1km, \(x) ifelse(!is.finite(x), NA, ifelse(x >= 1, 1, NA))) |> 
+highhf_mask <-
+  terra::lapp(CanHF_1km, \(x) ifelse(!is.finite(x), NA, ifelse(x >= 1, 1, NA))) |>
   as.factor()
 
-terra::writeRaster(highhf_mask, file.path(ia_dir, "hirshpearson", "CanHF_1km_morethan1.tif"), overwrite = TRUE)
-
-
-
-# ----------------------------------------------
-# create "good sectors" (ie target sectors) high HF layer:
-# CanHF >= 1 AND at least one target sector present (score > 0)
-# excluded sectors: forestry_harvest, night_lights, population_density, nav_water
-good_sectors <- c("built", "crop", "dam_and_associated_reservoir", "mines",
-                  "oil_gas", "pasture", "rail", "roads")
-
-good_sector_stack <- terra::rast(lapply(good_sectors, function(sec) {
-  r <- terra::rast(file.path(ia_dir, "hirshpearson", paste0(sec, ".tif")))
-  terra::project(r, CanHF_1km, method = "near")
-}))
-
-# sum sector scores; > 0 means at least one target sector is present
-sector_sum <- terra::app(good_sector_stack, sum, na.rm = TRUE)
-
-goodsectors_mask <-
-  terra::ifel((CanHF_1km >= 1) & (sector_sum > 0), 1, NA) |>
-  as.factor()
-
-terra::writeRaster(goodsectors_mask,
-                   file.path(ia_dir, "hirshpearson", "CanHF_1km_morethan1_goodsectors.tif"),
-                   overwrite = TRUE)
-
-
-
-# ----------------------------------------------
-# per-sector connected-component (queen's case) patch summary
-# mirrors the sector_mask logic downstream
-
-patch_summary <- do.call(rbind, lapply(good_sectors, function(sec) {
-
-  sector_r  <- terra::project(
-                 terra::rast(file.path(ia_dir, "hirshpearson", paste0(sec, ".tif"))),
-                 CanHF_1km, method = "near")
-  sector_mask <- terra::ifel((sector_r > 0) & (CanHF_1km >= 1), 1, NA)
-
-  patches_r <- terra::patches(sector_mask, directions = 8, zeroAsNA = TRUE)
-
-  area_r    <- terra::cellSize(sector_mask, unit = "km")
-  patch_areas <- terra::zonal(area_r, patches_r, fun = "sum", na.rm = TRUE)
-
-  data.frame(
-    sector        = sec,
-    n_patches     = nrow(patch_areas),
-    total_area_km2 = sum(patch_areas[, 2]),
-    mean_area_km2  = mean(patch_areas[, 2]),
-    median_area_km2 = median(patch_areas[, 2]),
-    min_area_km2   = min(patch_areas[, 2]),
-    max_area_km2   = max(patch_areas[, 2])
-  )
-}))
-
-print(patch_summary)
-
+terra::writeRaster(highhf_mask, file.path(hp_dir, "CanHF_1km_morethan1.tif"), overwrite = TRUE)

@@ -2,50 +2,30 @@
 # title: Species results tables
 # author: Mannfred Boehm
 # ---
-# Two tables, one row per species, from 12H's per-sample subbasin Shapley values:
-#   results_summary.csv  — observed and no-industry populations, the change industry made
-#                          (-v(N)), and that change as % of the no-industry population, each
-#                          with its 5th/95th percentiles
-#   results_sectors.csv  — each sector's change (-Shapley value) as % of the no-industry
-#                          population, with its 5th/95th percentiles; the sectors sum to the total %
-# and results_bcr.csv, both of those for each species x BCR, % of the BCR's no-industry population.
-# Reported as change = observed - counterfactual, so negative = birds lost to industry, as the
-# maps show it (18). The % is relative to the no-industry population: dividing by the observed
-# one instead makes "-16.9%" read as a 16.9% decline when it is 14.5% (CAWA), and GRSP's near
-# doubling (+94%) read as +48%.
-#
-# Percentiles are over the 3200 (bootstrap, scenario) samples. A % divides each sample by ITS OWN
-# no-industry total (its bootstrap's observed total + its v(N)), never by the mean: both come from
-# the same bird model, so dividing quantiles by the mean misstates the interval.
-#
-# Run after 14B. It keeps only the BCRs in 14B's shapley_bcr.csv (14B's release filter) and
-# stops unless its means equal 14B's national and BCR values. Sensitivity runs (DROP_Q99, DENS_MIN)
-# read and write their own directories, as in 14B. One year, YEARS (default 2020), as in 14B:
-# another year's tables carry _{year} (results_summary_1995.csv).
-# ---
 
-# inside a Slurm job this is the cluster; anywhere else, the local RProject
-cc    <- nzchar(Sys.getenv("SLURM_JOB_ID"))
-local <- !cc
+# from 12H's per-sample subbasin Shapley values, over the BCRs 14B kept (its release filter):
+#   results_summary.csv  per species: observed and no-industry populations, the change industry
+#                        made, and that change as % of the no-industry population
+#   results_sectors.csv  per species: each sector's change as % of the no-industry population
+#   results_bcr.csv      both, per species x BCR
+# each with 5th/95th percentiles over the 3200 (bootstrap, scenario) samples. change = observed -
+# counterfactual (negative = birds lost to industry), the opposite of 14B's sign. a % divides
+# each sample by its OWN no-industry total, never by the mean (both come from the same bird
+# model). % of the no-industry population, not the observed one, which would overstate a
+# decline. stops unless its means equal 14B's to within a bird.
+# runs after 14B (14B's .sh runs both); YEARS as in 14B
 
-if (cc)            { ia_dir <- "/home/mannfred/scratch/impact_assessment" }
-if (!cc && local)  { ia_dir <- getwd() }
-if (!cc && !local) { ia_dir <- file.path("G:/Shared drives/BAM_NationalModels5", "data", "Extras",
-                                          "sandbox_data", "impactassessment_sandbox") }
+ia_dir <- if (nzchar(Sys.getenv("SLURM_JOB_ID"))) "/home/mannfred/scratch/impact_assessment" else getwd()
+dt_dir <- file.path(ia_dir, "data/derived_data/density_tables")
+se_dir <- file.path(ia_dir, "data/derived_data/sector_effects")
 
 source(file.path(ia_dir, "Rscripts", "12E_shapley_utils.R"))
 
-sens   <- sensitivity_run()
-dt_dir <- file.path(ia_dir, "data/derived_data", paste0("density_tables", sens$suffix))
-se_dir <- file.path(ia_dir, "data/derived_data", paste0("sector_effects", sens$suffix))
-year   <- suppressWarnings(as.integer(trimws(Sys.getenv("YEARS", "2020"))))
-if (is.na(year))
-  stop("YEARS must name one year, as for 14B; got '", Sys.getenv("YEARS"), "'")
+year   <- as.integer(Sys.getenv("YEARS", "2020"))
 se_csv <- function(name) file.path(se_dir, paste0(name, if (year == 2020L) "" else paste0("_", year), ".csv"))
 
 # grouped for reading: agriculture, settlement, transport, energy and extraction
-sectors <- c("crop", "pasture", "built", "roads", "rail", "oil_gas", "mines",
-             "dam_and_associated_reservoir")
+sectors <- c("crop", "pasture", "built", "roads", "rail", "oil_gas", "mines", "dam_and_associated_reservoir")
 stopifnot(setequal(sectors, canonical_sectors()))
 
 nat <- read.csv(se_csv("shapley_national"))
@@ -56,23 +36,22 @@ bcr <- bcr[bcr$year == year, ]
 q05 <- function(x) if (all(is.na(x))) NA_real_ else unname(quantile(x, 0.05, na.rm = TRUE))
 q95 <- function(x) if (all(is.na(x))) NA_real_ else unname(quantile(x, 0.95, na.rm = TRUE))
 
-# one row of results from phi [sector x sample] and each sample's observed total. A BCR whose
-# weight is 0 on every subbasin (BAWW can41) has no birds either way, so its % is NA
+# one row of results from phi [sector x sample] and each sample's observed total. a BCR whose
+# weight is 0 everywhere (BAWW can41) has no birds either way, so its % is NA
 results_row <- function(phi, obs) {
   tot <- colSums(phi)
-  cf  <- obs + tot                                                       # no-industry total
-  chg <- -tot                                                            # observed - cf
-  pct <- function(x) ifelse(cf > 0, 100 * x / cf, NA_real_)
+  cf  <- obs + tot   # no-industry total
+  chg <- -tot        # observed - cf
+  pct      <- function(x) ifelse(cf > 0, 100 * x / cf, NA_real_)
   pct_mean <- function(x) if (mean(cf) > 0) round(100 * mean(x) / mean(cf), 3) else NA_real_
-  r <- data.frame(
-    observed         = round(mean(obs)),
-    without_industry = round(mean(cf)),
-    change           = round(mean(chg)),
-    change_q05       = round(q05(chg)),
-    change_q95       = round(q95(chg)),
-    change_pct       = pct_mean(chg),
-    change_pct_q05   = round(q05(pct(chg)), 3),
-    change_pct_q95   = round(q95(pct(chg)), 3))
+  r <- data.frame(observed         = round(mean(obs)),
+                  without_industry = round(mean(cf)),
+                  change           = round(mean(chg)),
+                  change_q05       = round(q05(chg)),
+                  change_q95       = round(q95(chg)),
+                  change_pct       = pct_mean(chg),
+                  change_pct_q05   = round(q05(pct(chg)), 3),
+                  change_pct_q95   = round(q95(pct(chg)), 3))
   for (s in sectors) {
     r[[s]]                 <- pct_mean(-phi[s, ])
     r[[paste0(s, "_q05")]] <- round(q05(pct(-phi[s, ])), 3)
@@ -82,57 +61,46 @@ results_row <- function(phi, obs) {
 }
 sector_cols <- c(rbind(sectors, paste0(sectors, "_q05"), paste0(sectors, "_q95")))
 
-# BCR 3, the subunits of BCR 4 (can40-42), 5, 6 (can60-61), 7, 8, then 9 to 14
+# BCR 3, the parts of BCR 4 (can40-42), 5, 6 (can60-61), 7, 8, then 9 to 14
 bcr_key <- function(b) { n <- as.integer(sub("^can", "", b)); ifelse(n >= 40, n / 10, n) }
 
-summary_rows <- list()
-sector_rows  <- list()
-bcr_rows     <- list()
+summary_rows <- sector_rows <- bcr_rows <- list()
 for (sp in sort(unique(nat$species))) {
   ss <- readRDS(file.path(dt_dir, paste0(sp, "_", year, "_shapley_samples.rds")))
   stopifnot(identical(dimnames(ss$phi)[[2]], canonical_sectors()))
   keep_bcrs <- unique(bcr$bcr[bcr$species == sp])
-  keep      <- ss$bcr %in% keep_bcrs
+  boot <- rep(seq_len(ss$n_boot), each = ss$n_scen)   # each sample's bootstrap, as in 14B
 
-  phi  <- colSums(ss$phi[keep, , , drop = FALSE])                       # [sector x sample]
-  boot <- rep(seq_len(ss$n_boot), each = ss$n_scen)                      # as in 14B
-  obs  <- colSums(ss$obs_total[keep, , drop = FALSE])[boot]              # per sample
+  # phi [sector x sample] and the observed total per sample, over the BCRs in `b`
+  over_bcrs <- function(b) {
+    k <- ss$bcr %in% b
+    list(phi = colSums(ss$phi[k, , , drop = FALSE]), obs = colSums(ss$obs_total[k, , drop = FALSE])[boot])
+  }
 
-  # 14B rounds its national totals to whole birds, so compare to within a bird (a relative 1e-6
-  # failed EATO's 198,987.4 vs 198,987)
+  # 14B rounds its totals to whole birds, so compare to within a bird
+  x   <- over_bcrs(keep_bcrs)
   chk <- nat[nat$species == sp, ]
-  if (abs(mean(colSums(phi)) - chk$total_HF_impact[1]) > 1 ||
-      abs(mean(obs) - chk$obs_population[1]) > 1 ||
-      any(abs(rowMeans(phi)[sectors] - chk$shapley_mean[match(sectors, chk$sector)]) > 1))
+  if (abs(mean(colSums(x$phi)) - chk$total_HF_impact[1]) > 1 || abs(mean(x$obs) - chk$obs_population[1]) > 1 ||
+      any(abs(rowMeans(x$phi)[sectors] - chk$shapley_mean[match(sectors, chk$sector)]) > 1))
     stop(sp, ": the Shapley samples do not match 14B's shapley_national.csv - rerun 14B")
 
-  r <- results_row(phi, obs)
-  summary_rows[[sp]] <- cbind(data.frame(species = sp, n_bcrs = length(keep_bcrs)),
-                              r[setdiff(names(r), sector_cols)])
+  r <- results_row(x$phi, x$obs)
+  summary_rows[[sp]] <- cbind(data.frame(species = sp, n_bcrs = length(keep_bcrs)), r[setdiff(names(r), sector_cols)])
   sector_rows[[sp]]  <- cbind(data.frame(species = sp), r[sector_cols])
 
-  # the same per BCR, for the per-species BCR tables
   for (b in keep_bcrs[order(bcr_key(keep_bcrs))]) {
-    kb    <- ss$bcr == b
-    phi_b <- colSums(ss$phi[kb, , , drop = FALSE])
-    obs_b <- colSums(ss$obs_total[kb, , drop = FALSE])[boot]
+    xb    <- over_bcrs(b)
     chk_b <- bcr[bcr$species == sp & bcr$bcr == b, ]
-    if (abs(mean(colSums(phi_b)) - chk_b$total_HF_impact[1]) > 1 ||
-        abs(mean(obs_b) - chk_b$obs_population[1]) > 1)
+    if (abs(mean(colSums(xb$phi)) - chk_b$total_HF_impact[1]) > 1 || abs(mean(xb$obs) - chk_b$obs_population[1]) > 1)
       stop(sp, " ", b, ": the Shapley samples do not match 14B's shapley_bcr.csv - rerun 14B")
-    bcr_rows[[paste(sp, b)]] <- cbind(data.frame(species = sp, bcr = b), results_row(phi_b, obs_b))
+    bcr_rows[[paste(sp, b)]] <- cbind(data.frame(species = sp, bcr = b), results_row(xb$phi, xb$obs))
   }
-  message(sp, ": ", length(keep_bcrs), " BCRs, change = ", r$change, " (",
-          round(r$change_pct, 1), "% of the no-industry population)")
+  message(sp, ": change ", r$change, " (", round(r$change_pct, 1), "% of the no-industry population)")
 }
 
+# species from the largest decline (as %) to the largest increase
 ord <- order(vapply(summary_rows, `[[`, numeric(1), "change_pct"))
-results_summary <- do.call(rbind, summary_rows[ord])
-results_sectors <- do.call(rbind, sector_rows[ord])
-results_bcr     <- do.call(rbind, bcr_rows)
-results_bcr     <- results_bcr[order(match(results_bcr$species, names(summary_rows)[ord])), ]
-write.csv(results_summary, se_csv("results_summary"), row.names = FALSE)
-write.csv(results_sectors, se_csv("results_sectors"), row.names = FALSE)
-write.csv(results_bcr,     se_csv("results_bcr"),     row.names = FALSE)
-message("wrote ", basename(se_csv("results_summary")), ", ", basename(se_csv("results_sectors")),
-        " and ", basename(se_csv("results_bcr")), " to ", se_dir)
+results_bcr <- do.call(rbind, bcr_rows)
+write.csv(do.call(rbind, summary_rows[ord]), se_csv("results_summary"), row.names = FALSE)
+write.csv(do.call(rbind, sector_rows[ord]),  se_csv("results_sectors"), row.names = FALSE)
+write.csv(results_bcr[order(match(results_bcr$species, names(summary_rows)[ord])), ], se_csv("results_bcr"), row.names = FALSE)

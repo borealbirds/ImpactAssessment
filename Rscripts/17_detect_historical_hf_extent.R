@@ -3,43 +3,30 @@
 # author: Mannfred Boehm
 # created: October 27, 2026
 # ---
-# 07 ran 1995-2015 on the 2020 footprint (HF_MASK_YEAR=2020), because Hirsh-Pearson exists only
-# for 2020. The vegetation part of each year's impact corrects for that by itself: where the
-# footprint came later, that year's SCANFI is still natural, so the backfill takes nothing away.
-# The direct part does not: V5's CanHF_1km/_5x5 are the 2020 values in every year's stack, so
-# setting them to 0 counts an effect on land with no industry yet. This script measures f_y, the
-# share of the 2020 footprint already there in year y, and from it how far that moves the
-# industry effect 12F-14B report for each year.
-#
-# f_y is a difference-in-differences on the year-specific covariates in V5's stacks:
-#   deficit_y = x_y - (mean x_y over the intact (2020 low-HF) pixels in a win x win km window)
-#   f_y       = sum of deficit_y / sum of deficit_2020, over one sector's 2020 direct footprint
-# with x = SCANFI canopy height (the treed share in SCANFI's and VLCE's classes as checks; VLCE is
-# annual Landsat, mapped independently of SCANFI). A pixel cleared before y carries its
-# deficit in both years; one cleared after y has about none in year y, as it was still like its
-# surroundings. Taking the surroundings in the same year cancels fire, budworm and SCANFI's own
-# year-to-year offsets. Summing before dividing keeps single-pixel noise out of the ratio.
-# Roads use canroad_1km (StatCan road files, year-matched from 2001, so 1995 and 2000 read 2001):
-# road density barely changes the canopy of a 1 km cell, so its deficit is the land beside it.
-#
-# Sensitivity: on the share 1 - f_y of the footprint that came after y, the true year-y observed
-# density is d0 (no footprint), so the gap there should be 0, not the direct part. With f_y per
-# sector x BCR applied to 14B's direct part (cf - obs sign):
-#   gap'_y = vegetation_y + f_y * direct_y      obs'_y = obs_y + (1 - f_y) * direct_y
-# This assumes the direct effect per footprint pixel is uniform within a sector x BCR. For roads
-# in 2005-2015 it is an upper bound, since canroad (part of the direct part) is year-matched there.
-#
-# Run locally after 14B, with every year's covariates_mosaiced_{year}.tif pulled from Fir:
-#   Rscript Rscripts/17_detect_historical_hf_extent.R
-# Writes data/derived_data/expanding_HF/footprint_presence_by_year.csv, footprint_sensitivity.csv
-# and output_figures/footprint_history/footprint_presence_1995_2020.png.
-# ---
 
+# 07 ran 1995-2015 on the 2020 footprint (HF_MASK_YEAR=2020; Hirsh-Pearson is 2020 only). the
+# vegetation part of an earlier year's impact copes with that (where the footprint came later,
+# that year's SCANFI is still natural), but the direct part does not: CanHF is 2020's in every
+# year's stack, so setting it to 0 counts an effect where there was no industry yet. f_y, the
+# share of the 2020 footprint already there in year y, is a difference-in-differences:
+#   deficit_y = x_y - mean x_y over the intact (2020 low HF) pixels in a win x win km window
+#   f_y       = sum of deficit_y / sum of deficit_2020, over a sector's 2020 direct footprint
+# x = SCANFI canopy height (SCANFI's and VLCE's treed classes as checks; VLCE is mapped apart
+# from SCANFI). a pixel cleared before y carries its deficit in both years, one cleared after y
+# has none in year y; the same-year surroundings cancel fire, budworm and SCANFI's yearly
+# offsets. roads use canroad_1km itself (year-matched from 2001, so 1995 and 2000 read 2001).
+# sensitivity, with f_y per sector x BCR on 14B's direct part (cf - obs sign), assuming a uniform
+# direct effect per pixel within a sector x BCR (an upper bound for roads in 2005-2015):
+#   gap'_y = vegetation_y + f_y * direct_y      obs'_y = obs_y + (1 - f_y) * direct_y
+# runs locally after 14B, with every year's covariates_mosaiced_{year}.tif pulled from Fir
+#   -> data/derived_data/expanding_HF/footprint_{presence_by_year,sensitivity}.csv
+#   -> output_figures/footprint_history/footprint_presence_1995_2020.png
+
+library(ggplot2)
 library(terra)
-suppressPackageStartupMessages(library(ggplot2))
 terraOptions(memfrac = 0.5)
 
-ia_dir  <- getwd()   # the local RProject
+ia_dir  <- getwd()
 raw_dir <- file.path(ia_dir, "data", "raw_data")
 hp_dir  <- file.path(raw_dir, "hirshpearson")
 se_dir  <- file.path(ia_dir, "data", "derived_data", "sector_effects")

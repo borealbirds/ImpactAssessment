@@ -3,290 +3,122 @@
 # author: Mannfred Boehm
 # created: March 23, 2026
 # ---
-#
-# mosaic per-subbasin BART backfill rasters into one BCR-wide stack,
-# resample to the BCR covariate grid, mask to the BCR polygon, and write to
-# data/derived_data/bart_models_mosaics/{year}/{bcr_code}_backfilled.tif
-#
-# run as a SLURM array (one task per BCR) before 12D_repredict_all_coalitions.R.
-# 12F_predict_species_all_coalitions.R reads these files instead of re-mosaicing per
-# species x sector, which eliminates the dominant time bottleneck per BCR (~11 hours).
 
+# one BCR per task: the backfills (07) of every subbasin touching the BCR, mosaicked onto the
+# BCR's covariate grid and masked to its polygon, so 12F reads one file per BCR
+#   -> data/derived_data/bart_models_mosaics/{year}/{bcr}_backfilled.tif
+# chained after 07 by 07_train_and_backfill.sh. MOSAIC_DIR=<dir> redirects the output (tests)
 
-suppressPackageStartupMessages({
-  library(terra)
-  library(tidyverse)
-})
+library(terra)
 
-# terra sizes its in-memory blocks from the NODE's MemAvailable (/proc/meminfo) and cannot see
-# the Slurm allocation, so on a 750 GB node it held whole BCR stacks in memory (A6, --mem=512G:
-# can3 peaked at 316 GB, can61/80/81 at 138-153 GB) and would be killed under a smaller request.
-# Cap it at 30% of the allocation; resample(near), cover and mask give the same cells in blocks.
+# terra sizes its blocks from the node's free RAM and can't see the Slurm allocation: on a
+# 750 GB node it held whole BCR stacks in memory (can3 peaked at 316 GB), which a smaller
+# request would kill. capped at 30% of the allocation (resample, merge and mask give the same
+# cells in blocks)
 slurm_mem_mb <- suppressWarnings(as.numeric(Sys.getenv("SLURM_MEM_PER_NODE")))
-if (!is.na(slurm_mem_mb)) {
-  terra::terraOptions(memmax = 0.3 * slurm_mem_mb / 1024)
-  message(Sys.time(), " | terra memmax = ", round(0.3 * slurm_mem_mb / 1024, 1), " GB")
-}
+if (!is.na(slurm_mem_mb)) terra::terraOptions(memmax = 0.3 * slurm_mem_mb / 1024)
 
-
-# set paths ------------------------------------------------------
-
-# NationalModels directory 
 nm_root <- "/home/mannfred/projects/def-ecknight/NationalModels"
+ia_dir  <- if (nzchar(Sys.getenv("SLURM_JOB_ID"))) "/home/mannfred/scratch/impact_assessment" else getwd()
 
-cc    <- TRUE    # TRUE = Compute Canada cluster
-local <- FALSE   # TRUE = local RProject machine
-
-if (cc)            { ia_dir <- "/home/mannfred/scratch/impact_assessment" }
-if (!cc && local)  { ia_dir <- getwd() }
-if (!cc && !local) { ia_dir <- file.path("G:/Shared drives/BAM_NationalModels5", "data", "Extras", "sandbox_data", "impactassessment_sandbox") }
-
-
-# import data ------------------------------------------------------
-
-bam_boundary       <- terra::vect(file.path(ia_dir, "data", "raw_data", "Regions", "BAM_BCR_NationalModel_Unbuffered.shp"))
+bam_boundary         <- terra::vect(file.path(ia_dir, "data", "raw_data", "Regions", "BAM_BCR_NationalModel_Unbuffered.shp"))
 all_subbasins_subset <- terra::vect(file.path(ia_dir, "data", "raw_data", "hydrobasins_masked_merged_subset.gpkg"))
+bam_bcr_codes        <- paste0(bam_boundary$country, bam_boundary$subUnit)
 
+# subbasin x BCR pairs that intersect (a subbasin can be in several BCRs)
+ij <- which(terra::relate(all_subbasins_subset, bam_boundary, relation = "intersects"), arr.ind = TRUE)
+bcr_subbasins_ref <- data.frame(sub_index = ij[, 1], bcr_code = bam_bcr_codes[ij[, 2]])
 
-# build BCR-subbasin reference table ------------------------------------------------------
+# this task's BCR: its position among the sorted Canadian BCRs (19, as 07's .sh counts them)
+bcr_vec  <- sort(unique(bcr_subbasins_ref$bcr_code))
+bcr_vec  <- bcr_vec[startsWith(bcr_vec, "can")]
+bcr_code <- bcr_vec[as.integer(Sys.getenv("SLURM_ARRAY_TASK_ID"))]
+year     <- as.integer(Sys.getenv("YEARS", "2020"))   # 07's .sh passes one year per job
+sub_ids  <- unique(bcr_subbasins_ref$sub_index[bcr_subbasins_ref$bcr_code == bcr_code])
+message(Sys.time(), " | year ", year, " | ", bcr_code, " | subbasins=", length(sub_ids))
 
-bcr_subbasins_ref <- {
-  hits <- terra::relate(all_subbasins_subset, bam_boundary, relation = "intersects")
-  ij   <- which(hits, arr.ind = TRUE)
-  tibble(
-    sub_index = ij[, 1],
-    HYBAS_ID  = all_subbasins_subset$first_HYBAS_ID[ij[, 1]],
-    bcr_label = paste(bam_boundary$country[ij[, 2]],
-                      bam_boundary$subUnit[ij[, 2]], sep = "_"),
-    bcr_code  = gsub("_", "", bcr_label)
-  )
-}
-
-bcr_vec <- sort(unique(bcr_subbasins_ref$bcr_code))
-bcr_vec <- bcr_vec[startsWith(bcr_vec, "can")]
-message("Total Canadian BCRs: ", length(bcr_vec))
-
-
-# mosaic helper (lifted from the retired 12A_repredict_birds.R) ------------------------------------------------------
-
-mosaic_backfilled_stacks <- function(sub_ids, year, ref) {
-
-  paths <- file.path(
-    file.path(ia_dir, "data", "derived_data", "bart_models", year),
-    paste0("subbasin_", sub_ids),
-    paste0("subbasin_", sub_ids, "_backfill.tif")
-  )
-
-  paths <- paths[file.exists(paths)]
-  if (length(paths) == 0) return(NULL)
-
-  # memory and IO efficient mosaicing function designed by Claude Opus
-  # previous version had 2546 BCR-grid SpatRasters kept alive in `var_list`, 
-  # then stitched + masked + written all at once, which materialized everything in RAM
-  # previous version was also slow because terra::resample was called
-  # once per (variable, subbasin) pair (~200k times for can10).
-  #
-  # here, we cut memory and IO by:
-  # (1) cheap metadata sweep (unchanged from previous version)
-  # (2) pre-sample each subbasin's full stack once, onto its own window of
-  #     the BCR grid, writing to its own tempfile. ~80 resamples instead of ~200k
-  # (3) pre-open lightweight SpatRaster handles to the resampled tifs so
-  #     the inner loop is a cheap name lookup + layer reference,
-  # (4) per variable, merge the subbasin windows, extend to the BCR grid and
-  #     flush to its own tempfile. The in-memory raster
-  #       is then dropped; only file paths persist across iterations.
-  # (5) the returned SpatRaster is file-backed (2546 single-layer tifs);
-  #     downstream mask + writeRaster can stream block-by-block.
-  ref1    <- ref[[1]]
-  ref_ext <- terra::ext(ref1)
-
-  # (1) cheap metadata sweep (no pixels read)
-  meta <- lapply(paths, function(p) {
-    r <- terra::rast(p)
-    list(path = p, names = names(r), ext = terra::ext(r))
-  })
-
-  # overlap filter
-  meta <- Filter(function(m) {
-    e1 <- m$ext
-    e1$xmin < ref_ext$xmax && e1$xmax > ref_ext$xmin &&
-      e1$ymin < ref_ext$ymax && e1$ymax > ref_ext$ymin
-  }, meta)
-  if (length(meta) == 0) return(NULL)
-
-  # (2) pre-resample each subbasin's full stack onto its window of the BCR grid (on disk).
-  # Until 2026-10-02 each subbasin was resampled onto the WHOLE BCR grid, so steps 2 and 4 cost
-  # (subbasins x grid cells): 30-45 s per subbasin per million cells, 5 h for can81 (106 x 2.9M),
-  # ~11-15 h projected for can3 (71 x ~9M). At --mem=64G terra also sliced those whole-grid
-  # resamples, and can41 and can5 stalled for hours at 100% CPU on one subbasin (2026-10-01).
-  # A window aligned to the grid (snap = "out") gives the same cells, since "near" takes the
-  # source cell under each target cell's centre whatever the target's extent; the merged
-  # layers were identical() to the cover() of whole-grid layers once written, on aligned and
-  # 500 m-offset grids.
-  rs_dir <- tempfile("premosaic_rs_")
-  dir.create(rs_dir, recursive = TRUE, showWarnings = FALSE)
-  for (mi in seq_along(meta)) {
-    m     <- meta[[mi]]
-    e_int <- tryCatch(terra::intersect(m$ext, ref_ext), error = function(e) NULL)
-    if (is.null(e_int)) { meta[[mi]]$rs_path <- NA_character_; next }
-    r_full <- terra::rast(m$path)
-    r_c    <- terra::crop(r_full, e_int)
-    pth    <- file.path(rs_dir, sprintf("sub_%04d.tif", mi))
-    # INTERLEAVE=BAND so the per-variable inner loop (which reads one named
-    # band per subbasin per var, 2546 vars x 80 subbasins) does contiguous
-    # band reads instead of a full-file scan per access. GDAL's default
-    # PLANARCONFIG_CONTIG (BIP) made previous versions effectively unusable: 
-    # ~23 min/var and >900h projected to flush all 2546 vars. 
-    # BSQ collapses that to seconds per band-read.
-    terra::resample(r_c, terra::crop(ref1, e_int, snap = "out"), method = "near",
-                    filename = pth, overwrite = TRUE,
-                    wopt = list(gdal = c("INTERLEAVE=BAND",
-                                         "COMPRESS=DEFLATE",
-                                         "BIGTIFF=YES",
-                                         "TILED=NO")))
-    meta[[mi]]$rs_path <- pth
-    rm(r_full, r_c)
-    gc(verbose = FALSE)
-    message(Sys.time(), " | pre-resampled subbasin ", mi, "/", length(meta))
-  }
-  meta <- Filter(function(m) !is.na(m$rs_path), meta)
-  if (length(meta) == 0) return(NULL)
-
-  # (3) pre-open SpatRaster handles (metadata only, no pixels loaded)
-  sub_handles <- lapply(meta, function(m) terra::rast(m$rs_path))
-  names_per   <- lapply(sub_handles, names)
-
-  vars <- sort(unique(unlist(names_per)))
-
-  # (4) per-variable accumulator, flushed to its own tempfile
-  layer_dir <- tempfile("premosaic_layers_")
-  dir.create(layer_dir, recursive = TRUE, showWarnings = FALSE)
-  layer_paths <- character(length(vars))
-
-  for (k in seq_along(vars)) {
-    v      <- vars[k]
-    layers <- lapply(which(vapply(names_per, function(n) v %in% n, logical(1))),
-                     function(i) sub_handles[[i]][[v]])
-    acc    <- NULL
-    if (length(layers) > 0) {
-      # merge() keeps the first non-NA value in subbasin order, as the cover() chain did
-      acc <- if (length(layers) == 1L) layers[[1]] else terra::merge(terra::sprc(layers))
-      acc <- terra::extend(acc, ref1)
-      if (!terra::compareGeom(acc, ref1, stopOnError = FALSE))
-        stop("merged layer ", v, " is not on the BCR grid")
-    }
-    if (!is.null(acc)) {
-      lp <- file.path(layer_dir, sprintf("layer_%05d.tif", k))
-      terra::writeRaster(acc, lp, overwrite = TRUE)
-      layer_paths[k] <- lp
-    }
-    rm(acc)
-    gc(verbose = FALSE)
-    if (k %% 50 == 0 || k == length(vars)) {
-      message(Sys.time(), " | var ", k, "/", length(vars), " (", v, ") flushed")
-    }
-  }
-
-  # (5) assemble final stack from on-disk per-layer tifs
-  keep <- nzchar(layer_paths)
-  if (!any(keep)) return(NULL)
-  out <- terra::rast(layer_paths[keep])
-  names(out) <- vars[keep]
-  out
-}
-
-
-# get task from SLURM ------------------------------------------------------
-# YEARS (comma-separated, default 2020) is set at submission, as for 07; tasks come in blocks
-# of one year: task t runs year YEARS[(t - 1) %/% n_bcr + 1] on BCR bcr_vec[(t - 1) %% n_bcr + 1].
-# bash 07_train_and_backfill.sh YEAR ... sizes the array (n_bcr = 19 Canadian BCRs).
-
-years <- suppressWarnings(as.integer(strsplit(trimws(Sys.getenv("YEARS", "2020")), "[, ]+")[[1]]))
-if (length(years) == 0L || anyNA(years))
-  stop("YEARS must be comma-separated years, e.g. YEARS=2015,2020; got '", Sys.getenv("YEARS"), "'")
-n_bcr   <- length(bcr_vec)
-task_id <- as.integer(Sys.getenv("SLURM_ARRAY_TASK_ID"))
-if (is.na(task_id) || task_id < 1L || task_id > n_bcr * length(years)) {
-  message(Sys.time(), " | task ", task_id, " is past the ", n_bcr * length(years),
-          " (year, BCR) pairs of YEARS=", paste(years, collapse = ","), " - nothing to do")
-  quit(save = "no", status = 0)
-}
-year     <- years[(task_id - 1L) %/% n_bcr + 1L]
-bcr_code <- bcr_vec[(task_id - 1L) %% n_bcr + 1L]
-message(Sys.time(), " | task=", task_id, " year=", year, " BCR=", bcr_code)
-
-# MOSAIC_DIR redirects the output (e.g. MOSAIC_DIR=bart_models_mosaics_test) to check a code
-# change against the production mosaics without overwriting them.
 out_dir  <- file.path(ia_dir, "data", "derived_data", Sys.getenv("MOSAIC_DIR", "bart_models_mosaics"), year)
 out_path <- file.path(out_dir, paste0(bcr_code, "_backfilled.tif"))
+in_files <- file.path(ia_dir, "data", "derived_data", "bart_models", year,
+                      paste0("subbasin_", sub_ids), paste0("subbasin_", sub_ids, "_backfill.tif"))
+in_files <- in_files[file.exists(in_files)]
 
-# subbasins for this BCR
-sub_ids <- bcr_subbasins_ref |>
-  dplyr::filter(bcr_code == !!bcr_code) |>
-  dplyr::pull(sub_index) |>
-  unique()
-
-message(Sys.time(), " | ", bcr_code, " | subbasins=", length(sub_ids))
-
-# Skip only a mosaic that is newer than every subbasin backfill it is built from. Skipping on
-# existence alone turned a whole rerun into a no-op once (2026-09-19: the stale mosaics had
-# not been deleted, and every task exited 0 in seconds).
-if (file.exists(out_path)) {
-  in_files <- file.path(ia_dir, "data", "derived_data", "bart_models", year,
-                        paste0("subbasin_", sub_ids), paste0("subbasin_", sub_ids, "_backfill.tif"))
-  in_files <- in_files[file.exists(in_files)]
-  if (length(in_files) > 0L && file.mtime(out_path) > max(file.mtime(in_files))) {
-    message(Sys.time(), " | ", bcr_code, " | output is newer than its ", length(in_files),
-            " subbasin backfills — skipping")
-    quit(save = "no", status = 0)
-  }
-  message(Sys.time(), " | ", bcr_code, " | output is older than its subbasin backfills — rebuilding")
+# skip only a mosaic newer than every backfill it is built from (skipping on existence alone
+# once turned a whole rerun into a no-op, 2026-09-19)
+if (file.exists(out_path) && length(in_files) > 0L && file.mtime(out_path) > max(file.mtime(in_files))) {
+  message(Sys.time(), " | ", bcr_code, " | mosaic is newer than its backfills - skipping")
+  quit(save = "no", status = 0)
 }
-
-if (length(sub_ids) == 0) {
-  message(Sys.time(), " | ", bcr_code, " | no subbasins — skipping")
+if (length(in_files) == 0L) {
+  message(Sys.time(), " | ", bcr_code, " | no subbasin backfills - skipping")
   quit(save = "no", status = 0)
 }
 
 
-# mosaic ------------------------------------------------------
 
-# load BCR observed stack first; it is the canonical resample target for the mosaic
-stack_obs <- terra::rast(file.path(nm_root, "gis/stacks", paste0(bcr_code, "_", year, ".tif")))
+# ----------------------------------------------
+# mosaic onto the BCR's covariate grid, one covariate at a time, on disk
 
-message(Sys.time(), " | ", bcr_code, " | starting mosaic")
-stack_bf <- mosaic_backfilled_stacks(sub_ids, year, stack_obs)
+# the BCR's observed stack, whose grid the mosaic takes (12F reads both)
+ref1    <- terra::rast(file.path(nm_root, "gis/stacks", paste0(bcr_code, "_", year, ".tif")))[[1]]
+ref_ext <- terra::ext(ref1)
 
-if (is.null(stack_bf)) {
-  message(Sys.time(), " | ", bcr_code, " | no backfilled rasters found — skipping")
-  quit(save = "no", status = 0)
+# the backfills that overlap the BCR grid
+overlaps <- vapply(in_files, function(p) {
+  e <- terra::ext(terra::rast(p))
+  e$xmin < ref_ext$xmax && e$xmax > ref_ext$xmin && e$ymin < ref_ext$ymax && e$ymax > ref_ext$ymin
+}, logical(1))
+in_files <- in_files[overlaps]
+
+# each subbasin's whole stack, resampled once onto its own window of the BCR grid. a window
+# snapped to the grid gives the same cells as the whole grid ("near" takes the source cell
+# under each target cell's centre), at a fraction of the cost: whole-grid resamples took 5 h
+# for can81. INTERLEAVE=BAND, because the loop below reads one band at a time: GDAL's default
+# pixel interleave made each band read scan the whole file (~23 min per covariate)
+gtiff_opts <- c("INTERLEAVE=BAND", "COMPRESS=DEFLATE", "BIGTIFF=YES", "TILED=NO")
+rs_dir <- tempfile("premosaic_rs_")
+dir.create(rs_dir, recursive = TRUE)
+sub_handles <- lapply(seq_along(in_files), function(k) {
+  r     <- terra::rast(in_files[k])
+  e_int <- terra::intersect(terra::ext(r), ref_ext)
+  pth   <- file.path(rs_dir, sprintf("sub_%04d.tif", k))
+  terra::resample(terra::crop(r, e_int), terra::crop(ref1, e_int, snap = "out"), method = "near",
+                  filename = pth, overwrite = TRUE, wopt = list(gdal = gtiff_opts))
+  message(Sys.time(), " | pre-resampled subbasin ", k, "/", length(in_files))
+  terra::rast(pth)
+})
+names_per <- lapply(sub_handles, names)
+vars      <- sort(unique(unlist(names_per)))
+
+# per covariate: merge the subbasin windows (merge() keeps the first non-NA value, in subbasin
+# order), extend to the BCR grid and write to its own temp file, so nothing piles up in RAM
+layer_dir   <- tempfile("premosaic_layers_")
+dir.create(layer_dir, recursive = TRUE)
+layer_paths <- file.path(layer_dir, sprintf("layer_%05d.tif", seq_along(vars)))
+for (k in seq_along(vars)) {
+  layers <- lapply(which(vapply(names_per, function(n) vars[k] %in% n, logical(1))),
+                   function(i) sub_handles[[i]][[vars[k]]])
+  acc <- if (length(layers) == 1L) layers[[1]] else terra::merge(terra::sprc(layers))
+  acc <- terra::extend(acc, ref1)
+  if (!terra::compareGeom(acc, ref1, stopOnError = FALSE)) stop("merged layer ", vars[k], " is not on the BCR grid")
+  terra::writeRaster(acc, layer_paths[k], overwrite = TRUE)
+  rm(acc)
+  gc(verbose = FALSE)
+  if (k %% 50 == 0 || k == length(vars)) message(Sys.time(), " | covariate ", k, "/", length(vars))
 }
-message(Sys.time(), " | ", bcr_code, " | mosaic done (already on BCR grid)")
+stack_bf <- terra::rast(layer_paths)
+names(stack_bf) <- vars
 
 
-# mask + write ------------------------------------------------------
-# combined into one streaming pass: 
-# the terra::mask(filename=...) block-processes the file-backed stack 
-# so peak memory stays bounded regardless of layer count.
-# previous versions split this into mask -> writeRaster, 
-# which materialized all 2546 layers in RAM at once and OOM-killed the job at 128G.
 
-bam_bcr_codes <- gsub("_", "", paste(bam_boundary$country, bam_boundary$subUnit, sep = "_"))
-bcr_poly      <- bam_boundary[bam_bcr_codes == bcr_code, ]
+# ----------------------------------------------
+# mask to the BCR polygon and write, in one streaming pass (masking, then writing, held all
+# ~2500 layers in RAM and was killed at 128G). written under a temporary name and renamed when
+# complete, so a killed task leaves no truncated mosaic. INTERLEAVE=BAND for 12F's band reads
 
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
-# Written under a temporary name and renamed when complete: terra::mask(filename=) streams,
-# so a task killed mid-write used to leave a readable, truncated mosaic in place.
 part_path <- file.path(out_dir, paste0(bcr_code, "_backfilled_partial.tif"))
-# INTERLEAVE=BAND on the final mosaic too, so downstream 12F can extract
-# individual covariate bands without scanning the full file (same fix
-# rationale as the pre-resampled tifs above).
-terra::mask(stack_bf, bcr_poly,
-            filename = part_path, overwrite = TRUE,
-            wopt = list(gdal = c("INTERLEAVE=BAND",
-                                 "COMPRESS=DEFLATE",
-                                 "BIGTIFF=YES",
-                                 "TILED=NO")))
+terra::mask(stack_bf, bam_boundary[bam_bcr_codes == bcr_code, ],
+            filename = part_path, overwrite = TRUE, wopt = list(gdal = gtiff_opts))
 if (!file.rename(part_path, out_path)) stop("could not move ", part_path, " into place")
-message(Sys.time(), " | ", bcr_code, " | masked and written to ", out_path)
-message(Sys.time(), " | done.")
+message(Sys.time(), " | ", bcr_code, " | wrote ", out_path)

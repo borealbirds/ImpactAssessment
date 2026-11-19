@@ -3,33 +3,22 @@
 # author: Mannfred Boehm
 # created: October 26, 2026
 # ---
-# Our version of Rosenberg et al. (2019, Science 366:120) Fig. 1A, one figure per panel (19B on):
-# the summed population of the reported species (species_113.txt), observed and without
-# industry, in each year. Rosenberg plotted the net change since the first year; that would start
-# both scenarios at 0 and so remove the industry effect, which here is the gap between the two
-# lines (19G's "All species" line). The y axis does not start at 0: the gap is under 1% of the
-# total. As in Rosenberg's, the total sums every species, increasing and declining, so the most
-# abundant species dominate it. Its line-type legend serves all four panels (19C-19E draw none).
-#
-# Uncertainty from 19A's per-sample populations: each year's 5th/95th percentiles of the total.
-# The observed population varies only by bootstrap (32 samples), the no-industry one by bootstrap
-# and BART draw (3200). 12F seeds the BART draw by species, so the band treats each species'
-# backfill draw as independent of the others'. The two scenarios' bands overlap, but each
-# sample's own difference between them (19G) excludes 0 in every year.
-#
-# Every year's counterfactual removes the 2020 footprint (07 ran 1995-2015 with
-# HF_MASK_YEAR=2020), so the gap is that footprint's effect under each year's conditions, not
-# the effect of the footprint each year had.
-#
-# Run locally after pulling sector_effects/population_samples.rds (19A, on Fir):
-#   Rscript Rscripts/19B_net_change_trajectory.R
-# Writes output_figures/figure1/fig1A_net_change_1995_2020.png and its values to
-# sector_effects/net_change_1995_2020.csv.
-# ---
 
-suppressPackageStartupMessages(library(ggplot2))
+# our version of Rosenberg et al. (2019, Science 366:120) Fig. 1A: the summed population of the
+# reported species (species_113.txt), observed and without industry, each year. not the net
+# change since the first year, which would start both lines at 0 and hide the industry effect
+# (the gap between them, 19G's "All species"). the y axis does not start at 0 (the gap is < 1%
+# of the total). its line-type legend serves all four panels (19C-19E draw none).
+# bands: each year's 5th/95th percentiles of the total over 19A's samples (observed: 32
+# bootstraps; without industry: 3200, BART draws treated as independent across species).
+# every year's counterfactual removes the 2020 footprint (07 ran 1995-2015 with
+# HF_MASK_YEAR=2020): the gap is that footprint's effect under each year's conditions.
+# runs locally after pulling 19A's population_samples.rds
+#   -> output_figures/figure1/fig1A_net_change_1995_2020{,_pct}.png, sector_effects/net_change_1995_2020.csv
 
-ia_dir <- getwd()   # the local RProject
+library(ggplot2)
+
+ia_dir <- getwd()
 se_dir <- file.path(ia_dir, "data", "derived_data", "sector_effects")
 ps     <- readRDS(file.path(se_dir, "population_samples.rds"))
 

@@ -4,69 +4,49 @@
 # created: June 3, 2025
 # ---
 
-# reproject -> aggregate -> crop -> mask -> align (resample)
+# year of last fire (Hermosilla et al. 2016, 30 m, Lambert conformal conic) -> aggregate to
+# ~1 km -> reproject -> crop -> mask, then one "years since fire" layer per year
+# downloaded from: https://opendata.nfis.org/mapserver/nfis-change_eng.html
 
 library(terra)
-library(tidyverse)
 
-# set root path
-root <- "G:/Shared drives/BAM_NationalModels5"
-ia_dir <- file.path(root, "data", "Extras", "sandbox_data", "impactassessment_sandbox")
+root    <- "G:/Shared drives/BAM_NationalModels5"
+raw_dir <- file.path(root, "data", "Extras", "sandbox_data", "impactassessment_sandbox", "CAfire")
+out_dir <- file.path("data", "raw_data", "CAfire")
 
+CAfire <- terra::rast(file.path(raw_dir, "CA_Forest_Fire_1985-2020.tif"))
 
-# import time of disturbance layer (CAfire) and reproject (takes ~6 hours)
-# note that Hermosilla et al (2016) is in NAD_1983_Lambert_Conformal_Conic
-# downloaded from: https://opendata.nfis.org/mapserver/nfis-change_eng.html
-CAfire <- terra::rast(file.path(ia_dir, "CAfire", "CA_Forest_Fire_1985-2020.tif"))
-
-# group every 33 × 33 grid of 30m pixels into one 1000m x 1000m pixel (takes ~5 mins, but saves hours in reprojectiom time)
-# `fact` tells terra how many raster cells to combine together when aggregating
-fact <- round(1000 / res(CAfire)[1]) 
+# 33 x 33 cells of 30 m -> one ~1 km cell (~5 min; saves hours of reprojection)
+fact <- round(1000 / terra::res(CAfire)[1])
 CAfire_agg <- terra::aggregate(CAfire, fact = fact, fun = "modal", na.rm = TRUE)
 
-# now that we have a coarser raster, reprojection will be faster. then, crop and mask.
-# first, create a template raster from the BAM boundary in EPSG:5072 (avoids GDAL errors)
+# 1 km template in EPSG:5072 (projecting onto a template avoids GDAL errors)
 bam_boundary <- terra::vect(file.path(root, "Regions", "BAM_BCR_NationalModel_Buffered.shp"))
-bam_template <- terra::rast(ext(bam_boundary), resolution=1000, crs=crs(bam_boundary)) 
+bam_template <- terra::rast(terra::ext(bam_boundary), resolution = 1000, crs = terra::crs(bam_boundary))
 
 CAfire_mask <-
-  terra::project(x=CAfire_agg, y=bam_template, method="near") |> # use "near" because years are categorical, not continuous
-  terra::crop(x=_, y=bam_boundary) |> 
-  terra::mask(x=_, mask=bam_boundary)
+  terra::project(CAfire_agg, bam_template, method = "near") |>   # years are categorical
+  terra::crop(bam_boundary) |>
+  terra::mask(bam_boundary)
 
-# convert zeros and NaNs to NAs
-vals <- values(CAfire_mask)
-vals[vals == 0 | is.nan(vals)] <- NA
-values(CAfire_mask) <- vals
+# 0 = no fire on record
+CAfire_mask[CAfire_mask == 0] <- NA
 
-# define a function that estimates "years since fire" from "year of fire" from any given year
-find_year_since_fire <- 
-  function(current_year) {
-    ysf <- current_year - CAfire_mask
-    ysf[ysf < 0] <- NA  # fire hasn't occurred yet
-    
-    # normalize to c(0,1): recent fires=1, older fires=0
-    ysf_norm <- 1 / (ysf + 1)  # +1 avoids division by zero when ysf == 0
-    # unburned-in-record (NA) is the ysf -> Inf limit = 0, a REAL value, not missing.
-    # Filling it stops the 99%-NA cascade that collapses backfill coverage (Open Limitation #5).
-    ysf_norm[is.na(ysf_norm)] <- 0
-    # re-mask so off-study-area stays NA (in-study pixels keep their real 0)
-    ysf_norm <- terra::mask(ysf_norm, bam_boundary)
-    names(ysf_norm) <- paste0("CAfire_", current_year)
-    return(ysf_norm)
+# years since fire in `current_year`, scaled to (0, 1]: 1 = burned this year, -> 0 for old fires
+find_year_since_fire <- function(current_year) {
+  ysf <- current_year - CAfire_mask
+  ysf[ysf < 0] <- NA                  # burned after current_year
+  ysf_norm <- 1 / (ysf + 1)
+
+  # never burned is the ysf -> Inf limit, a real 0, not missing: left NA it dropped 99% of
+  # pixels from the backfill (Open Limitation #5). re-mask so only off-study-area stays NA
+  ysf_norm[is.na(ysf_norm)] <- 0
+  ysf_norm <- terra::mask(ysf_norm, bam_boundary)
+  names(ysf_norm) <- paste0("CAfire_", current_year)
+  ysf_norm
 }
 
-# generate one raster per year with "years since fire"
-years <- seq(1990, 2020, by = 5)
-CAfire_rasters <- purrr::map(.x = years, .f = find_year_since_fire)
-names(CAfire_rasters) <- paste0("CAfire_", years)
-
-
-# save reprojected/cropped/masked time-since-disturbance layer
-purrr::iwalk(CAfire_rasters, ~ {
-  terra::writeRaster(.x,
-                     filename = file.path(ia_dir, "CAfire", paste0(.y, "_masked.tif")),
-                     overwrite = TRUE)})
-
-
-
+for (y in seq(1990, 2020, by = 5)) {
+  terra::writeRaster(find_year_since_fire(y), file.path(out_dir, paste0("CAfire_", y, "_masked.tif")),
+                     overwrite = TRUE)
+}

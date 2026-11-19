@@ -1,248 +1,109 @@
 # ---
 # title: Impact Assessment: canonical observed-landscape bird predictions
 # author: Mannfred Boehm
-# created: May 15, 2026
-# rewritten: September 11, 2026 to conform to V5 10.Truncate.R (commit f082866)
-# ---
-#
-# Run once per species, on the cluster (one array task per species):
-#   bash 12A_observed.sh OSFL GRSP
-# or locally, one species at a time: SPECIES=OSFL Rscript Rscripts/12A_observed.R
-# For each Canadian BCR the species has a BRT model for, read Elly's unclamped
-# 32-bootstrap prediction surfaces from
-#   {nm_root}/output/07_predictions/{species}/{species}_{bcr}_{year}.tif
-# (nm_root is the NationalModels directory on Fir, or G:/Shared drives/BAM_NationalModels5
-# locally), apply V5's truncation transform, and write to
-# ia_dir/data/derived_data/predictions/{species}/{bcr_code}/{year}/:
-#   observed_bootstraps.tif  (32 layers, densmax- AND q99.9-clamped, UNWEIGHTED)
-#   observed_mean.tif
-#   observed_sd.tif
-# plus one ia_dir/data/derived_data/predictions/{species}/truncation_params.rds
-# per species.
-#
-# After a LOCAL run, Globus-transfer observed_bootstraps.tif AND truncation_params.rds
-# to the same relative paths on the cluster; a cluster run writes them in place. 12D/12F
-# read these rather than recomputing, which also eliminates floating-point drift
-# across parallel SLURM jobs.
-#
-# WHAT CHANGED (2026-09-11) and why it matters
-# --------------------------------------------
-# This script used to replicate steps 5-9 of V5's 10.Package.R. That script no
-# longer exists: commit f082866 (2026-06-04) split it into 10.Truncate.R +
-# 11.Package.R, and 4e7fc83 rewrote how the truncation values are derived.
-#
-# 1. q.out's schema changed from (spp, thresh, countmax, off, q) to
-#    (spp, thresh, countmax, densmax). There is no $q column any more. The old
-#    $q was a count quantile divided by a single null-QPAD offset; densmax is
-#    the 99th percentile of per-observation density using the per-observation
-#    corrections table. CAWA 1.1850 -> 0.8334, OVEN 0.8460 -> 1.3941.
-#
-# 2. Truncation has TWO upper stages and this script only ever applied the
-#    first. Measured on can10 2020: densmax removes 1.29% (CAWA) / 0.32% (OVEN)
-#    of total abundance, but the secondary 99.9th-percentile cap removes a
-#    further 12.19% / 4.13%. q99.9 ~ 0.133 for CAWA against densmax 0.833 -- it
-#    binds 6.3x lower and does nearly all the work. Both are now applied to the
-#    saved stack, making observed_bootstraps.tif our EPSG:5072 analogue of V5's
-#    output/10_truncated product.
-#
-# 3. The denshthresh / l.out low-density zeroing (old step 9) was deleted from
-#    V5 entirely. It is gone here too.
-#
-# WHY q99 IS PERSISTED RATHER THAN RECOMPUTED
-# -------------------------------------------
-# q99 is the only data-dependent parameter in the transform. 12F must clamp the
-# BACKFILLED predictions at the SAME value, frozen from the observed landscape.
-# Removing industry raises density, so a counterfactual's own 99.9th percentile
-# sits higher and would be clamped less than the observed landscape it is being
-# differenced against -- putting a component of the cap itself into the obs/bf
-# contrast. truncation_params.rds carries it to 12F for exactly this reason.
-# (Known residual bias, to be quantified by the uncapped sensitivity pass: a
-# frozen ceiling is hit more often by counterfactuals, which under-estimates
-# impact in the highest-density pixels.)
-#
-# WHY THIS STAYS IN EPSG:5072 AND IS NOT MASKED HERE
-# --------------------------------------------------
-# V5 reprojects to EPSG:3978 before truncating, but 10.Truncate.R:19 documents
-# that as a legacy artifact ("Future versions will not require this step").
-# Because clamp() does not commute with projection, projecting would break the
-# exact superset -> masked-rowsum decomposition 12F relies on. The parameter
-# itself is near CRS-invariant -- CAWA can10 q99.9 = 0.132457 in 5072 vs
-# 0.132881 in 3978, 0.32% apart -- so the 5072-derived cap is effectively V5's.
-#
-# CORRECTED 2026-09-14: this used to say the 3978 step "costs ~2.3% of abundance
-# (bilinear resampling does not conserve sums)". Wrong mechanism, wrong sign.
-# 5072 is Albers EQUAL AREA, 3978 is Lambert CONFORMAL Conic whose 1000 m cells
-# hold ~1.027 km2 of ground, and population is summed as density * 100 assuming
-# 1 km2 per pixel -- so the 3978 total reads ~2.9-3.4% LOW and 5072 is the
-# correct side. See CLAUDE.md Open Limitation #8.
-#
-# Range/water/data-limit masking is deliberately NOT applied here: it lives in
-# weight.tif (12C) and 12F:220 multiplies it into BOTH the observed and the
-# backfilled side, which is what keeps w*bf - w*obs = w*(bf - obs) exact.
-# Baking it in here would double-weight the observed side.
-#
-# Gate G1 (Rscripts/misc/harnesses/verify_v5_truncate_port.R) confirms the shared transform
-# in 12B_v5_truncate.R reproduces V5's released output/10_truncated product.
+# created: May 15, 2026 (rewritten September 11, 2026 to follow V5's 10.Truncate.R, commit f082866)
 # ---
 
-suppressPackageStartupMessages({
-  library(terra)
-  library(tidyverse)
-})
+# per species, each Canadian BCR it has a model for: Elly's unclamped 32-bootstrap predictions
+# ({nm_root}/output/07_predictions/{species}/{species}_{bcr}_{year}.tif) through V5's two caps (12B)
+#   -> data/derived_data/predictions/{species}/{bcr}/{year}/observed_{bootstraps,mean,sd}.tif
+#   -> data/derived_data/predictions/{species}/truncation_params.rds (densmax, and q99 frozen for 12F)
+# unmasked: 12C's weight masks both sides in 12F, which keeps w*bf - w*obs = w*(bf - obs). in
+# EPSG:5072, not V5's legacy 3978: clamp() does not commute with projection (OL #8).
+# models BAM withholds (CAWA can40) are run too; 14B drops them.
+# on Fir: bash 12A_observed.sh OSFL GRSP   (one task per species runs all YEARS, which share
+# one truncation_params.rds). locally, from G: SPECIES=OSFL Rscript Rscripts/12A_observed.R
 
-# terra::project() returns different VALUES under memory pressure (a 28% swing in
-# a derived q99.9 was measured between memfrac 0.60 and 0.01). This script does
-# not project, but pin it anyway so nothing here is memory-sensitive.
-terraOptions(memfrac = 0.60)
+library(terra)
+terraOptions(memfrac = 0.60)   # project() returns different values under memory pressure
 
-# paths -------------------------------------------------------------------
+cc      <- nzchar(Sys.getenv("SLURM_JOB_ID"))
+ia_dir  <- if (cc) "/home/mannfred/scratch/impact_assessment" else getwd()
+nm_root <- if (cc) "/home/mannfred/projects/def-ecknight/NationalModels" else "G:/Shared drives/BAM_NationalModels5"
 
-nm_root <- "/home/mannfred/projects/def-ecknight/NationalModels"
-
-# inside a Slurm job this is the cluster; anywhere else, the local RProject
-cc    <- nzchar(Sys.getenv("SLURM_JOB_ID"))
-local <- !cc
-
-if (cc)            { ia_dir <- "/home/mannfred/scratch/impact_assessment" }
-if (!cc && local)  { ia_dir <- getwd() }
-if (!cc && !local) { ia_dir <- file.path("G:/Shared drives/BAM_NationalModels5", "data", "Extras",
-                                          "sandbox_data", "impactassessment_sandbox") }
-
-# when running locally, BRT bootstrap models and raw prediction tifs are on G:
-if (!cc) { nm_root <- "G:/Shared drives/BAM_NationalModels5" }
-
-# terra sizes its blocks from the node's free RAM, not the job's allocation (see 11), so
-# cap it at 30% of the allocation, or it can hold whole stacks past --mem.
+# terra sizes its blocks from the node's free RAM, not the job's allocation (see 11)
 slurm_mem_mb <- suppressWarnings(as.numeric(Sys.getenv("SLURM_MEM_PER_NODE")))
 if (is.finite(slurm_mem_mb)) terraOptions(memmax = 0.3 * slurm_mem_mb / 1024)
 
 source(file.path(ia_dir, "Rscripts", "12B_v5_truncate.R"))
 
-# prediction thresholds --------------------------------------------------
-# restaged from G:/Shared drives/BAM_NationalModels5/data/ on 2026-09-11
-# (the 2026-06-04 rebuild; see the schema note above).
-
-load(file.path(ia_dir, "data", "raw_data", "SpeciesPredictionTruncationValues.Rdata"))
+load(file.path(ia_dir, "data", "raw_data", "SpeciesPredictionTruncationValues.Rdata"))   # q.out
 if (!"densmax" %in% names(q.out))
-  stop("q.out has no `densmax` column — SpeciesPredictionTruncationValues.Rdata is the ",
-       "pre-2026-06-04 version. Restage it from G:/Shared drives/BAM_NationalModels5/data/.")
+  stop("q.out has no densmax column: restage SpeciesPredictionTruncationValues.Rdata (2026-06-04 or later)")
 
-# species: SPECIES (comma-separated), one per array task -------------------
-# 12A_observed.sh sets SPECIES from its arguments. Without an array task id (a local
-# run), SPECIES must name exactly one species.
-
+# one species per array task (the .sh sets SPECIES); a local run takes exactly one
 species_vec <- strsplit(Sys.getenv("SPECIES"), "[, ]+")[[1]]
-if (length(species_vec) == 0L)
-  stop("set SPECIES: bash 12A_observed.sh OSFL GRSP, or SPECIES=OSFL Rscript Rscripts/12A_observed.R")
-task_id <- as.integer(Sys.getenv("SLURM_ARRAY_TASK_ID",
-                                 if (length(species_vec) == 1L) "1" else ""))
-if (is.na(task_id) || task_id < 1L || task_id > length(species_vec))
-  stop("array task ", Sys.getenv("SLURM_ARRAY_TASK_ID"), " has no species in SPECIES=",
-       Sys.getenv("SPECIES"), " (a local run takes one species)")
-species <- species_vec[task_id]
-
-# years: YEARS, comma-separated (default 2020), from the submitting shell's environment, as
-# for 07: YEARS=1995,2000 bash 12A_observed.sh OSFL. One task runs every year of its
-# species, because they all write that species' one truncation_params.rds.
-years <- suppressWarnings(as.integer(strsplit(trimws(Sys.getenv("YEARS", "2020")), "[, ]+")[[1]]))
-if (length(years) == 0L || anyNA(years))
-  stop("YEARS must be comma-separated years, e.g. YEARS=2015,2020; got '", Sys.getenv("YEARS"), "'")
+if (!cc && length(species_vec) != 1L) stop("a local run takes one species: SPECIES=OSFL Rscript Rscripts/12A_observed.R")
+species <- species_vec[as.integer(Sys.getenv("SLURM_ARRAY_TASK_ID", "1"))]
+years   <- as.integer(strsplit(Sys.getenv("YEARS", "2020"), ",")[[1]])
 
 densmax <- q.out[q.out$spp == species, ]$densmax
-if (length(densmax) != 1 || !is.finite(densmax))
-  stop("no usable densmax for species=", species)
+if (length(densmax) != 1 || !is.finite(densmax)) stop("no usable densmax for ", species)
+message(Sys.time(), " | ", species, " | years ", paste(years, collapse = ","), " | densmax=", signif(densmax, 6))
 
-message(Sys.time(), " | observed predictions for species=", species,
-        " | years=", paste(years, collapse = ","), " | densmax=", signif(densmax, 6))
+rdata_files <- list.files(file.path(nm_root, "output/06_bootstraps", species), pattern = "can.*\\.Rdata$", full.names = TRUE)
 
-# find models for relevant BCRs ------------------------------------------
-# NOTE: this discovers every can* model, which for CAWA includes can40 — a model
-# BAM withholds (review/ModelReleaseDecisions.xlsx, "remove" tab, AUC). It is
-# kept here deliberately; the release filter belongs in 14B, not in the products.
-
-rdata_files <- list.files(file.path(nm_root, "output/06_bootstraps", species),
-                          pattern = "can.*\\.Rdata$", full.names = TRUE)
-
-# same smoke-test filter 12D/12F honour: TEST_BCR=can10,can71
+# TEST_BCR=can10,can71: the smoke-test filter 12D and 12H honour too
 test_bcr <- Sys.getenv("TEST_BCR", "")
-if (nchar(test_bcr) > 0) {
-  want <- strsplit(test_bcr, ",")[[1]]
-  rdata_files <- rdata_files[
-    regmatches(basename(rdata_files), regexpr("can[0-9]+", basename(rdata_files))) %in% want]
-  message(Sys.time(), " | TEST_BCR=", test_bcr, " -> ", length(rdata_files), " model(s)")
-}
-message(Sys.time(), " | found ", length(rdata_files), " BCR models")
+if (nchar(test_bcr) > 0)
+  rdata_files <- rdata_files[regmatches(basename(rdata_files), regexpr("can[0-9]+", basename(rdata_files))) %in%
+                               strsplit(test_bcr, ",")[[1]]]
+message(Sys.time(), " | ", length(rdata_files), " BCR models")
 
-params_path <- file.path(ia_dir, "data/derived_data/predictions", species,
-                         "truncation_params.rds")
+params_path <- file.path(ia_dir, "data/derived_data/predictions", species, "truncation_params.rds")
 params <- if (file.exists(params_path)) readRDS(params_path) else list()
 
-# make bird density predictions for applicable BCRs ----------------------
+
+
+# ---------------------------------------------------
+# truncate each BCR x year
 
 for (rdata_path in rdata_files) for (year in years) {
 
-  # BCR from the filename ({species}_{bcr}.Rdata), not from attr(b.list[[1]], "bcr"):
-  # loading b.list read up to 654 MB per file just to get this one string. 12F loads
-  # b.list anyway and stop()s if the attribute disagrees with the filename.
+  # the BCR from the file name, {species}_{bcr}.Rdata (loading the model to read it costs up to
+  # 654 MB; 12F checks the model's own BCR against the name)
   bcr_code <- sub(paste0("^", species, "_(.*)\\.Rdata$"), "\\1", basename(rdata_path))
-  if (!grepl("^can[0-9]+$", bcr_code))
-    stop("cannot parse a BCR code from ", basename(rdata_path),
-         " — expected {species}_can<N>.Rdata")
+  if (!grepl("^can[0-9]+$", bcr_code)) stop("cannot read a BCR code from ", basename(rdata_path))
+  key <- paste(bcr_code, year, sep = "_")
 
   obs_dir       <- file.path(ia_dir, "data/derived_data/predictions", species, bcr_code, year)
   obs_boot_path <- file.path(obs_dir, "observed_bootstraps.tif")
 
-  # skip only if BOTH the stack and its frozen q99 are already on hand — a stack
-  # without a recorded q99 is unusable by 12F and must be rebuilt.
-  key <- paste(bcr_code, year, sep = "_")
+  # skip only if both the stack and its frozen q99 exist: 12F can't use one without the other
   if (file.exists(obs_boot_path) && !is.null(params[[key]])) {
-    message(Sys.time(), " | ", key, " | already exists — skipping")
+    message(Sys.time(), " | ", key, " | done before - skipping")
     next
   }
 
-  raw_pred_path <- file.path(nm_root, "output/07_predictions", species,
-                             paste0(species, "_", bcr_code, "_", year, ".tif"))
+  raw_pred_path <- file.path(nm_root, "output/07_predictions", species, paste0(species, "_", bcr_code, "_", year, ".tif"))
   if (!file.exists(raw_pred_path)) {
-    message(Sys.time(), " | ", key, " | no raw predictions found — skipping")
+    message(Sys.time(), " | ", key, " | no raw predictions - skipping")
     next
   }
-  message(Sys.time(), " | ", key, " | reading pre-computed bootstraps")
 
-  # V5 10.Truncate.R steps 5-6, in native 5072, unweighted (see header).
-  out <- v5_truncate(terra::rast(raw_pred_path),
-                     spp = species, bcr = bcr_code, densmax = densmax,
+  # V5 10.Truncate.R steps 5-6: densmax, then q99 from this stack's bootstrap mean
+  out <- v5_truncate(terra::rast(raw_pred_path), spp = species, bcr = bcr_code, densmax = densmax,
                      q99 = NULL, project_to = NULL, apply_masks = FALSE)
   if (is.null(out)) {
-    message(Sys.time(), " | ", key, " | all-NA mean, no q99 derivable — skipping")
+    message(Sys.time(), " | ", key, " | all-NA mean, no q99 - skipping")
     next
   }
-  obs_stack <- out$stack
 
-  # INTERLEAVE=BAND matters: 12F:215 pulls these 32 layers out one at a time, and
-  # terra's default BIP layout makes each single-band read scan the whole file.
+  # INTERLEAVE=BAND: 12F reads the 32 layers one at a time, and terra's default (pixel
+  # interleave) makes each single-band read scan the whole file
   dir.create(obs_dir, recursive = TRUE, showWarnings = FALSE)
-  terra::writeRaster(obs_stack, obs_boot_path, overwrite = TRUE,
-                     wopt = list(gdal = c("INTERLEAVE=BAND", "COMPRESS=DEFLATE",
-                                          "BIGTIFF=YES", "TILED=NO")))
+  terra::writeRaster(out$stack, obs_boot_path, overwrite = TRUE,
+                     wopt = list(gdal = c("INTERLEAVE=BAND", "COMPRESS=DEFLATE", "BIGTIFF=YES", "TILED=NO")))
 
-  # inspection products, matching 11.Package.R's mean/sd over the truncated stack
-  # (V5 computes these on the MASKED stack; ours are unmasked, so they are for
-  # inspection only — 12F reads observed_bootstraps.tif, never these).
-  terra::writeRaster(terra::app(obs_stack, mean, na.rm = TRUE),
-                     file.path(obs_dir, "observed_mean.tif"), overwrite = TRUE)
-  terra::writeRaster(terra::app(obs_stack, sd, na.rm = TRUE),
-                     file.path(obs_dir, "observed_sd.tif"), overwrite = TRUE)
+  # for inspection only (12F reads observed_bootstraps.tif)
+  terra::writeRaster(terra::app(out$stack, mean, na.rm = TRUE), file.path(obs_dir, "observed_mean.tif"), overwrite = TRUE)
+  terra::writeRaster(terra::app(out$stack, sd, na.rm = TRUE), file.path(obs_dir, "observed_sd.tif"), overwrite = TRUE)
 
-  params[[key]] <- list(species = species, bcr = bcr_code, year = year,
-                        densmax = out$densmax, q99 = out$q99,
-                        crs = "EPSG:5072", masked = FALSE,
-                        source = raw_pred_path, written = Sys.time())
+  params[[key]] <- list(species = species, bcr = bcr_code, year = year, densmax = out$densmax, q99 = out$q99,
+                        crs = "EPSG:5072", masked = FALSE, source = raw_pred_path, written = Sys.time())
   saveRDS(params, params_path)
 
-  message(Sys.time(), " | ", key, " | done | q99=", signif(out$q99, 6),
-          " | densmax/q99=", round(densmax / out$q99, 1), "x")
-  rm(out, obs_stack); gc()
+  message(Sys.time(), " | ", key, " | q99=", signif(out$q99, 6), " (", round(densmax / out$q99, 1), "x below densmax)")
+  rm(out)
+  gc()
 }
-
-message(Sys.time(), " | species=", species, " complete | ", length(params),
-        " BCR x year(s) in ", params_path)

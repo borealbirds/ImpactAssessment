@@ -3,27 +3,20 @@
 # author: Mannfred Boehm
 # created: October 26, 2026
 # ---
-# Our version of Rosenberg et al. (2019, Science 366:120) Fig. 1B: the net change since the first
-# year, observed and without industry, for each of 14D's habitat groups, all on one plot
-# (colour = group, line type = scenario as in 19B) so the groups' sizes compare. Each group sums
-# all its species, increasing and declining. No legend: 19B's names the line types and 19G's
-# names the colours. Panel C of the Figure 1 variant (figure1.pptx); its y-axis title serves 19F,
-# panel D, beside it. A labelled copy names each group at the tip of its observed line, as 19F
-# names its species.
-#
-# Uncertainty: each sample's group total minus the SAME sample's first-year total, then the
-# 5th/95th percentiles.
-#
-# Run locally after 14D, with 19A's population_samples.rds pulled:
-#   Rscript Rscripts/19C_net_change_by_habitat.R
-# Writes output_figures/figure1/fig1BC_net_change_by_habitat_1995_2020.png and its values to
-# sector_effects/net_change_by_habitat_1995_2020.csv; the labelled copy is
-# fig1BC_net_change_by_habitat_labelled_1995_2020.png.
-# ---
 
-suppressPackageStartupMessages(library(ggplot2))
+# our version of Rosenberg et al. (2019) Fig. 1B: the net change since the first year, observed
+# and without industry, for each of 14D's habitat groups on one plot (colour = group, line type =
+# scenario as in 19B). no legend: 19B names the line types, 19G the colours. panel C of the
+# figure1.pptx variant; its y title serves 19F (panel D) beside it. a labelled copy names each
+# group at the tip of its observed line.
+# bands: each sample's group total minus the SAME sample's first-year total, 5th/95th percentiles.
+# runs locally after 14D, with 19A's population_samples.rds pulled
+#   -> output_figures/figure1/fig1BC_net_change_by_habitat{,_labelled}_1995_2020.png (+ _pct)
+#   -> sector_effects/net_change_by_habitat_1995_2020.csv
 
-ia_dir <- getwd()   # the local RProject
+library(ggplot2)
+
+ia_dir <- getwd()
 se_dir <- file.path(ia_dir, "data", "derived_data", "sector_effects")
 ps     <- readRDS(file.path(se_dir, "population_samples.rds"))
 master <- read.csv(file.path(ia_dir, "data", "raw_data", "anna_data", "master_species_list.csv"))

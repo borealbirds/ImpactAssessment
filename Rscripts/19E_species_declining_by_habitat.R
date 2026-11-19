@@ -3,28 +3,21 @@
 # author: Mannfred Boehm
 # created: October 26, 2026
 # ---
-# Our version of Rosenberg et al. (2019, Science 366:120) Fig. 1D: the share of each of 14D's
-# habitat groups' species that declined from the first year to the last, observed and without
-# industry, as Rosenberg's pies. One row per group in 19C's colours, on 19D's rows (same order,
-# same height) so that the two panels' rows line up side by side, and no row labels: 19D's name
-# them. The observed pie left of the no-industry one (outlines solid and dashed, as 19C's line
-# types; 19B's legend serves).
-#
-# A species declines when its mean change is negative, as Rosenberg counts negative trend
-# trajectories. The solid wedge is the species whose whole 5th-95th percentile interval of change
-# is below 0, the pale one those declining on the mean only; each pie is labelled with its count,
-# since the scenarios differ by a few species at most. A species' change is taken per sample
-# (bootstrap i is one bird model in every year): 32 observed samples, 3200 without industry.
-#
-# Run locally after 14D, with 19A's population_samples.rds pulled:
-#   Rscript Rscripts/19E_species_declining_by_habitat.R
-# Writes output_figures/figure1/fig1D_species_declining_by_habitat_1995_2020.png and its values
-# to sector_effects/species_declining_by_habitat_1995_2020.csv.
-# ---
 
-suppressPackageStartupMessages(library(ggplot2))
+# our version of Rosenberg et al. (2019) Fig. 1D: the share of each habitat group's species that
+# declined from the first year to the last, observed and without industry, as pies on 19D's rows
+# (same order and height, no row labels: 19D's name them); observed left of no-industry, rims
+# solid and dashed as 19C's line types. a species declines when its mean change is negative (as
+# Rosenberg counts negative trends); the solid wedge is the species whose whole 5th-95th
+# percentile interval is below 0, the pale one those declining on the mean only. a species'
+# change is taken per sample: 32 observed samples, 3200 without industry.
+# runs locally after 14D, with 19A's population_samples.rds pulled
+#   -> output_figures/figure1/fig1D_species_declining_by_habitat_1995_2020.png
+#   -> sector_effects/species_declining_by_habitat_1995_2020.csv
 
-ia_dir <- getwd()   # the local RProject
+library(ggplot2)
+
+ia_dir <- getwd()
 se_dir <- file.path(ia_dir, "data", "derived_data", "sector_effects")
 ps     <- readRDS(file.path(se_dir, "population_samples.rds"))
 master <- read.csv(file.path(ia_dir, "data", "raw_data", "anna_data", "master_species_list.csv"))

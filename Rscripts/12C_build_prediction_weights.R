@@ -2,248 +2,111 @@
 # title: Impact Assessment: build per-species x BCR prediction weight rasters
 # author: Mannfred Boehm
 # ---
-# Run ONCE per species (SLURM array) on the cluster, BEFORE 12D.
-#
-# Builds a multiplicative prediction weight that replicates V5 10.Truncate's
-# range / water / data-extent masking:
-#
-#     weight = range_membership x (not water) x (inside data-limit) x (inside BCR)
-#
-#   - range_membership : continuous V5 range raster (ranges/{spp}.tif), reprojected
-#                        to the BCR prediction grid; outside-range (NA) -> 0.
-#                        (V5 applies the range as a multiplicative weight, not a
-#                        hard cutoff: mask.i <- truncate2.i * range.i.)
-#   - not water        : 1 on land, 0 on WaterMask_Canada polygons
-#   - inside data-limit: 1 inside DataLimitationsMask, 0 outside
-#   - inside BCR       : 1 inside this subunit's own polygon, 0 outside.
-#
-# All three vector terms are rasterized with touches = TRUE, which is what V5's
-# mask()/crop() do and is NOT terra::rasterize()'s default -- see the note at the
-# rasterize calls below.
-#
-# ADDED 2026-09-11 -- the BCR term was missing and it is the LARGEST of the four.
-# V5 predicts each subunit on a BUFFERED grid (04.Stratify.R buffers every BCR by
-# 100 km, deliberately, so adjacent subunits overlap and can be feathered together
-# in 08.MosaicPredictions.R's distance-weighted border blend). It cuts each grid
-# back to its own polygon only later, at 10.Truncate.R:146
-# (`crop(vect(sf.i), mask = TRUE)`, sf.i from Subregions_Mosaics_EPSG3978.shp),
-# when packaging the per-subunit deliverables -- i.e. AFTER mosaicking, not before.
-# We read the pre-mosaic per-BCR grids directly, so the buffer is fully present in
-# what we see and we must apply that cut ourselves.
-# Measured on our own staged stacks, 59-71% of non-NA pixels in
-# {bcr}_2020.tif lie OUTSIDE the subunit's unbuffered polygon, carrying 41-84% of
-# the raw density sum. Without this term those buffer pixels enter the density
-# tables, and because 12D assigns a subbasin to EVERY BCR it intersects (329 of 674
-# subbasins intersect >1 Canadian BCR; 59% of total area), a straddling subbasin was
-# summed in full under each of them -- a straight double count at every BCR seam.
-# Cropping here reproduces V5's per-subunit delivery crop, which is the right
-# analogue because we consume per-BCR grids rather than the blended national
-# mosaic: each BCR contributes only its own share
-# and the per-BCR rows in density_tables sum to the subbasin once.
-#
-# Subregions_Mosaics_EPSG3978.shp and our staged Regions/BAM_BCR_NationalModel_
-# Unbuffered.shp are the same geometry (verified: per-BCR areas agree to <1 km^2,
-# IoU = 1.0000 on can10/can11/can60), so this reads the file already on the cluster
-# and needs no extra Globus staging.
-#
-# weight is coalition-independent, so it is built ONCE per species x BCR here and
-# reused by every coalition job. 12F multiplies BOTH the observed and the
-# backfilled density by this weight, so the obs/bf symmetry is preserved
-# exactly:  w*bf - w*obs = w*(bf - obs).
-#
-# Source masks live in data/raw_data/v5_gis (transferred from G: once); the
-# cluster never reads G:. The prediction grid template is the same BCR stack
-# (nm_root/gis/stacks/{bcr}_{year}.tif) that 12F uses as stack_obs, so the
-# weight aligns with both stack_obs and observed_bootstraps.tif with no resample.
-#
-# Output: data/derived_data/predictions/{species}/{bcr_code}/{year}/weight.tif
-# (single band, values in [0, 1], defined everywhere in the BCR extent).
-#
-# US water (WaterMask_US) is intentionally not used: only Canadian BCRs are
-# processed and aggregation is over Canadian subbasins, so US-side water pixels
-# never enter any subbasin zone.
-# ---
 
-suppressPackageStartupMessages({
-  library(terra)
-  library(tidyverse)
-})
+# V5's range, water and data-extent masking (10.Truncate.R) as one multiplicative weight, on
+# the BCR's prediction grid:
+#   weight = range (continuous, outside = 0) x not water x inside data limit x inside the BCR's polygon
+#   -> data/derived_data/predictions/{species}/{bcr}/{year}/weight.tif (band name = version stamp)
+# 12F multiplies the observed and the counterfactual densities by it, so w*bf - w*obs = w*(bf - obs).
+# - the BCR term: V5 predicts each BCR on a grid buffered 100 km past it, and cuts back to the
+#   BCR's own polygon only when packaging (10.Truncate.R:146). we read those buffered grids, so
+#   the cut happens here; without it a subbasin straddling two BCRs was counted in full under
+#   both (59-71% of each grid lies outside its BCR; OL #7a). our unbuffered BCR shapefile has
+#   the same geometry as V5's Subregions_Mosaics_EPSG3978.shp
+# - touches = TRUE throughout, as V5's mask() and crop() behave; rasterize()'s default (cell
+#   centres) under-masked thin rivers and lakes by 4.9-7.7% of abundance (OL #7b)
+# - only Canadian BCRs are run, so the US water mask is not needed
+# once per species, before 12D: bash 12C_build_prediction_weights.sh OSFL GRSP
 
-# ---- Paths -------------------------------------------------------------------
+library(terra)
 
 nm_root <- "/home/mannfred/projects/def-ecknight/NationalModels"
-
-cc    <- TRUE
-local <- FALSE
-
-if (cc)            { ia_dir <- "/home/mannfred/scratch/impact_assessment" }
-if (!cc && local)  { ia_dir <- getwd() }
-if (!cc && !local) { ia_dir <- file.path("G:/Shared drives/BAM_NationalModels5", "data", "Extras",
-                                          "sandbox_data", "impactassessment_sandbox") }
-
-if (!cc) { nm_root <- "G:/Shared drives/BAM_NationalModels5" }
-
+ia_dir  <- "/home/mannfred/scratch/impact_assessment"
 gis_dir <- file.path(ia_dir, "data", "raw_data", "v5_gis")
 
-# years: YEARS, comma-separated (default 2020), from the submitting shell's environment, as
-# for 07: YEARS=1995,2000 bash 12C_build_prediction_weights.sh OSFL. The weight depends only
-# on the stack's grid, so a year whose stack shares the grid of a current weight from any
-# year gets a copy of it instead of a rebuild (~10 min per BCR, mostly the water mask).
-years <- suppressWarnings(as.integer(strsplit(trimws(Sys.getenv("YEARS", "2020")), "[, ]+")[[1]]))
-if (length(years) == 0L || anyNA(years))
-  stop("YEARS must be comma-separated years, e.g. YEARS=2015,2020; got '", Sys.getenv("YEARS"), "'")
-
-# Version stamp written as the band name of weight.tif and checked on re-runs, so a
-# weight built by an older version of this script is rebuilt instead of skipped.
-# Bump this whenever the weight definition changes.
+# bump when the weight's definition changes: a weight with another stamp is rebuilt, not skipped
 WEIGHT_VERSION <- "weight_v3_touches"
 
-# ---- Species: SPECIES (comma-separated), one per array task -------------------
-# 12C_build_prediction_weights.sh sets SPECIES from its arguments.
-
 species_vec <- strsplit(Sys.getenv("SPECIES"), "[, ]+")[[1]]
-if (length(species_vec) == 0L)
-  stop("set SPECIES: bash 12C_build_prediction_weights.sh OSFL GRSP")
-task_id <- as.integer(Sys.getenv("SLURM_ARRAY_TASK_ID"))
-if (is.na(task_id) || task_id < 1L || task_id > length(species_vec))
-  stop("array task ", task_id, " has no species in SPECIES=", Sys.getenv("SPECIES"))
-species <- species_vec[task_id]
-message(Sys.time(), " | building prediction weights for species=", species)
-
-# ---- Static (species-independent) mask vectors -------------------------------
+species     <- species_vec[as.integer(Sys.getenv("SLURM_ARRAY_TASK_ID"))]
+years       <- as.integer(strsplit(Sys.getenv("YEARS", "2020"), ",")[[1]])
+message(Sys.time(), " | prediction weights for ", species)
 
 water <- terra::vect(file.path(gis_dir, "WaterMask_Canada.shp"))
 limit <- terra::vect(file.path(gis_dir, "DataLimitationsMask.shp"))
 
-# V5's mosaic-cut polygons. Same geometry as V5 Subregions_Mosaics_EPSG3978.shp;
-# `code` reconstructs the "can10"-style key the rest of the pipeline uses.
-bcr_polys <- terra::vect(file.path(ia_dir, "data", "raw_data", "Regions",
-                                   "BAM_BCR_NationalModel_Unbuffered.shp"))
-bcr_polys$code <- gsub("_", "", paste(bcr_polys$country, bcr_polys$subUnit, sep = "_"))
+bcr_polys <- terra::vect(file.path(ia_dir, "data", "raw_data", "Regions", "BAM_BCR_NationalModel_Unbuffered.shp"))
+bcr_polys$code <- paste0(bcr_polys$country, bcr_polys$subUnit)
 
 range_path <- file.path(gis_dir, "ranges", paste0(species, ".tif"))
 if (!file.exists(range_path)) stop("no range raster for ", species, " at ", range_path)
 range_r <- terra::rast(range_path)
 
-# ---- Find BCR models (same discovery as 12A/12D/12F) -------------------------
+# the species' BCRs, from its model files' names ({species}_{bcr}.Rdata, as 12A reads them)
+rdata_files <- list.files(file.path(nm_root, "output/06_bootstraps", species), pattern = "can.*\\.Rdata$")
+bcr_codes   <- sub(paste0("^", species, "_(.*)\\.Rdata$"), "\\1", rdata_files)
+message(Sys.time(), " | ", length(bcr_codes), " BCR models")
 
-rdata_files <- list.files(file.path(nm_root, "output/06_bootstraps", species),
-                          pattern = "can.*\\.Rdata$", full.names = TRUE)
-message(Sys.time(), " | found ", length(rdata_files), " BCR models")
-
-# crop a vector to the prediction grid extent, working in the vector's native CRS
-# first so only the relevant subset is reprojected to the grid CRS.
+# a vector cropped to the grid's extent in its own CRS first, so only that part is reprojected
 crop_to_grid <- function(v, tmpl) {
   tmpl_poly <- terra::as.polygons(terra::ext(tmpl), crs = terra::crs(tmpl))
-  v_sub     <- terra::crop(v, terra::project(tmpl_poly, terra::crs(v)))
-  terra::project(v_sub, terra::crs(tmpl))
+  terra::project(terra::crop(v, terra::project(tmpl_poly, terra::crs(v))), terra::crs(tmpl))
 }
 
-for (rdata_path in rdata_files) {
+is_current <- function(f) isTRUE(tryCatch(names(terra::rast(f))[1], error = function(e) NA_character_) == WEIGHT_VERSION)
 
-  e <- new.env(parent = emptyenv())
-  load(rdata_path, envir = e)
-  if (!exists("b.list", envir = e)) {
-    message("  b.list not found in ", basename(rdata_path), " — skipping"); next
-  }
-  bcr_code <- attr(e$b.list[[1]], "bcr"); rm(e)
+for (bcr_code in bcr_codes) {
 
-  # a current weight already built for any year of this BCR, to copy onto years on its grid
-  built <- Sys.glob(file.path(ia_dir, "data", "derived_data", "predictions", species, bcr_code,
-                              "*", "weight.tif"))
-  built <- Filter(function(f) isTRUE(tryCatch(names(terra::rast(f))[1],
-                                              error = function(e) NA_character_) == WEIGHT_VERSION),
-                  built)
+  # a current weight for any year of this BCR is copied to the years on the same grid
+  built  <- Filter(is_current, Sys.glob(file.path(ia_dir, "data", "derived_data", "predictions", species, bcr_code, "*", "weight.tif")))
   weight <- if (length(built) > 0L) terra::rast(built[1]) else NULL
 
   for (year in years) {
 
     out_dir  <- file.path(ia_dir, "data", "derived_data", "predictions", species, bcr_code, year)
     out_path <- file.path(out_dir, "weight.tif")
-    # Skip only a weight built by THIS version. The band name is the version stamp:
-    # weights written before the BCR-cut fix (2026-09-11) are missing the dominant
-    # mask term, and silently skipping them would leave the double count in place.
-    if (file.exists(out_path)) {
-      existing <- tryCatch(names(terra::rast(out_path))[1], error = function(e) NA_character_)
-      if (isTRUE(existing == WEIGHT_VERSION)) {
-        message(Sys.time(), " | ", bcr_code, " ", year, " | weight.tif is current (",
-                WEIGHT_VERSION, ") — skipping"); next
-      }
-      message(Sys.time(), " | ", bcr_code, " ", year, " | weight.tif is stale (band name '",
-              existing, "', want '", WEIGHT_VERSION, "') — REBUILDING")
+    if (file.exists(out_path) && is_current(out_path)) {
+      message(Sys.time(), " | ", bcr_code, " ", year, " | weight.tif is current - skipping")
+      next
     }
 
     stack_path <- file.path(nm_root, "gis/stacks", paste0(bcr_code, "_", year, ".tif"))
     if (!file.exists(stack_path)) {
-      message(Sys.time(), " | ", bcr_code, " ", year, " | no prediction stack — skipping"); next
+      message(Sys.time(), " | ", bcr_code, " ", year, " | no prediction stack - skipping")
+      next
     }
     tmpl <- terra::rast(stack_path)[[1]]
+    dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
     if (!is.null(weight) && isTRUE(terra::compareGeom(weight, tmpl, stopOnError = FALSE))) {
-      dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
-      terra::writeRaster(weight, out_path, overwrite = TRUE,
-                         wopt = list(gdal = c("COMPRESS=DEFLATE")))
-      message(Sys.time(), " | ", bcr_code, " ", year,
-              " | wrote weight.tif as a copy of a current weight on the same grid")
+      terra::writeRaster(weight, out_path, overwrite = TRUE, wopt = list(gdal = c("COMPRESS=DEFLATE")))
+      message(Sys.time(), " | ", bcr_code, " ", year, " | weight.tif copied from a current weight on the same grid")
       next
     }
 
-    # range membership (continuous) on the grid; outside range (NA) -> 0
-    w_range <- terra::project(range_r, tmpl, method = "bilinear")
-    w_range <- terra::classify(w_range, cbind(NA, 0))
+    # every term is 0, never NA, outside its shape, so the weight is defined everywhere (V5
+    # zeroes every NA, 10.Truncate.R:141); an NA would drop a pixel instead of zeroing it
+    w_range  <- terra::classify(terra::project(range_r, tmpl, method = "bilinear"), cbind(NA, 0))
+    notwater <- 1 - terra::rasterize(crop_to_grid(water, tmpl), tmpl, field = 1, background = 0, touches = TRUE)
+    inlim    <- terra::rasterize(crop_to_grid(limit, tmpl), tmpl, field = 1, background = 0, touches = TRUE)
+    poly_i   <- bcr_polys[bcr_polys$code == bcr_code, ]
+    if (nrow(poly_i) == 0) stop("no polygon for ", bcr_code, " in BAM_BCR_NationalModel_Unbuffered.shp")
+    inbcr    <- terra::rasterize(terra::project(poly_i, terra::crs(tmpl)), tmpl, field = 1, background = 0, touches = TRUE)
 
-    # not-water (1 = land) and inside-data-limit (1 = inside)
-    #
-    # touches = TRUE is REQUIRED for V5 parity and is not terra's default. V5 applies
-    # these as terra::mask(vect, inverse = TRUE) and terra::crop(vect, mask = TRUE),
-    # both of which retain/remove any cell the polygon TOUCHES; terra::rasterize()
-    # instead defaults to touches = FALSE (cell-centre rule). The gap is large wherever
-    # the layer is fragmented: WaterMask_Canada has 29,545 polygons, most of them thin
-    # rivers and small lakes that touch a cell without covering its centre, so the
-    # centre rule under-masked water by 4.9-7.7% of total abundance. On the single-blob
-    # BCR polygon the same discrepancy is only 0.7-2.2% (perimeter cells). With
-    # touches = TRUE all three terms reproduce V5's vector masking exactly -- verified
-    # to the digit on OVEN can10 and CAWA can71.
-    notwater <- 1 - terra::rasterize(crop_to_grid(water, tmpl), tmpl, field = 1,
-                                     background = 0, touches = TRUE)
-    inlim    <-     terra::rasterize(crop_to_grid(limit, tmpl), tmpl, field = 1,
-                                     background = 0, touches = TRUE)
-
-    # inside this BCR's own polygon (V5 10.Truncate.R:146). The prediction grid is
-    # buffered well past the subunit, so this is the dominant exclusion -- see header.
-    poly_i <- bcr_polys[bcr_polys$code == bcr_code, ]
-    if (nrow(poly_i) == 0)
-      stop("no unbuffered polygon for bcr_code=", bcr_code,
-           " in BAM_BCR_NationalModel_Unbuffered.shp")
-    inbcr <- terra::rasterize(terra::project(poly_i, terra::crs(tmpl)), tmpl,
-                              field = 1, background = 0, touches = TRUE)
-
-    weight <- w_range * notwater * inlim * inbcr   # in [0, 1], defined everywhere
-
-    # Every term is built with background = 0 / NA -> 0, so weight must be non-NA
-    # everywhere in the extent. 12F multiplies density by it; an NA here would drop
-    # the pixel silently instead of zeroing it (V5 10.Truncate.R:141 zeroes).
+    weight <- w_range * notwater * inlim * inbcr
     if (terra::global(is.na(weight), "sum", na.rm = TRUE)[[1]] > 0)
-      stop(bcr_code, ": weight.tif has NA cells - one of the mask terms returned NA ",
-           "(an empty rasterize input will do this). Investigate before using it.")
+      stop(bcr_code, ": weight.tif has NA cells (an empty rasterize input does this)")
     if (terra::global(weight, "sum", na.rm = TRUE)[[1]] == 0)
-      stop(bcr_code, ": weight.tif is all zero - the BCR polygon may not overlap the ",
-           "prediction grid. Check the bcr_code -> polygon match.")
+      stop(bcr_code, ": weight.tif is all 0 - does the BCR polygon overlap the prediction grid?")
 
     names(weight) <- WEIGHT_VERSION
-    dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
-    terra::writeRaster(weight, out_path, overwrite = TRUE,
-                       wopt = list(gdal = c("COMPRESS=DEFLATE")))
-
-    message(Sys.time(), " | ", bcr_code, " ", year, " | wrote weight.tif | mean=",
-            round(terra::global(weight, "mean", na.rm = TRUE)[[1]], 3),
-            " frac_excluded=",
-            round(terra::global(weight == 0, "mean", na.rm = TRUE)[[1]], 3),
-            " frac_outside_bcr=",
+    terra::writeRaster(weight, out_path, overwrite = TRUE, wopt = list(gdal = c("COMPRESS=DEFLATE")))
+    message(Sys.time(), " | ", bcr_code, " ", year, " | wrote weight.tif | mean ",
+            round(terra::global(weight, "mean", na.rm = TRUE)[[1]], 3), ", share outside the BCR ",
             round(terra::global(inbcr == 0, "mean", na.rm = TRUE)[[1]], 3))
-    rm(w_range, notwater, inlim, inbcr); gc()
+    rm(w_range, notwater, inlim, inbcr)
+    gc()
   }
-  rm(weight); gc()
+  rm(weight)
+  gc()
 }
-
-message(Sys.time(), " | species=", species, " | prediction weights complete.")

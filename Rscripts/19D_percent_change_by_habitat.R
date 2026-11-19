@@ -3,26 +3,20 @@
 # author: Mannfred Boehm
 # created: October 26, 2026
 # ---
-# Our version of Rosenberg et al. (2019, Science 366:120) Fig. 1C: each of 14D's habitat groups'
-# change in abundance from the first year to the last, as % of its first-year total, observed and
-# without industry (each relative to its OWN first-year total, as in 19B and 19C). Groups top to
-# bottom in the order 19C's observed lines end, as points with intervals (colour = group as 19C;
-# observed solid and filled, without industry dashed and open, as 19C's line types; 19B's legend
-# serves).
-#
-# As in 14C: the point is the mean change over the mean first-year total; the interval is the
-# 5th/95th percentiles of each sample's change over THAT sample's first-year total (bootstrap i
-# is one bird model in every year).
-#
-# Run locally after 14D, with 19A's population_samples.rds pulled:
-#   Rscript Rscripts/19D_percent_change_by_habitat.R
-# Writes output_figures/figure1/fig1C_percent_change_by_habitat_1995_2020.png and its values to
-# sector_effects/percent_change_by_habitat_1995_2020.csv.
-# ---
 
-suppressPackageStartupMessages(library(ggplot2))
+# our version of Rosenberg et al. (2019) Fig. 1C: each of 14D's habitat groups' change from the
+# first year to the last, as % of its first-year total, observed and without industry. groups top
+# to bottom in the order 19C's observed lines end; colour = group, observed solid and filled,
+# without industry dashed and open (19B's legend serves). as 14C: the point is the mean change
+# over the mean first-year total, the interval the 5th/95th percentiles of each sample's change
+# over THAT sample's first-year total.
+# runs locally after 14D, with 19A's population_samples.rds pulled
+#   -> output_figures/figure1/fig1C_percent_change_by_habitat_1995_2020.png
+#   -> sector_effects/percent_change_by_habitat_1995_2020.csv
 
-ia_dir <- getwd()   # the local RProject
+library(ggplot2)
+
+ia_dir <- getwd()
 se_dir <- file.path(ia_dir, "data", "derived_data", "sector_effects")
 ps     <- readRDS(file.path(se_dir, "population_samples.rds"))
 master <- read.csv(file.path(ia_dir, "data", "raw_data", "anna_data", "master_species_list.csv"))

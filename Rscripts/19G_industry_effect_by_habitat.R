@@ -3,30 +3,22 @@
 # author: Mannfred Boehm
 # created: October 27, 2026
 # ---
-# Panel B of the Figure 1 variant (slide 2 of figure1.pptx): each year's observed population minus
-# the no-industry one (14C's sign: negative = birds lost to industry) for each of 14D's habitat
-# groups, and for all reported species together. 19B shows the total as the gap between its two
-# lines; 19C and 19F show change since the first year, which subtracts it. Here it is the level:
-# forest birds lost and non-forest birds gained in about equal number, every year. Colours as 19C,
-# lines dashed as 19B's no-industry line. Each line named at its tip as 19F names its species, on
-# 19F's x range, so the years line up with 19F's under it (panel D).
-#
-# Uncertainty from 19A's per-sample populations: each sample's group total observed (its
-# bootstrap's) minus the SAME sample's no-industry total, then the 5th/95th percentiles, as 14C.
-#
-# Every year's counterfactual removes the 2020 footprint (07 ran 1995-2015 with
-# HF_MASK_YEAR=2020), so this is the 2020 footprint's effect under each year's conditions, not the
-# effect of the footprint each year had.
-#
-# Run locally after 14D, with 19A's population_samples.rds pulled:
-#   Rscript Rscripts/19G_industry_effect_by_habitat.R
-# Writes output_figures/figure1/fig1B_industry_effect_by_habitat_1995_2020.png and its values to
-# sector_effects/industry_effect_by_habitat_1995_2020.csv.
-# ---
 
-suppressPackageStartupMessages(library(ggplot2))
+# panel B of the figure1.pptx variant: each year's observed minus no-industry population (14C's
+# sign: negative = birds lost to industry) for each of 14D's habitat groups and for all reported
+# species together. 19B shows the total as the gap between its lines, 19C and 19F show change
+# since the first year (which subtracts it); here it is the level. colours as 19C, lines dashed
+# as 19B's no-industry line, each line named at its tip, on 19F's x range.
+# bands: each sample's group total observed (its bootstrap's) minus the SAME sample's
+# no-industry total, 5th/95th percentiles, as 14C. every year removes the 2020 footprint (07
+# ran 1995-2015 with HF_MASK_YEAR=2020).
+# runs locally after 14D, with 19A's population_samples.rds pulled
+#   -> output_figures/figure1/fig1B_industry_effect_by_habitat_1995_2020{,_pct}.png
+#   -> sector_effects/industry_effect_by_habitat_1995_2020.csv
 
-ia_dir <- getwd()   # the local RProject
+library(ggplot2)
+
+ia_dir <- getwd()
 se_dir <- file.path(ia_dir, "data", "derived_data", "sector_effects")
 ps     <- readRDS(file.path(se_dir, "population_samples.rds"))
 master <- read.csv(file.path(ia_dir, "data", "raw_data", "anna_data", "master_species_list.csv"))

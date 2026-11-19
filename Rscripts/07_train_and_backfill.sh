@@ -8,8 +8,7 @@
 #SBATCH --job-name=backfill
 #SBATCH --array=1-674%30
 #SBATCH --mail-user=mannfred@ualberta.ca
-# submit: bash 07_train_and_backfill.sh YEAR [YEAR ...]   (e.g. 2015 2020)
-# pre-2020 years with the 2020 footprint masks: HF_MASK_YEAR=2020 bash 07_train_and_backfill.sh 1995 2000
+# submit: bash 07_train_and_backfill.sh YEAR [YEAR ...]   (pre-2020: HF_MASK_YEAR=2020 bash 07_train_and_backfill.sh 1995 2000)
 
 if [ -z "${SLURM_JOB_ID:-}" ]; then
   set -euo pipefail
@@ -58,5 +57,4 @@ module load gdal/3.9.1
 module load udunits/2.2.28
 module load r/4.4.0
 
-export NODELIST=$(echo $(srun hostname))
 Rscript --vanilla 07_train_and_backfill.R ${SLURM_ARRAY_TASK_ID}

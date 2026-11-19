@@ -23,6 +23,11 @@
       Methods, replacing the 138-species tables. The Drive connector cannot edit the Doc's body.
 - [ ] Stage 18 to Fir before its next run (it now writes `output_figures/change_maps/` with the
       year in every name; Fir has the old version).
+- [ ] **Every Fir script was trimmed 2026-11-13** (06, 07, 08*, 09, 11, 12A-12H, 14B, 14C, 18,
+      19A): restage each closure below before its next cluster run. 09's four files are now one,
+      `09_collect_metrics.R` (delete the old four on Fir); 12F takes one `rdata_path` and reads
+      `footprint_vars` (12D sets both). Verified locally against the previous code: 07 on
+      subbasins 163, 247, 423, the 12F harness, 12H-14E and 18 on CAWA can60: outputs `identical()`.
 
 ## Results (2020, C2d backfill, BAM release filter applied)
 
@@ -151,10 +156,18 @@ no-industry population.
       BCR-years). If it runs many years again, give it 32G or cap GDAL's cache
       (`terra::setGDALconfig("GDAL_CACHEMAX", "1024")`, untested).
 - [ ] Optional: run 12A on Fir for CAWA into a scratch dir and diff against the G:-built outputs.
+- [ ] **09's `coverage95` and `sigma_mean/sd` are off (metrics only; backfills unaffected).**
+      `fit$sigma` from `gbart` holds the burn-in too (nskip + ndpost draws), and
+      `rep(sigma, each = ntrain)` fills the [draw x pixel] noise matrix column-wise, so only ~0.3%
+      of cells get their own draw's sigma. Fix: `s <- tail(fit$sigma, ndpost)` and
+      `rep(s, times = ntrain)`; it changes 10A/10B's numbers, so quote neither until rerun.
+- [ ] 12F skips a BCR whose backfill mosaic is missing (12H then merges without it, silently).
+      A `stop()` would be safer; kept as is in the 2026-11-13 trim.
+- [ ] 10B's training-size test uses subbasins 1:57 only (a leftover from an early run?).
+- [ ] `data/raw_data/hirshpearson/CanHF_1km_morethan1_goodsectors.tif` is no longer made or read
+      (03's goodsectors section was removed 2026-11-13): delete it if wanted.
 - [ ] Optional, cheaper 12D: 16 distinct BART draws per bootstrap instead of 100 with replacement
       (~64 → ~25 core-hours for CAWA + OVEN; all-sector mean moves 0.08–0.18% of the impact).
-- [ ] `15C_singletons_plot.R` map panel is broken (`predictions_coalitions/` deleted);
-      regenerate via `save_arrays_ids` if wanted.
 
 ## Species lists
 
@@ -180,7 +193,7 @@ of it (a 0-byte transfer proves equality). Unedited files have been stale on Fir
   arrays `identical()` unless predictions changed on purpose (Fir vs Windows: ~3e-16 relative).
 - Closures: 06 = `06` `.R`+`.sh`, `CAfire/CAfire_{year}_masked.tif`,
   `isric_soil/isric_soil_covariates_masked.tif`.
-  07/11 = `07` `.R`+`.sh`, `08A`, `08B_*`, `09_*`, `11` `.R`+`.sh`.
+  07/11 = `07` `.R`+`.sh`, `08A`, `08B_*`, `09_collect_metrics.R`, `11` `.R`+`.sh`.
   12D/12H = `12D` `.R`+`.sh`, `12E`, `12F`, `12G` `.R`+`.cpp`, `12H` `.R`+`.sh`.
   12A = `12A` `.R`+`.sh`, `12B`. 12C = `12C` `.R`+`.sh`.
   14B = `14B` `.R`+`.sh`, `14C`, `18` `.R`+`.sh`, `12E`, `data/raw_data/species_names.csv`,

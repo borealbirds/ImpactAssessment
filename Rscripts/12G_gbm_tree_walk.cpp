@@ -2,16 +2,13 @@
 // title: Impact Assessment: bit-identical replacement for gbm's compiled tree walk
 // author: Mannfred Boehm
 // ---
-// Compiled by Rcpp::sourceCpp() from 12D; wrapped by 12G_gbm_tree_walk.R.
+// compiled by Rcpp::sourceCpp() from 12D; wrapped by 12G_gbm_tree_walk.R.
 //
-// gbm's gbm_pred (gbmentry.cpp) makes three non-inlined R API calls (REAL, ISNA, INTEGER)
-// at EVERY node it visits. This does the same walk with the pointers hoisted, the NA test
-// inlined and the trees flattened once per call: 3.6-4.4x faster on CAWA can11's models.
-//
-// The arithmetic is gbm_pred's exactly: out[i] = initF, then += the leaf of tree 0, 1, 2 ...
-// in that order. Blocking only changes which observation is visited when, never the order of
-// one observation's additions, so the sum is bit-identical (checked with identical() on
-// 30-40k real pixels x 9150 trees, with and without missing values).
+// gbm's gbm_pred (gbmentry.cpp) walks the same trees with three R API calls at every node;
+// here the pointers are hoisted, the NA test inlined and the trees flattened once per call.
+// the arithmetic is gbm_pred's: out[i] = initF, then += the leaf of tree 0, 1, 2 ... in that
+// order. blocking changes only which observation is visited when, never the order of one
+// observation's additions, so the sums are bit-identical.
 
 #include <Rcpp.h>
 #include <cstring>
@@ -22,7 +19,7 @@
 using namespace Rcpp;
 
 // R_IsNA, inlined: a NaN whose low word is 1954. gbm_pred sends ONLY this down the missing
-// branch; any other NaN fails the `<` test and goes right. Replicated as-is.
+// branch; any other NaN fails the `<` test and goes right (replicated as-is)
 static inline bool is_R_NA(double x) {
   if (!std::isnan(x)) return false;
   uint64_t u;
@@ -87,8 +84,8 @@ NumericVector gbm_tree_walk(NumericMatrix X, List trees, List csplits, IntegerVe
           else if (kind[nd] == 0) nd = (dx < code[nd]) ? L[nd] : R[nd];
           else {
             // gbm_pred indexes the split table with (int)dx unchecked, so a NaN or an
-            // out-of-range level is undefined behaviour there (it segfaulted on a raw NaN
-            // SurfaceWater_1km). Fail loudly instead; every in-range value is unchanged.
+            // out-of-range level is undefined behaviour there (it segfaulted on a NaN
+            // SurfaceWater_1km): fail loudly instead
             const int c = (int)code[nd];
             if (std::isnan(dx) || dx < 0 || (int)dx >= csoff[c + 1] - csoff[c])
               stop("categorical value outside the model's levels (NaN or out of range)");
@@ -103,12 +100,10 @@ NumericVector gbm_tree_walk(NumericMatrix X, List trees, List csplits, IntegerVe
   return out;
 }
 
-// rowsum(sc[kr, ], zones[kr], reorder = TRUE) placed on n_sub subbasin rows (a subbasin
-// with no kept row stays 0), without materialising sc[kr, ]: 12F used to copy that once
-// per coalition, 255 times per bootstrap, and the garbage helped OOM C1's workers.
-// R's rowsum (src/main/unique.c) zeroes its result and adds x[j, col] in row order for
-// each column; this does the same additions in the same order, so it is bit-identical.
-// kr: 1-based, ascending rows of sc. zi: 1-based subbasin row of every row of sc, NA if none.
+// rowsum(sc[kr, ], zones[kr], reorder = TRUE) placed on n_sub subbasin rows (a subbasin with
+// no kept row stays 0), without copying sc[kr, ] for each of 255 coalitions. the same
+// additions in the same order as R's rowsum (src/main/unique.c), so bit-identical.
+// kr: 1-based, ascending rows of sc. zi: 1-based subbasin row of every row of sc, NA if none
 // [[Rcpp::export]]
 NumericMatrix coal_rowsum(NumericMatrix sc, IntegerVector kr, IntegerVector zi, int n_sub) {
   const int n = sc.nrow(), p = sc.ncol(), m = kr.size();

@@ -1,148 +1,63 @@
-deploy_gbart <- function(
-    b,
-    df_train,
-    df_train_bart,
-    df_backfill,
-    df_backfill_bart,
-    idx,
-    biotic_cols,
-    subbasin_index,
-    year,
-    metrics,
-    out_layers,
-    logp,
-    cc,
-    ia_dir
-) {
+# ---
+# title: Impact Assessment: Gaussian BART for one continuous covariate (sourced by 07)
+# author: Mannfred Boehm
+# ---
 
-  # source BART metrics summary functions
-  source(file.path(ia_dir, "Rscripts", "09_collect_metrics_gbart.R"))
-  source(file.path(ia_dir, "Rscripts", "09_collect_holdout_metrics_gbart.R"))
-  
-  # define continuous response, and subset pixels to non-NAs for a given `b`
-  # we use `df_train` instead of `df_train_bart` because the latter is purposely missing `b`
-  y <- as.numeric(df_train[[b]][idx]) # idx ensures length(y) == length(df_train_bart)
+# fits log1p(y) (so predictions stay positive) on 90% of the training pixels and checks it on
+# the other 10%. returns the posterior mean backfill (raw scale, for 08A's cascade), 100
+# posterior draws as layers <b>_draw_001..100 (log1p scale; what 12F uses) and the metrics
+deploy_gbart <- function(b, y, design, seed, subbasin_index, year, logp) {
 
-  # reproducible per (year, subbasin, covariate)
-  set.seed(abs(as.integer(sprintf("%d%03d", subbasin_index, which(biotic_cols==b)))))
-      
-  # split y into 90% training and 10% holdout
+  y <- as.numeric(y)
+  draw_names <- paste0(b, "_draw_", sprintf("%03d", seq_len(100L)))
+  n_bf <- nrow(design$backfill)
+
+  set.seed(seed)
   holdout_idx <- sample(seq_len(length(y)), size = round(0.10 * length(y)))
-  df_holdout    <- df_train_bart[holdout_idx, ] # get holdout rows before modifying df_train_bart
-  df_train_bart <- df_train_bart[-holdout_idx, ]
-  
-  # check that y is not binary
-  # this happened in subbasin 8 with SCANFIBalsamFir_5x5
-  if (length(unique(log1p(y[-holdout_idx]))) <= 2) {
-    
-    b_mean_deg <- mean(y[-holdout_idx])
-    df_backfill[[b]] <- b_mean_deg
-    draw_val <- log1p(b_mean_deg)
-    for (d in seq_len(100L)) {
-      out_layers[[paste0(b, "_draw_", sprintf("%03d", d))]] <- rep(draw_val, nrow(df_backfill))
-    }
+  df_holdout  <- design$train[holdout_idx, ]
+  df_train    <- design$train[-holdout_idx, ]
+  y_tr        <- y[-holdout_idx]
 
+  # two values or fewer (subbasin 8, SCANFIBalsamFir_5x5): the training mean everywhere
+  if (length(unique(log1p(y_tr))) <= 2) {
     logp("[%s] degenerate (≤2 unique values after log1p)", b)
-    return(list(
-    df_backfill = df_backfill,
-    metrics     = metrics,
-    out_layers  = out_layers
-  ))
+    return(list(backfill = mean(y_tr),
+                layers   = setNames(rep(list(rep(log1p(mean(y_tr)), n_bf)), 100L), draw_names)))
   }
-  
-  # check that there is >1 high HF pixel to backfill (subbasins 423,304,247,246,221,160)
-  # if nrow(df_backfill_bart) == 1 then take the mean from the training pixels
-  if (nrow(df_backfill_bart) == 1) {
-    
-    y_tr   <- y[-holdout_idx]
-    b_mean <- mean(y_tr)
-    b_logmean <- mean(log1p(y_tr))
 
-    df_backfill[[b]] <- b_mean
-    for (d in seq_len(100L)) {
-      out_layers[[paste0(b, "_draw_", sprintf("%03d", d))]] <- b_logmean
-    }
-    
+  # one backfilled pixel: the training mean
+  if (n_bf == 1) {
     logp("[%s] single backfill pixel: skipped gbart()", b)
-    return(list(
-      df_backfill = df_backfill,
-      metrics     = metrics,
-      out_layers  = out_layers
-    ))
+    return(list(backfill = mean(y_tr),
+                layers   = setNames(rep(list(mean(log1p(y_tr))), 100L), draw_names)))
   }
-  
-  # train and predict with BART
-  fit <- BART::gbart(x.train = as.matrix(df_train_bart), 
-                     y.train = log1p(y[-holdout_idx]), # log transform to avoid negative predictions
-                     x.test = as.matrix(df_backfill_bart), # has the same columns as df_train_bart
-                     type = "wbart",
-                     k = 3, #shrinkage
-                     ntree = 50L, 
-                     ndpost = 700L, 
-                     nskip = 300L, 
-                     sparse = TRUE, # sampler focuses on informative predictors (not all predictors treated as informative)
-                     sigest  = sd(log1p(y[-holdout_idx])), # the rough error standard deviation used in the prior
-                     sigdf = 3) 
-  
+
+  fit <- BART::gbart(x.train = as.matrix(df_train),
+                     y.train = log1p(y_tr),
+                     x.test  = as.matrix(design$backfill),
+                     type    = "wbart",
+                     k       = 3,
+                     ntree   = 50L,
+                     ndpost  = 700L,
+                     nskip   = 300L,
+                     sparse  = TRUE,                  # the sampler favours informative predictors
+                     sigest  = sd(log1p(y_tr)),
+                     sigdf   = 3)
   logp("gbart fit to [%s]", b)
-  
-  # --------------------------------------
-  # post-modelling PART 1
-  # yhat.test: posterior draws [ndpost x n_px]; rows = draws, columns = pixels (log1p scale).
-  # Sample 100 random draws and store them as {cov}_draw_001…100 layers.
-  # 12F resamples from these draws directly, avoiding the Gaussian normality assumption.
-  # b_mean is used in-memory for the biotic hierarchy cascade (08A) but not written to disk.
-  b_mean   <- colMeans(expm1(fit$yhat.test))  # original scale; used by cascade
-  n_draws  <- 100L
-  draw_idx <- sample(nrow(fit$yhat.test), n_draws)
-  draw_mat <- fit$yhat.test[draw_idx, , drop = FALSE]  # [100 x n_px] in log1p space
 
-  # replace backfilled b in backfilling dataset for use in next iteration (following `neworder`)
-  df_backfill[[b]] <- b_mean
-  for (d in seq_len(n_draws)) {
-    out_layers[[paste0(b, "_draw_", sprintf("%03d", d))]] <- draw_mat[d, ]
-  }
-  
-  # --------------------------------------
-  # post-modelling PART 2
-  # extract variable with highest importance
-  top_var <- NA_character_
-  if ("varprob" %in% names(fit)) {
-    top_var <- names(sort(colMeans(fit$varprob), decreasing=TRUE))[1]
-  } else if ("varcount" %in% names(fit)) {
-    vc <- colMeans(fit$varcount)
-    top_var <- names(sort(vc, decreasing=TRUE))[1]
-  }
-  
-  # collect metrics (one row per year x subbasin x covariate)
-  metrics[[length(metrics) + 1L]] <- collect_metrics_gbart(
-    fit = fit, 
-    y = y[-holdout_idx],
-    covariate = b,
-    subbasin  = subbasin_index,
-    year      = year,
-    top_var   = top_var)
-  
-  
-  # out-of-sample prediction
-  # first, filter for covariates that actually contributed to `fit`
-  df_holdout <- df_holdout[, colnames(fit$varprob), drop = FALSE]
-  pred_holdout <- predict(fit, newdata = as.matrix(df_holdout)) # log1p scale
-  yhat_holdout_mean <- expm1(colMeans(pred_holdout)) # get mean estimate per pixel from the posterior
-  
-  metrics[[length(metrics) + 1L]] <- collect_holdout_metrics_gbart(
-    y_obs    = y[holdout_idx],
-    yhat_mean = yhat_holdout_mean,
-    covariate = b,
-    subbasin  = subbasin_index,
-    year      = year,
-    top_var   = top_var)
-  
-  # send outputs to "train_and_backfill_subbasin_s"
-  list(
-    df_backfill = df_backfill,
-    metrics     = metrics,
-    out_layers  = out_layers
-  )
+  # yhat.test is [draws x pixels], log1p scale: 100 of its rows are kept as the draws
+  b_mean <- colMeans(expm1(fit$yhat.test))
+  draws  <- fit$yhat.test[sample(nrow(fit$yhat.test), 100L), , drop = FALSE]
 
-} # close function 
+  top_var <- names(sort(colMeans(fit$varprob), decreasing = TRUE))[1]
+  metrics_train <- collect_metrics_gbart(fit, y_tr, b, subbasin_index, year, top_var)
+
+  # holdout, on the predictors the fit kept
+  pred_holdout <- predict(fit, newdata = as.matrix(df_holdout[, colnames(fit$varprob), drop = FALSE]))
+  metrics_holdout <- collect_holdout_metrics_gbart(y[holdout_idx], expm1(colMeans(pred_holdout)),
+                                                   b, subbasin_index, year, top_var)
+
+  list(backfill = b_mean,
+       layers   = setNames(lapply(seq_len(100L), function(d) draws[d, ]), draw_names),
+       metrics  = list(metrics_train, metrics_holdout))
+}

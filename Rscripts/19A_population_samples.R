@@ -3,39 +3,23 @@
 # author: Mannfred Boehm
 # created: October 26, 2026
 # ---
-# For the Rosenberg et al. (2019) Fig. 1 style figures (19B on): each species' observed and
-# no-industry population over the BCRs 14B kept (release filter), per (bootstrap, scenario)
-# sample, for every year in YEARS (default 1995-2020). 12H's Shapley sample files stay on Fir
-# (up to ~150 MB each); this one file holds what the figures need and is pulled with the CSVs:
-#   sector_effects/population_samples.rds, a list of
-#     species, years, n_boot, n_scen
-#     obs [species x year x bootstrap]   observed population (it does not vary by scenario)
-#     cf  [species x year x sample]      no-industry population; sample s is bootstrap
-#                                        ceiling(s / n_scen), as in 14B and 14C
-# Totals over species, and changes between years, are taken sample by sample, never from 14C's
-# percentiles. Bootstrap i is the same bird model in every year, so a change between years
-# pairs it.
-#
-# Species: those in 14B's tables in every year (the 113 reported species for 1995-2020), or
-# SPECIES (comma-separated) among them. Stops unless its means equal 14C's results_summary to
-# within a bird (14C rounds to whole birds).
-#
-# Run on Fir after 14B/14C for every year: sbatch 19A_population_samples.sh
-# ---
 
-# inside a Slurm job this is the cluster; anywhere else, the local RProject
-cc    <- nzchar(Sys.getenv("SLURM_JOB_ID"))
-local <- !cc
+# for the Rosenberg et al. (2019) Fig. 1-style figures (19B on): each species' observed and
+# no-industry population over the BCRs 14B kept, per (bootstrap, scenario) sample, for every
+# year in YEARS (default 1995-2020). 12H's Shapley sample files stay on Fir; this one file holds
+# what the figures need and is pulled with the CSVs:
+#   sector_effects/population_samples.rds: species, years, n_boot, n_scen,
+#     obs [species x year x bootstrap]  (the observed population does not vary by scenario)
+#     cf  [species x year x sample]     (sample s is bootstrap ceiling(s / n_scen), as in 14B)
+# totals over species and changes between years are taken sample by sample; bootstrap i is the
+# same bird model in every year. species: those in 14B's tables in every year, or SPECIES among
+# them. stops unless its means equal 14C's results_summary to within a bird.
+# on Fir after 14B/14C for every year: sbatch 19A_population_samples.sh
 
-if (cc)            { ia_dir <- "/home/mannfred/scratch/impact_assessment" }
-if (!cc && local)  { ia_dir <- getwd() }
-if (!cc && !local) { ia_dir <- file.path("G:/Shared drives/BAM_NationalModels5", "data", "Extras",
-                                          "sandbox_data", "impactassessment_sandbox") }
-
+ia_dir <- if (nzchar(Sys.getenv("SLURM_JOB_ID"))) "/home/mannfred/scratch/impact_assessment" else getwd()
 dt_dir <- file.path(ia_dir, "data/derived_data/density_tables")
 se_dir <- file.path(ia_dir, "data/derived_data/sector_effects")
 years  <- as.integer(strsplit(Sys.getenv("YEARS", "1995,2000,2005,2010,2015,2020"), ",")[[1]])
-if (anyNA(years)) stop("YEARS must be comma-separated years; got '", Sys.getenv("YEARS"), "'")
 se_csv <- function(name, y) file.path(se_dir, paste0(name, if (y == 2020L) "" else paste0("_", y), ".csv"))
 
 # 14B's kept BCRs per species, per year

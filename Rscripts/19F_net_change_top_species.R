@@ -3,28 +3,20 @@
 # author: Mannfred Boehm
 # created: October 27, 2026
 # ---
-# A variant of our Rosenberg et al. (2019, Science 366:120) Fig. 1, for its panel D: 19C's net
-# change since the first year, observed and without industry, for each SPECIES in the top decile
-# of change (14D's reported species ranked by the absolute change in their mean observed
-# population, first year to last, gains and losses alike). Colour = habitat group as 19C, line
-# type = scenario as 19B (whose legend serves), each species' code at the tip of its observed
-# line. No legend: 19G (the variant's panel B) names the colours. It sits beside 19C (panel C),
-# whose y title serves both, on its own y range (`ylim`, zoomed in on these lines): 19F's own
-# title is drawn transparent, so that its panel starts where 19G's, above it, does. Its x range
-# is 19G's too.
-#
-# Values as 19C's, per species: each sample's total minus the SAME sample's first-year total,
-# then the 5th/95th percentiles. The CSV keeps them; the plot draws no bands (22 would overlap).
-#
-# Run locally after 14D, with 19A's population_samples.rds pulled:
-#   Rscript Rscripts/19F_net_change_top_species.R
-# Writes output_figures/figure1/fig1D_net_change_top_species_1995_2020.png and its values to
-# sector_effects/net_change_top_species_1995_2020.csv.
-# ---
 
-suppressPackageStartupMessages(library(ggplot2))
+# panel D of the figure1.pptx variant: 19C's net change since the first year, observed and
+# without industry, for each SPECIES in the top decile of absolute change in mean observed
+# population (14D's reported species). colour = habitat group as 19C, line type as 19B, each
+# species' code at the tip of its observed line; no legend. it sits under 19G and beside 19C,
+# whose y title serves both (19F's own is drawn transparent so the panels align) on its own y
+# range (`ylim`). values as 19C's, per species; the CSV keeps the bands, the plot draws none.
+# runs locally after 14D, with 19A's population_samples.rds pulled
+#   -> output_figures/figure1/fig1D_net_change_top_species_1995_2020{,_pct}.png
+#   -> sector_effects/net_change_top_species_1995_2020.csv
 
-ia_dir <- getwd()   # the local RProject
+library(ggplot2)
+
+ia_dir <- getwd()
 se_dir <- file.path(ia_dir, "data", "derived_data", "sector_effects")
 ps     <- readRDS(file.path(se_dir, "population_samples.rds"))
 master <- read.csv(file.path(ia_dir, "data", "raw_data", "anna_data", "master_species_list.csv"))
